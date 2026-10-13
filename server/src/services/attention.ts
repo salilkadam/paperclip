@@ -969,13 +969,12 @@ async function blockingIssueMap(db: Db, companyId: string, blockedIssueIds: Arra
  * still overlap (neither sees the other's rows yet); that is correct, just not
  * deduped. The win this targets is across lanes, which run sequentially.
  */
-function createIssueLookupCache(db: Db, companyId: string, readCondition: SQL<boolean>) {
+function createIssueLookupCache(db: Db, companyId: string) {
   const memo = <V>(
     load: (
       db: Db,
       companyId: string,
       issueIds: Array<string | null | undefined>,
-      readCondition: SQL<boolean>,
     ) => Promise<Map<string, V>>,
   ) => {
     const entries = new Map<string, V>();
@@ -984,7 +983,7 @@ function createIssueLookupCache(db: Db, companyId: string, readCondition: SQL<bo
       const ids = [...new Set(issueIds.filter((value): value is string => Boolean(value)))];
       const missing = ids.filter((id) => !resolved.has(id));
       if (missing.length > 0) {
-        const loaded = await load(db, companyId, missing, readCondition);
+        const loaded = await load(db, companyId, missing);
         for (const id of missing) resolved.add(id);
         for (const [id, value] of loaded) entries.set(id, value);
       }
@@ -1132,10 +1131,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       if (options.all && !options.queue && !options.allowUnscopedAll) {
         throw badRequest("all requires a queue filter");
       }
-      const readCondition = options.actor
-        ? await issueReadSqlCondition(db, options.actor)
-        : sql<boolean>`true`;
-      const issueLookups = createIssueLookupCache(db, companyId, readCondition);
+      const issueLookups = createIssueLookupCache(db, companyId);
       const [prefix, dismissals] = await Promise.all([
         companyPrefix(db, companyId),
         dismissalByKey(db, companyId, options.userId),
