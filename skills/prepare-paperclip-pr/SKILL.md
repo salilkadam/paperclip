@@ -93,6 +93,12 @@ several PRs, run the whole procedure for each one).
 
 ## Hard rules
 
+* **Mandatory: the PR must be aligned with the base branch.** Before handing
+  off any PR, it must be rebased onto the current base (`main` for internal
+  PRs) and reported **mergeable** — a `CONFLICTING` PR is never hand-off
+  material. Re-fetch the base, rebase, re-verify, push, and re-check
+  mergeability until clean. All PRs from one task must be merged or explicitly
+  withdrawn; never leave stale or drifting branches behind.
 * Never lose work: no orphaned stashes, no dropped files, no force-pushes
   that discard commits.
 * Always post the URLs to every pull request you created.
