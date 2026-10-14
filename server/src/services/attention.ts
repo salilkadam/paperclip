@@ -1180,10 +1180,6 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       for (const row of approvalIssueRows) {
         if (!approvalIssueMap.has(row.approvalId)) approvalIssueMap.set(row.approvalId, row.issueId);
       }
-      const readableApprovalIssues = await issueLookups.summaries(
-        approvalIssueRows.map((row) => row.issueId),
-      );
-
       for (const approval of pendingApprovals) {
         const dedupKey = `approval:${approval.id}`;
         const title = approvalTitle(approval.type, approval.payload);
