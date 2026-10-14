@@ -239,6 +239,11 @@ vaultAuth:
 # Environment (non-secret, goes in ConfigMap)
 # ---------------------------------------------------------------------------
 env:
+  # Server V8 heap ceiling. The container limit is 6Gi but the Dockerfile CMD
+  # passes no --max-old-space-size, so V8 defaults to ~2.2GB and the server
+  # (which legitimately runs ~1.3-2GB heap under live load) OOM-aborts on
+  # spikes. Raise to leave ~1Gi for agent child processes sharing the cgroup.
+  NODE_OPTIONS: "--max-old-space-size=4096"
   NODE_ENV: production
   PAPERCLIP_DEPLOYMENT_MODE: authenticated
   PAPERCLIP_DEPLOYMENT_EXPOSURE: private

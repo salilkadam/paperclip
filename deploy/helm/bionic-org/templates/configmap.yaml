@@ -6,6 +6,7 @@ metadata:
   labels:
     {{- include "bionic-org.labels" . | nindent 4 }}
 data:
+  NODE_OPTIONS: {{ .Values.env.NODE_OPTIONS | default "--max-old-space-size=4096" | quote }}
   NODE_ENV: {{ .Values.env.NODE_ENV | quote }}
   PAPERCLIP_DEPLOYMENT_MODE: {{ .Values.env.PAPERCLIP_DEPLOYMENT_MODE | quote }}
   PAPERCLIP_DEPLOYMENT_EXPOSURE: {{ .Values.env.PAPERCLIP_DEPLOYMENT_EXPOSURE | quote }}
