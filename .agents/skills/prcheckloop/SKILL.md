@@ -166,7 +166,24 @@ Exit the loop only when:
 - a blocker remains after reasonable repair effort, or
 - the max iteration count is reached
 
-### 8. Escalate blockers precisely
+### 8. Hand off to auto-merge (green terminal state)
+
+This repository merges agent PRs automatically; humans build and deploy
+afterwards. When all checks for the latest head SHA are green, do NOT merge
+interactively and do NOT wait for a human. Enable auto-merge so GitHub merges
+the moment the PR is mergeable:
+
+```bash
+gh pr merge --auto --squash --delete-branch --repo <owner>/<repo>
+```
+
+Verify it took effect (`isMergeable: true`, auto-merge enabled or state already
+`MERGED` via `gh pr view --json state,autoMergeRequest`) and include the merge
+outcome in the report. If `--auto` is rejected, fix the reason (merge conflict,
+failing check, draft flag) rather than falling back to a manual merge; if it is
+a permissions error, escalate per Step 9.
+
+### 9. Escalate blockers precisely
 
 If you cannot get the PR green, report:
 
@@ -196,6 +213,7 @@ When the skill completes, report:
 - green/pending/failing check summary
 - fixes made and verification run
 - whether changes were pushed
+- auto-merge state: enabled / already merged (SHA) / reason it could not be enabled
 - blocker summary if not fully green
 
 ## Notes

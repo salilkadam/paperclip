@@ -64,7 +64,10 @@ each one).
   comments, push, and repeat until Greptile gives **5/5 with zero unresolved
   comments** (max 20 turns). Do not stop early while turns remain.
 * Then run the **/prcheckloop** company skill and address any verification /
-  CI failures you can.
+  CI failures you can. When its checks are green, follow its auto-merge
+  hand-off step (`gh pr merge --auto --squash --delete-branch`): this repo
+  auto-merges green agent PRs; humans build and deploy afterwards. Never
+  merge interactively.
 * RUN GREPTILE UNTIL IT GETS TO 5/5 - DO NOT STOP UNTIL GREPTILE IS 5/5, all
   tests pass, all verification checks pass, and there are no merge conflicts.
 
