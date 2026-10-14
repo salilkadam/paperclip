@@ -65,12 +65,13 @@ each one).
   comments** (max 20 turns). Do not stop early while turns remain.
 * Then run the **/prcheckloop** company skill and address any verification /
   CI failures you can. NOTE: this instance runs CI locally — GitHub Actions is
-  disabled for cost reasons, so there are no PR checks and no mandatory CI
-  gate; verify at a depth appropriate to the change (narrow tests first, full
-  suite only for broad changes). commitperclip/PR reviewers do not run. When
-  your checks pass, follow prcheckloop's auto-merge hand-off step
-  (`gh pr merge --auto --squash --delete-branch`): this repo auto-merges agent
-  PRs; humans build and deploy afterwards. Never merge interactively.
+  disabled for cost reasons and no branch protection exists, so the merge gate
+  is the agent's own local run of `pnpm -r typecheck && pnpm test:run &&
+  pnpm build` on the head SHA: those must pass BEFORE auto-merge is armed.
+  commitperclip/PR reviewers do not run. Once they pass, follow prcheckloop's
+  auto-merge hand-off step (`gh pr merge --auto --squash --delete-branch`):
+  this repo auto-merges agent PRs; humans build and deploy afterwards. Never
+  merge interactively.
 * RUN GREPTILE UNTIL IT GETS TO 5/5 - DO NOT STOP UNTIL GREPTILE IS 5/5, all
   tests pass, all verification checks pass, and there are no merge conflicts.
 

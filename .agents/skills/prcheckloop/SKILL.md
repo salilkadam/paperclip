@@ -1,10 +1,11 @@
 ---
 name: prcheckloop
 description: >
-  Iterate on a GitHub PR until local verification passes or a precise blocker
-  is named — GitHub Actions is disabled on this instance for cost reasons and
-  there is no mandatory CI gate. Use when a PR still has failing or pending
-  checks after review fixes, including after greploop.
+  Iterate on a GitHub PR until the local CI suite passes on the head SHA or a
+  precise blocker is named — GitHub Actions is disabled on this instance for
+  cost reasons and no branch protection exists, so the agent's own local
+  typecheck/test/build run is the merge gate. Use when a PR still has failing
+  checks or tests after review fixes, including after greploop.
 ---
 
 # PRCheckloop
@@ -28,15 +29,24 @@ pnpm build
 Rules:
 
 - Never push and wait for CI to teach you anything; verify locally first.
-- Verification is **advisory, not a mandatory merge gate**: run the narrowest
-  relevant tests/typecheck for the change; run the full suite only when the
-  change is broad or you cannot cover it narrowly. Do NOT hold a PR open or
-  refuse to arm auto-merge because the full suite was not run.
-- Before arming auto-merge, the bar is simply: your local checks for the exact
-  head SHA passed and you know of no failing test on it.
+- **Run the CI suite locally and require it to pass before you arm auto-
+  merge** (no branch protection is configured — you are the gate):
+
+  ```sh
+  pnpm -r typecheck
+  pnpm test:run
+  pnpm build
+  ```
+
+  All three must pass on the exact head SHA you are about to merge. Re-run
+  after every fix-push; a suite you did not run at that SHA does not count.
+  If one is genuinely impossible at that SHA (environment blocker), state the
+  specific blocker in the PR before arming auto-merge — silently skipping is
+  not allowed.
 - Do not re-enable or work around disabled workflows, and do not file PRs from
   branches whose intent is to fix Actions billing.
-- Browser suites (`pnpm test:e2e`, `pnpm test:release-smoke`) stay opt-in.
+- Browser suites (`pnpm test:e2e`, `pnpm test:release-smoke`) stay opt-in:
+  run them when the change touches what they cover.
 
 ## Scope
 
@@ -174,9 +184,9 @@ If the failure is actionable from the checked-out code:
 5. Commit in a logical commit.
 6. Push before re-checking the PR.
 
-Do not stop at a local fix. The loop is only complete when your verification
-for the pushed head SHA passes — this fork has no remote CI to lean on, but
-the depth of that verification is at your judgment, not a fixed gate.
+Do not stop at a local fix. The loop is only complete when the fix is verified
+by the local CI suite on the pushed head SHA — this fork has no remote CI, so
+the suite you run IS the pipeline.
 
 ### 7. Push and repeat
 
@@ -191,17 +201,18 @@ Then refresh the PR metadata, get the new `HEAD_SHA`, and restart from Step 3.
 
 Exit the loop only when:
 
-- your local verification for the latest head SHA passes (depth at your
-  judgment — there is no mandatory gate), or
+- the local CI suite (typecheck, test:run, build) passed on the latest head
+  SHA, or
 - a blocker remains after reasonable repair effort, or
 - the max iteration count is reached
 
 ### 8. Hand off to auto-merge (green terminal state)
 
 This repository merges agent PRs automatically; humans build and deploy
-afterwards. When your local verification on the exact head SHA passed and you
-know of no failing test, do NOT merge interactively and do NOT wait for a
-human. Enable auto-merge so GitHub merges the moment the PR is mergeable:
+afterwards. When the local CI suite has passed on the exact head SHA (§ rules;
+your run of the suite is the merge gate since no platform checks exist), do
+NOT merge interactively and do NOT wait for a human. Enable auto-merge so
+GitHub merges the moment the PR is mergeable:
 
 ```bash
 gh pr merge --auto --squash --delete-branch --repo <owner>/<repo>
