@@ -12,7 +12,7 @@ namespace: bionicorg
 # ---------------------------------------------------------------------------
 image:
   repository: docker4zerocool/bionic
-  tag: "15ad899dd"  # current production image, built from main@15ad899dd (replaces the retired 71d7f47fe-fix-patched hotfix)
+  tag: "40e3e904eb6ec99c358fd86a2ef1fda9a4541032"  # current production image (was 15ad899dd before the 2026-10-06 master-key incident)
   pullPolicy: Always
 
 # Image pull secret (e.g. for Docker Hub rate-limit compliance)
@@ -52,14 +52,67 @@ service:
 
 # ---------------------------------------------------------------------------
 # Resource limits
+# NOTE: The bionic container hosts agent heartbeat runs, each of which spawns
+# an adapter/CLI child process (~1Gi each). Waking several company agents at
+# once OOMKilled the pod at the previous 2Gi limit. 6Gi is the OOM ceiling and
+# MUST stay high because a mass-wake spikes memory in well under a second —
+# neither HPA nor VPA can react that fast (both are poll-based: metrics-server
+# scrape ~15s + HPA sync 15s; VPA recommender runs ~1min).
+#
+# The *request* (node reservation) is deliberately LOW (512Mi). A limit is a
+# ceiling, not a reservation, so the 6Gi limit costs ~nothing when the org is
+# calm; only the request is charged against the node. When the cluster has the
+# VPA operator installed, the VerticalPodAutoscaler below auto-raises this
+# request as real usage grows and lowers it again when calm (see `vpa`).
 # ---------------------------------------------------------------------------
 resources:
   limits:
-    cpu: 1000m
-    memory: 2Gi
+    cpu: 2000m
+    memory: 6Gi
   requests:
-    cpu: 250m
+    cpu: 500m
     memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Vertical Pod Autoscaler (memory right-sizing)
+# ---------------------------------------------------------------------------
+# WHY VPA and not HPA: Paperclip is a single-writer control plane. Every
+# replica runs its own heartbeat scheduler loop (server/src/index.ts
+# startHeartbeatSchedulerInterval) with a PROCESS-LOCAL run-start lock
+# (server/src/services/agent-start-lock.ts) and runs are pinned to the process
+# that spawned them (server/src/services/heartbeat.ts:1387). So scaling OUT
+# (HPA) is unsafe — it would run duplicate schedulers and never cuts per-pod
+# memory anyway (an HPA scales replicas, not a pod's memory ceiling).
+#
+# WHAT THIS DOES: it manages the container's MEMORY REQUEST only
+# (controlledValues: RequestsOnly), letting it grow as usage grows and shrink
+# when calm — automating the manual "bump the memory" step. It leaves the 6Gi
+# limit (the OOM ceiling) untouched so a burst still has headroom, and it does
+# NOT manage CPU.
+#
+# updateMode InPlaceOrRecreate uses the v1.33 in-place resize feature to change
+# the request WITHOUT evicting the pod; it only falls back to eviction if
+# in-place is infeasible. NOTE: eviction would kill in-flight agent runs (they
+# are process-pinned), so this is intentionally request-only + bounded.
+#
+# Requires the VPA operator CRD. This template renders ONLY when the CRD is
+# present (see the capability guard in templates/vpa.yaml), so committing it is
+# safe on clusters without the operator. Install the operator with
+# deploy/scripts/setup-vpa-operator.sh, then `helm upgrade` to activate.
+# Set enabled=false to opt out entirely.
+# ---------------------------------------------------------------------------
+vpa:
+  enabled: true
+  # Only tune memory; leave CPU to the static requests above.
+  controlledResources:
+    - memory
+  controlledValues: RequestsOnly
+  # cpu entries omitted on purpose: controlledResources is memory-only, so cpu
+  # bounds here would be ignored by the recommender.
+  minAllowed:
+    memory: 512Mi
+  maxAllowed:
+    memory: 6Gi
 
 # ---------------------------------------------------------------------------
 # PostgreSQL (CNPG) — new database in existing pg-ceph cluster
@@ -80,15 +133,75 @@ postgresql:
   port: 5432
 
 # ---------------------------------------------------------------------------
+# Persistence — CRITICAL: /paperclip holds the instance state
+# (secrets/decision-signing.key, telemetry, local_disk storage, agent
+# workspaces). Without a volume this lives on the container overlay and is
+# destroyed on every pod recreation. In 2026-10-06 this silently lost the
+# secrets master key before it was pinned via PAPERCLIP_SECRETS_MASTER_KEY.
+# RWX (NFS) is deliberate: rolling updates never deadlock on attachment.
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  name: bionic-org-data
+  size: 20Gi
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-client
+  mountPath: /paperclip
+  # App container runs as uid/gid 1000 (node)
+  fsGroup: 1000
+
+# ---------------------------------------------------------------------------
 # Vault / ExternalSecrets
 # ---------------------------------------------------------------------------
 vault:
+  # Vault server reachable from inside the cluster
+  server: http://vault.vault.svc.cluster.local:8200
+  # Vault JWT auth role used by External Secrets (see deploy/scripts/setup-vault-jwt.sh)
+  jwtRole: eso-reader
+  # KV v2 mount the ClusterSecretStore points at. This is the Vault MOUNT name
+  # (not a folder): ESO builds read URLs as <kvMount>/data/<key>, and the
+  # eso-reader policy only grants secret/data/* — putting a folder path here
+  # 403s every sync (ExternalSecrets stay Ready=False and keep stale data).
+  kvMount: secret
   # Vault path where app secrets are stored
   path: t6-apps/bionic-org/config
+  # Key inside that path holding the Paperclip secrets master key
+  # (base64 32-byte AES-256 key). MUST survive every redeploy — see
+  # deploy/scripts/setup-vault-secrets.sh which generates it exactly once.
+  masterKeySecretKey: paperclip_secrets_master_key
+  # Shared org-wide provider API keys (Vault KV v2 path, e.g. anthropic_api_key,
+  # claude_subscription_token, github_token, openai_api_key, ...). Synced into a
+  # separate K8s secret so provider credentials live in exactly one place.
+  apiKeysPath: shared/api-keys
+  apiKeysSecretName: bionic-org-api-keys
+  # Opt-in uppercase alias for the raw Anthropic API key. Claude Code/ACP auth
+  # precedence checks ANTHROPIC_API_KEY BEFORE CLAUDE_CODE_OAUTH_TOKEN, so a
+  # pod that carries ANTHROPIC_API_KEY makes every claude_local agent bill
+  # prepaid API credits and silently ignores its Claude subscription login.
+  # This org's Anthropic path is the subscription token
+  # (claude_subscription_token), so the alias stays off. It was live by default
+  # until the 2026-10-06 incident, when the credit-exhausted API key turned
+  # every claude_local run into "Credit balance is too low" despite a healthy
+  # ESO-synced subscription token. Only enable with --set
+  # vault.anthropicApiKeyAlias=true if you intentionally switch to API-key
+  # billing (the subscription token in the pod env is still overridden then).
+  anthropicApiKeyAlias: false
+  # Agent GitHub PAT (fine-grained, repo-scoped) stored in Vault at
+  # t6-apps/bionic-org/config:sr_eng_agent_pat and ESO-extracted into the
+  # <release>-secrets K8s secret (that path is already a whole-KV extract).
+  # When enabled, GITHUB_TOKEN resolves from THIS secret instead of the
+  # shared github_token key, and a host-scoped git credential helper is
+  # registered via GIT_CONFIG_* so heartbeat children can `git push` to
+  # github.com with nothing ever written to .git-credentials or HOME.
+  # Lives inside the apiKeysPath env block, so it requires apiKeysPath set.
+  agentGithubPat:
+    enabled: false
+    secretKey: sr_eng_agent_pat
   # Secret store (ClusterSecretStore)
   secretStore: vault-backend
-  # Refresh interval for ESO sync
-  refreshInterval: 5m
+  # Refresh interval for ESO sync (JWT auth auto-mints tokens; 1h is plenty)
+  refreshInterval: 1h
   # Deletion policy for the synced K8s secret
   deletionPolicy: Retain
 
@@ -144,6 +257,10 @@ env:
   MINIO_USE_SSL: "{{ .Values.minio.useSSL }}"
   MAIL_FROM: info@bionicaisolutions.com
   BIONIC_INTERNAL_BASE_URL: "https://org.baisoln.com"
+  # Empty = derive PAPERCLIP_BUILD_COMMIT from image.tag (full-SHA tags) in
+  # templates/configmap.yaml. Set only when the image tag is not the 40-char
+  # source SHA (REL-1268 build provenance).
+  buildCommit: ""
 
 # ---------------------------------------------------------------------------
 # Node/DNS config (mimics bionic-platform)
