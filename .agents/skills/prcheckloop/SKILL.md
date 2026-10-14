@@ -1,14 +1,39 @@
 ---
 name: prcheckloop
 description: >
-  Iterate on a GitHub PR until latest-head checks are green or a precise blocker
-  is named. Use when a PR still has failing or pending checks after review fixes,
-  including after greploop.
+  Iterate on a GitHub PR until LOCAL CI (typecheck/test/build) is green or a
+  precise blocker is named — GitHub Actions is disabled on this instance for
+  cost reasons. Use when a PR still has failing or pending checks after review
+  fixes, including after greploop.
 ---
 
 # PRCheckloop
 
 Get a GitHub PR to a fully green check state, or exit with a concrete blocker.
+
+## This instance runs CI locally — GitHub Actions is OFF (cost policy)
+
+On `salilkadam/paperclip` all auto-triggered GitHub Actions workflows are
+DISABLED to avoid Actions/Daytona/LLM-review spend. There will be no CI checks
+in the PR checks tab, and "no checks" is NOT a green state. The verification
+gate is the suite YOU run locally in the PR head checkout, per `AGENTS.md` §7:
+
+```sh
+pnpm install
+pnpm -r typecheck
+pnpm test:run
+pnpm build
+```
+
+Rules:
+
+- Never push and wait for CI to teach you anything; verify locally first.
+- A PR is only "green" when that local suite passes on the exact head SHA you
+  are about to merge. Re-run after every fix-push.
+- Do not re-enable or work around disabled workflows, and do not file PRs from
+  branches whose intent is to fix Actions billing.
+- Browser suites (`pnpm test:e2e`, `pnpm test:release-smoke`) stay opt-in:
+  run them only when the change touches what they cover.
 
 ## Scope
 
@@ -146,8 +171,9 @@ If the failure is actionable from the checked-out code:
 5. Commit in a logical commit.
 6. Push before re-checking the PR.
 
-Do not stop at a local fix. The loop is only complete when the remote PR checks
-for the new head SHA are green.
+Do not stop at a local fix. The loop is only complete when the fix is verified
+by the local CI suite (§ “This instance runs CI locally”) on the pushed head
+SHA — this fork has no remote CI to lean on.
 
 ### 7. Push and repeat
 
@@ -162,16 +188,17 @@ Then refresh the PR metadata, get the new `HEAD_SHA`, and restart from Step 3.
 
 Exit the loop only when:
 
-- all checks for the latest head SHA are green, or
+- the local CI suite is green on the latest head SHA (this fork's check gate),
+  or
 - a blocker remains after reasonable repair effort, or
 - the max iteration count is reached
 
 ### 8. Hand off to auto-merge (green terminal state)
 
 This repository merges agent PRs automatically; humans build and deploy
-afterwards. When all checks for the latest head SHA are green, do NOT merge
-interactively and do NOT wait for a human. Enable auto-merge so GitHub merges
-the moment the PR is mergeable:
+afterwards. When the LOCAL verification suite (typecheck, test:run, build) is
+green on the exact head SHA, do NOT merge interactively and do NOT wait for a
+human. Enable auto-merge so GitHub merges the moment the PR is mergeable:
 
 ```bash
 gh pr merge --auto --squash --delete-branch --repo <owner>/<repo>
