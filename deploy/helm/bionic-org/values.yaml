@@ -187,6 +187,17 @@ vault:
   # vault.anthropicApiKeyAlias=true if you intentionally switch to API-key
   # billing (the subscription token in the pod env is still overridden then).
   anthropicApiKeyAlias: false
+  # Agent GitHub PAT (fine-grained, repo-scoped) stored in Vault at
+  # t6-apps/bionic-org/config:sr_eng_agent_pat and ESO-extracted into the
+  # <release>-secrets K8s secret (that path is already a whole-KV extract).
+  # When enabled, GITHUB_TOKEN resolves from THIS secret instead of the
+  # shared github_token key, and a host-scoped git credential helper is
+  # registered via GIT_CONFIG_* so heartbeat children can `git push` to
+  # github.com with nothing ever written to .git-credentials or HOME.
+  # Lives inside the apiKeysPath env block, so it requires apiKeysPath set.
+  agentGithubPat:
+    enabled: false
+    secretKey: sr_eng_agent_pat
   # Secret store (ClusterSecretStore)
   secretStore: vault-backend
   # Refresh interval for ESO sync (JWT auth auto-mints tokens; 1h is plenty)

@@ -82,9 +82,30 @@ spec:
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
+                  {{- if .Values.vault.agentGithubPat.enabled }}
+                  # Vault t6-apps/bionic-org/config:sr_eng_agent_pat → ESO →
+                  # <release>-secrets. Prefer this dedicated agent key over the
+                  # shared org-wide github_token.
+                  key: {{ .Values.vault.agentGithubPat.secretKey }}
+                  name: {{ include "bionic-org.name" . }}-secrets
+                  {{- else }}
                   key: github_token
                   name: {{ .Values.vault.apiKeysSecretName }}
+                  {{- end }}
                   optional: true
+            {{- if .Values.vault.agentGithubPat.enabled }}
+            # Git-credential bridge for raw `git push`/`git fetch` over https
+            # (GITHUB_TOKEN alone only covers gh CLI/API). Host-scoped to
+            # github.com; the helper shell-expands $GITHUB_TOKEN at credential
+            # request time, so the PAT is never written to disk (the pod HOME
+            # is ephemeral anyway). GIT_CONFIG_* requires git >= 2.32.
+            - name: GIT_CONFIG_COUNT
+              value: "1"
+            - name: GIT_CONFIG_KEY_0
+              value: credential.https://github.com.helper
+            - name: GIT_CONFIG_VALUE_0
+              value: '!f() { test "$1" = get || exit 1; [ -n "$GITHUB_TOKEN" ] || exit 1; echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
+            {{- end }}
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
