@@ -948,6 +948,61 @@ async function blockingIssueMap(db: Db, companyId: string, blockedIssueIds: Arra
   return map;
 }
 
+/**
+ * Request-scoped memo for the four issue-enrichment helpers above.
+ *
+ * The attention feed calls them 15 times across its lanes (`issueSummaryMap`
+ * alone 8 times) with heavily overlapping issue-id sets, and every
+ * `issueSummaryMap` call re-evaluates `executionIssueCondition()` — which
+ * expands to a correlated subquery over the chat tables — per candidate row.
+ * The helpers are pure for a fixed `(companyId, readCondition)`, both of which
+ * are fixed within one request, and the attention feed is read-only, so
+ * memoising per request is observationally identical while collapsing 15 round
+ * trips into at most 4.
+ *
+ * Keyed per issue id rather than per id-set, so a later lane reuses rows an
+ * earlier lane already fetched. Ids that were queried but matched nothing are
+ * remembered as resolved-and-absent, which preserves the callers'
+ * `if (!issue) continue` semantics and stops a miss from being re-queried.
+ *
+ * Two calls to the same memo issued concurrently inside one `Promise.all` can
+ * still overlap (neither sees the other's rows yet); that is correct, just not
+ * deduped. The win this targets is across lanes, which run sequentially.
+ */
+function createIssueLookupCache(db: Db, companyId: string) {
+  const memo = <V>(
+    load: (
+      db: Db,
+      companyId: string,
+      issueIds: Array<string | null | undefined>,
+    ) => Promise<Map<string, V>>,
+  ) => {
+    const entries = new Map<string, V>();
+    const resolved = new Set<string>();
+    return async (issueIds: Array<string | null | undefined>) => {
+      const ids = [...new Set(issueIds.filter((value): value is string => Boolean(value)))];
+      const missing = ids.filter((id) => !resolved.has(id));
+      if (missing.length > 0) {
+        const loaded = await load(db, companyId, missing);
+        for (const id of missing) resolved.add(id);
+        for (const [id, value] of loaded) entries.set(id, value);
+      }
+      const view = new Map<string, V>();
+      for (const id of ids) {
+        const value = entries.get(id);
+        if (value !== undefined) view.set(id, value);
+      }
+      return view;
+    };
+  };
+  return {
+    summaries: memo(issueSummaryMap),
+    images: memo(issueImageMap),
+    planDocuments: memo(planDocumentMap),
+    blockingIssues: memo(blockingIssueMap),
+  };
+}
+
 type BlockedWorkEdge = {
   fromIssueId: string | null;
   issueId: string;
@@ -1076,6 +1131,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       if (options.all && !options.queue && !options.allowUnscopedAll) {
         throw badRequest("all requires a queue filter");
       }
+      const issueLookups = createIssueLookupCache(db, companyId);
       const [prefix, dismissals] = await Promise.all([
         companyPrefix(db, companyId),
         dismissalByKey(db, companyId, options.userId),
@@ -1120,7 +1176,6 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       for (const row of approvalIssueRows) {
         if (!approvalIssueMap.has(row.approvalId)) approvalIssueMap.set(row.approvalId, row.issueId);
       }
-
       for (const approval of pendingApprovals) {
         const dedupKey = `approval:${approval.id}`;
         const title = approvalTitle(approval.type, approval.payload);
@@ -1213,9 +1268,9 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       );
       const visibleInteractionRows = collapsePendingConfirmationsToNewest(boardInteractionRows);
       const [interactionIssueMap, interactionImageMap, interactionPlanDocumentMap] = await Promise.all([
-        issueSummaryMap(db, companyId, visibleInteractionRows.map((row) => row.issueId)),
-        issueImageMap(db, companyId, visibleInteractionRows.map((row) => row.issueId)),
-        planDocumentMap(db, companyId, visibleInteractionRows.map((row) => row.issueId)),
+        issueLookups.summaries(visibleInteractionRows.map((row) => row.issueId)),
+        issueLookups.images(visibleInteractionRows.map((row) => row.issueId)),
+        issueLookups.planDocuments(visibleInteractionRows.map((row) => row.issueId)),
       ]);
 
       for (const interaction of visibleInteractionRows) {
@@ -1291,7 +1346,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       const bundleIds = [...new Set(openDecisions.map((decision) => decision.bundleId).filter((value): value is string => Boolean(value)))];
       const bundleTitleMap = new Map<string, string>();
       const [decisionIssueMap, bundleRows] = await Promise.all([
-        issueSummaryMap(db, companyId, openDecisions.map((decision) => decision.originIssueId)),
+        issueLookups.summaries(openDecisions.map((decision) => decision.originIssueId)),
         bundleIds.length > 0
           ? db.select({ id: decisionBundles.id, title: decisionBundles.title })
             .from(decisionBundles).where(and(eq(decisionBundles.companyId, companyId), inArray(decisionBundles.id, bundleIds)))
@@ -1396,12 +1451,8 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         ))
         .orderBy(desc(issueRecoveryActions.updatedAt), desc(issueRecoveryActions.id));
       const [recoveryIssueMap, recoveryImageMap] = await Promise.all([
-        issueSummaryMap(
-          db,
-          companyId,
-          recoveryRows.flatMap((row) => [row.sourceIssueId, row.recoveryIssueId]),
-        ),
-        issueImageMap(db, companyId, recoveryRows.map((row) => row.sourceIssueId)),
+        issueLookups.summaries(recoveryRows.flatMap((row) => [row.sourceIssueId, row.recoveryIssueId])),
+        issueLookups.images(recoveryRows.map((row) => row.sourceIssueId)),
       ]);
 
       for (const recovery of recoveryRows) {
@@ -1467,14 +1518,10 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         .map((issue) => issue.blockerAttention?.terminalBlockerIssueId)
         .filter((issueId): issueId is string => Boolean(issueId));
       const [blockedIssueSummaries, terminalBlockerSummaries, blockerImageMap, blockingIssues] = await Promise.all([
-        issueSummaryMap(db, companyId, blockedIssues.map((issue) => issue.id)),
-        issueSummaryMap(db, companyId, terminalBlockerIssueIds),
-        issueImageMap(
-          db,
-          companyId,
-          [...blockedIssues.map((issue) => issue.id), ...terminalBlockerIssueIds],
-        ),
-        blockingIssueMap(db, companyId, blockedIssues.map((issue) => issue.id)),
+        issueLookups.summaries(blockedIssues.map((issue) => issue.id)),
+        issueLookups.summaries(terminalBlockerIssueIds),
+        issueLookups.images([...blockedIssues.map((issue) => issue.id), ...terminalBlockerIssueIds]),
+        issueLookups.blockingIssues(blockedIssues.map((issue) => issue.id)),
       ]);
       const terminalCandidates = new Map<string, {
         issue: BlockedAttentionIssue;
@@ -1603,8 +1650,8 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       const pendingApprovalByIssueId = new Map(pendingReviewApprovalRows.map((row) => [row.issueId, row.approvalId]));
       const [reviewAttentionByIssueId, reviewIssueMap, reviewImageMap] = await Promise.all([
         issueService(db).listReviewAttention(companyId, reviewRows),
-        issueSummaryMap(db, companyId, reviewIssueIds),
-        issueImageMap(db, companyId, reviewIssueIds),
+        issueLookups.summaries(reviewIssueIds),
+        issueLookups.images(reviewIssueIds),
       ]);
 
       for (const review of reviewRows) {
@@ -1669,12 +1716,8 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         return oldest;
       }, null);
       const [failedIssueMap, failedImageMap, newerRuns] = await Promise.all([
-        issueSummaryMap(
-          db,
-          companyId,
-          failedIssueIds,
-        ),
-        issueImageMap(db, companyId, failedIssueIds),
+        issueLookups.summaries(failedIssueIds),
+        issueLookups.images(failedIssueIds),
         oldestFailedRunCreatedAt && failedAgentIds.length > 0
           ? db
             .select({
