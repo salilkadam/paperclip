@@ -5,6 +5,23 @@ set -e
 PUID=${USER_UID:-1000}
 PGID=${USER_GID:-1000}
 
+# Composio CLI is baked into the image (see Dockerfile tool layer). When a
+# user API key is injected from Vault (t6-apps/<space>/config key
+# composio_user_api_key, synced by External Secrets -> COMPOSIO_USER_API_KEY),
+# log in non-interactively at every start so agent child processes get an
+# authed `composio` CLI without a browser flow. Idempotent; the credential
+# lands in $HOME/.composio (PAPERCLIP_HOME-backed on Kubernetes, so it also
+# survives restarts there). Login failure must NEVER block the server boot.
+maybe_composio_login() {
+    [ -n "${COMPOSIO_USER_API_KEY:-}" ] || return 0
+    command -v composio >/dev/null 2>&1 || return 0
+    if composio login --user-api-key "$COMPOSIO_USER_API_KEY" --no-skill-install >/dev/null 2>&1; then
+        echo "docker-entrypoint.sh: composio login ok" >&2
+    else
+        echo "docker-entrypoint.sh: composio login FAILED (continuing without composio)" >&2
+    fi
+}
+
 # Without root we can neither remap the node user (usermod/groupmod/chown)
 # nor switch users (gosu needs CAP_SETUID/CAP_SETGID), so exec directly.
 # This covers Kubernetes restricted PodSecurity (runAsNonRoot + runAsUser)
@@ -15,6 +32,7 @@ if [ "$(id -u)" -ne 0 ]; then
     if [ "$(id -u)" -ne "$PUID" ] || [ "$(id -g)" -ne "$PGID" ]; then
         echo "docker-entrypoint.sh: running unprivileged as $(id -u):$(id -g); cannot remap to requested ${PUID}:${PGID}" >&2
     fi
+    maybe_composio_login
     exec "$@"
 fi
 
@@ -43,6 +61,16 @@ fi
 home_dir="${PAPERCLIP_HOME:-/paperclip}"
 if [ -d "$home_dir" ] && [ -n "$(find "$home_dir" \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)" ]; then
     chown -R node:node "$home_dir"
+fi
+
+# Run the Composio login as the runtime user so credentials land in its HOME.
+if [ -n "${COMPOSIO_USER_API_KEY:-}" ] && command -v composio >/dev/null 2>&1; then
+    if gosu node env COMPOSIO_USER_API_KEY="$COMPOSIO_USER_API_KEY" \
+        composio login --user-api-key "$COMPOSIO_USER_API_KEY" --no-skill-install >/dev/null 2>&1; then
+        echo "docker-entrypoint.sh: composio login ok" >&2
+    else
+        echo "docker-entrypoint.sh: composio login FAILED (continuing without composio)" >&2
+    fi
 fi
 
 exec gosu node "$@"

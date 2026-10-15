@@ -159,8 +159,13 @@ WORKDIR /app
 RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest \
   && apt-get update \
-  && apt-get install -y --no-install-recommends openssh-client jq \
+  && apt-get install -y --no-install-recommends openssh-client jq unzip \
   && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL https://composio.dev/install | sh \
+  && mkdir -p /opt/composio \
+  && mv /root/.composio/composio /opt/composio/composio \
+  && chmod 0755 /opt/composio/composio \
+  && ln -sf /opt/composio/composio /usr/local/bin/composio \
   && mkdir -p /paperclip \
   && chown node:node /paperclip
 

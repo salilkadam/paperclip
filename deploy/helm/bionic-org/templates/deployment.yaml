@@ -135,6 +135,17 @@ spec:
                   key: google_auth_token
                   name: {{ include "bionic-org.name" . }}-secrets
                   optional: true
+            # Composio user API key (Vault t6-apps/bionic-org/config key
+            # composio_user_api_key, synced by External Secrets). The image's
+            # docker-entrypoint.sh consumes it to run `composio login`
+            # non-interactively at startup, giving agents an authed composio
+            # CLI (baked into the image) without a browser login.
+            - name: COMPOSIO_USER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: composio_user_api_key
+                  name: {{ include "bionic-org.name" . }}-secrets
+                  optional: true
             - name: BETTER_AUTH_SECRET
               valueFrom:
                 secretKeyRef:
