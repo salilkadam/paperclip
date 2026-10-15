@@ -16,7 +16,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-cd "$(dirname "$0")/.."  # repo root
+cd "$(dirname "$0")/../.."  # repo root
 
 RELEASE="${1:-bionic-org}"
 NAMESPACE="bionicorg"
