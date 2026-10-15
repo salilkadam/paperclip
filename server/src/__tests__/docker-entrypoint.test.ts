@@ -47,11 +47,30 @@ function installStubs(ids: { uid: number; gid: number; nodeUid?: number; nodeGid
     writeStub(cmd, `echo "${cmd} $*" >> "${logFile}"`);
   }
   // The entrypoint's ownership probe is a first-mismatch find over the app
-  // home. An empty result models a fully node-owned tree (image-baked dir,
-  // healthy volume); a path models any uid OR gid mismatch anywhere in the
-  // tree (fresh root-owned mount, root-owned descendant, stale group after
-  // a GID-only remap).
-  writeStub("find", ids.homeMismatch ? `echo "$1/mismatched-entry"` : `true`);
+  // home, scoped to prune $home_dir/instances (unbounded runtime data). An
+  // empty result models a fully node-owned tree (image-baked dir, healthy
+  // volume); a path models any uid OR gid mismatch outside instances/
+  // (fresh root-owned mount, root-owned descendant, stale group after a
+  // GID-only remap). The stub logs find's arguments (so tests can assert
+  // the prune scope) and simulates the -exec clause against the single
+  // mismatched entry it reports (real find never runs here).
+  const findBody = [
+    `echo "find $*" >> "${logFile}"`,
+    ...(ids.homeMismatch
+      ? [
+          `p="$1/mismatched-entry"`,
+          `echo "$p"`,
+          `in_exec=0`,
+          `cmd=""`,
+          `for a in "$@"; do`,
+          `  if [ "$in_exec" = 1 ]; then [ "$a" = "{}" ] && break; cmd="$cmd $a";`,
+          `  elif [ "$a" = "-exec" ]; then in_exec=1; fi`,
+          `done`,
+          `[ -n "$cmd" ] && set -- $cmd && "$@" "$p"`,
+        ]
+      : []),
+  ].join("\n");
+  writeStub("find", findBody);
   writeStub("gosu", `echo "gosu $*" >> "${logFile}"\nshift\nexec "$@"`);
 }
 
@@ -81,7 +100,7 @@ describe("docker-entrypoint.sh", () => {
     expect(stdout).toContain("ENTRYPOINT-CMD-RAN");
     expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
     expect(calls).not.toContain("usermod");
-    expect(calls).not.toContain("chown");
+    expect(calls).not.toMatch(/^chown/m);
   });
 
   it("remaps the node user and chowns /paperclip before gosu when root requests a different UID/GID", async () => {
@@ -94,7 +113,8 @@ describe("docker-entrypoint.sh", () => {
     expect(stdout).toContain("ENTRYPOINT-CMD-RAN");
     expect(calls).toContain("usermod -o -u 1001 node");
     expect(calls).toContain("groupmod -o -g 1001 node");
-    expect(calls).toContain(`chown -R node:node ${stubDir}`);
+    expect(calls).toContain(`-path ${stubDir}/instances -prune`);
+    expect(calls).toContain(`chown -h node:node ${stubDir}/mismatched-entry`);
     expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
   });
 
@@ -106,7 +126,7 @@ describe("docker-entrypoint.sh", () => {
     expect(stdout).toContain("ENTRYPOINT-CMD-RAN");
     expect(calls).not.toContain("usermod");
     expect(calls).not.toContain("groupmod");
-    expect(calls.includes(`chown -R node:node ${stubDir}`)).toBe(homeMismatch);
+    expect(calls.includes(`chown -h node:node ${stubDir}/mismatched-entry`)).toBe(homeMismatch);
     expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
   });
 
@@ -120,7 +140,7 @@ describe("docker-entrypoint.sh", () => {
     const { stdout, calls } = await runEntrypoint({ PAPERCLIP_HOME: stubDir });
 
     expect(stdout).toContain("ENTRYPOINT-CMD-RAN");
-    expect(calls).toContain(`chown -R node:node ${stubDir}`);
+    expect(calls).toContain(`chown -h node:node ${stubDir}/mismatched-entry`);
     expect(calls).not.toContain("usermod");
     expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
   });
@@ -131,7 +151,7 @@ describe("docker-entrypoint.sh", () => {
     const { calls } = await runEntrypoint({ USER_GID: "1001", PAPERCLIP_HOME: stubDir });
 
     expect(calls).toContain("groupmod -o -g 1001 node");
-    expect(calls).toContain(`chown -R node:node ${stubDir}`);
+    expect(calls).toContain(`chown -h node:node ${stubDir}/mismatched-entry`);
   });
 
   it("keeps a fully node-owned tree chown-free (no per-boot recursive chown)", async () => {
@@ -139,7 +159,9 @@ describe("docker-entrypoint.sh", () => {
 
     const { calls } = await runEntrypoint({ PAPERCLIP_HOME: stubDir });
 
-    expect(calls).not.toContain("chown");
+    // The probe itself may be logged (its -exec clause names chown), but no
+    // chown command may actually run on a fully node-owned tree.
+    expect(calls).not.toMatch(/^chown/m);
     expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
   });
 
@@ -148,7 +170,8 @@ describe("docker-entrypoint.sh", () => {
 
     const { calls } = await runEntrypoint({ PAPERCLIP_HOME: stubDir });
 
-    expect(calls).toContain(`chown -R node:node ${stubDir}`);
+    expect(calls).toContain(`find ${stubDir} -path ${stubDir}/instances -prune`);
+    expect(calls).toContain(`chown -h node:node ${stubDir}/mismatched-entry`);
   });
 
   it("execs directly and silently when already running as the requested user (restricted PodSecurity)", async () => {

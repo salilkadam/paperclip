@@ -58,9 +58,25 @@ fi
 # (init containers, backup restores, files written before a remap) is
 # found immediately and repaired recursively, a GID-only remap is caught,
 # and a fully-correct tree costs one metadata-only walk with no chown.
+#
+# The scan is deliberately scoped to EXCLUDE $home_dir/instances. That
+# subtree is server-created runtime data (agent workspaces, trial-build
+# rootfs copies) and is unbounded: an idle production instance accumulated
+# millions of files there on NFS, and the whole-tree probe crawled all of
+# them on every boot, stalling the pod for ~10 minutes. Everything under
+# instances/ is written by the server after privileges drop to node, so it
+# is node-owned by construction; we repair only the instances directory
+# itself (bounded, non-recursive) to cover a root-owned fresh mount.
+# Repair is per-mismatch (-exec chown -h ... +) rather than a recursive
+# chown -R of the whole home: it fixes exactly the entries the probe finds
+# (following -h so symlink ownership is set, not dereferenced) without
+# re-chowning every correct file on the volume.
 home_dir="${PAPERCLIP_HOME:-/paperclip}"
-if [ -d "$home_dir" ] && [ -n "$(find "$home_dir" \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)" ]; then
-    chown -R node:node "$home_dir"
+if [ -d "$home_dir" ] && [ -n "$(find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)" ]; then
+    find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -exec chown -h node:node {} +
+    if [ -d "$home_dir/instances" ]; then
+        chown -h node:node "$home_dir/instances"
+    fi
 fi
 
 # Run the Composio login as the runtime user so credentials land in its HOME.
