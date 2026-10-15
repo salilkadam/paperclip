@@ -54,13 +54,15 @@ service:
 # Resource limits
 # NOTE: The bionic container hosts agent heartbeat runs, each of which spawns
 # an adapter/CLI child process (~1Gi each). Waking several company agents at
-# once OOMKilled the pod at the previous 2Gi limit. 6Gi is the OOM ceiling and
-# MUST stay high because a mass-wake spikes memory in well under a second —
-# neither HPA nor VPA can react that fast (both are poll-based: metrics-server
-# scrape ~15s + HPA sync 15s; VPA recommender runs ~1min).
+# once OOMKilled the pod at the previous 2Gi limit, and again at 6Gi once two
+# companies ran ~15 agents with 4-5 concurrent runs (measured ~7.2Gi steady,
+# spiking higher on mass-wake). 16Gi is the OOM ceiling and MUST stay high
+# because a mass-wake spikes memory in well under a second — neither HPA nor
+# VPA can react that fast (both are poll-based: metrics-server scrape ~15s +
+# HPA sync 15s; VPA recommender runs ~1min).
 #
 # The *request* (node reservation) is deliberately LOW (512Mi). A limit is a
-# ceiling, not a reservation, so the 6Gi limit costs ~nothing when the org is
+# ceiling, not a reservation, so the 16Gi limit costs ~nothing when the org is
 # calm; only the request is charged against the node. When the cluster has the
 # VPA operator installed, the VerticalPodAutoscaler below auto-raises this
 # request as real usage grows and lowers it again when calm (see `vpa`).
@@ -68,7 +70,7 @@ service:
 resources:
   limits:
     cpu: 2000m
-    memory: 6Gi
+    memory: 16Gi
   requests:
     cpu: 500m
     memory: 512Mi
@@ -86,14 +88,16 @@ resources:
 #
 # WHAT THIS DOES: it manages the container's MEMORY REQUEST only
 # (controlledValues: RequestsOnly), letting it grow as usage grows and shrink
-# when calm — automating the manual "bump the memory" step. It leaves the 6Gi
-# limit (the OOM ceiling) untouched so a burst still has headroom, and it does
+# when calm — automating the manual "bump the memory" step. It leaves the
+# 16Gi limit (the OOM ceiling) untouched so a burst still has headroom, and it does
 # NOT manage CPU.
 #
 # updateMode InPlaceOrRecreate uses the v1.33 in-place resize feature to change
 # the request WITHOUT evicting the pod; it only falls back to eviction if
 # in-place is infeasible. NOTE: eviction would kill in-flight agent runs (they
 # are process-pinned), so this is intentionally request-only + bounded.
+# maxAllowed tracks the 16Gi OOM ceiling so the VPA cannot recommend above
+# the limit.
 #
 # Requires the VPA operator CRD. This template renders ONLY when the CRD is
 # present (see the capability guard in templates/vpa.yaml), so committing it is
@@ -112,7 +116,7 @@ vpa:
   minAllowed:
     memory: 512Mi
   maxAllowed:
-    memory: 6Gi
+    memory: 16Gi
 
 # ---------------------------------------------------------------------------
 # PostgreSQL (CNPG) — new database in existing pg-ceph cluster
@@ -239,10 +243,11 @@ vaultAuth:
 # Environment (non-secret, goes in ConfigMap)
 # ---------------------------------------------------------------------------
 env:
-  # Server V8 heap ceiling. The container limit is 6Gi but the Dockerfile CMD
+  # Server V8 heap ceiling. The container limit is 16Gi but the Dockerfile CMD
   # passes no --max-old-space-size, so V8 defaults to ~2.2GB and the server
   # (which legitimately runs ~1.3-2GB heap under live load) OOM-aborts on
-  # spikes. Raise to leave ~1Gi for agent child processes sharing the cgroup.
+  # spikes. Raise to leave several Gi for agent child processes sharing the
+  # cgroup.
   NODE_OPTIONS: "--max-old-space-size=4096"
   NODE_ENV: production
   PAPERCLIP_DEPLOYMENT_MODE: authenticated
