@@ -169,6 +169,21 @@ RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
   && mkdir -p /paperclip \
   && chown node:node /paperclip
 
+# Media toolchain for the central video skills (skills/marketing-video-studio,
+# skills/motion-explainer-studio): ffmpeg for VO polish/render/assembly, Pillow +
+# numpy + boto3 for art cutouts, geometry checks and S3 presigning, and Playwright
+# with a shared headless Chromium for deterministic HTML scene rendering.
+# Browsers live in a world-readable path owned by the runtime user so agent
+# processes (gosu node) can launch them without a per-HOME download.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg python3-pip python3-pil python3-numpy python3-boto3 \
+  && pip3 install --no-cache-dir --break-system-packages playwright \
+  && python3 -m playwright install --with-deps chromium \
+  && chown -R node:node /opt/ms-playwright \
+  && chmod -R a+rX /opt/ms-playwright \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY scripts/docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
