@@ -148,6 +148,7 @@ Tasks: `avatar`, `i2v`, `t2v`, `video.continue`, `video.long`, `refine`.
 - TTS long input → 502. Per scene.
 - Cloned voices inject filler → best-of-N with STT scoring.
 - Music body `prompt` → 422. Use `tags`.
+- Music 502 → upstream ComfyUI ACE-Step out of GPU memory. Assemble without `music`, retry later, and say so when delivering.
 - GenImage FLUX-dev → timeout. Default model.
 - avatalk base64 or cluster DNS → fails. Presign via `s3.baisoln.com`.
 - avatalk `source:tts` → name resolution failure. Use `source:url`.

@@ -35,6 +35,9 @@ def try_rest():
         print(f"DONE (gpu-ai REST) -> {OUT} ({os.path.getsize(OUT)} bytes)")
         return True
     print(f"gpu-ai REST music unavailable ({code_ct}); falling back to ComfyUI…")
+    # Drop the error body so a later step never mistakes it for an MP3.
+    if os.path.exists(OUT):
+        os.remove(OUT)
     return False
 
 if try_rest():
@@ -89,6 +92,10 @@ for i in range(120):
                 sys.exit(0)
         st = h[pid].get("status",{})
         if st.get("status_str") == "error":
-            print("workflow ERROR:", json.dumps(st)[:400]); sys.exit(1)
+            errs = [m[1].get("exception_message", "") for m in st.get("messages", [])
+                    if m and m[0] == "execution_error"]
+            print("workflow ERROR:", (errs[0] if errs else json.dumps(st))[:400])
+            print("No music bed: assemble without one (omit \"music\" from the manifest).")
+            sys.exit(1)
     time.sleep(10)
 print("timed out waiting for music")

@@ -128,7 +128,14 @@ def music(seconds, tags, out_path):
     body = json.dumps({"tags": tags, "duration": int(seconds)})
     _curl(["-o", out_path, "-X", "POST", MUSIC, "-H", "X-API-Key: " + key(),
            "-H", "Content-Type: application/json", "-d", body], timeout=300)
-    return os.path.exists(out_path) and os.path.getsize(out_path) > 5000
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 5000:
+        return True
+    # A failed call leaves the gateway's error body (e.g. "error code: 502")
+    # at out_path; remove it so the assembler builds narration-only instead of
+    # trying to decode it as MP3.
+    if os.path.exists(out_path):
+        os.remove(out_path)
+    return False
 
 
 # ------------------------------------------------------------------ genimage

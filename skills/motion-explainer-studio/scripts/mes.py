@@ -255,7 +255,11 @@ def cmd_art(a):
             p.stamp("art:" + sid, p.art_recipe(sc))
             say("    -> %s%s" % (rel, (" (%s)" % err) if err else ""))
         else:
-            say("    ! failed: %s" % err)
+            msg = str(err)
+            if "insufficientCredits" in msg or "runware.ai/wallet" in msg:
+                msg = ("GenImage provider (Runware) is out of credits — the operator must top "
+                       "up; this scene keeps its vector layout. Mention it when delivering.")
+            say("    ! failed: %s" % msg)
         p.save()
     p.save()
 

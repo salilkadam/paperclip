@@ -130,5 +130,6 @@ it mid-pipeline.
 | 400 from TTS listing names | voice not in the registry |
 | 422 from music | body used `prompt`; it must be `tags` |
 | Music shorter than asked | expected — caps at ~30s, the assembler loops it |
+| 502 from music | upstream ComfyUI ACE-Step out of GPU memory (busy GPU). The cut builds narration-only; retry `mes.py music <dir> --force` later and re-assemble, and say so when delivering |
 | GenImage timeout | FLUX-dev was requested. Use the default model |
 | Hindi in English narration | Indic-model voice. Pick another |

@@ -59,6 +59,9 @@ def gen_one(sid, i, prompt):
     r = subprocess.run(["curl","-s","-m","240","-X","POST",URL,*hdr,"-d",body], capture_output=True, text=True)
     b64 = extract(r.stdout)
     if not b64:
+        if "insufficientCredits" in r.stdout or "runware.ai/wallet" in r.stdout:
+            return False, ("GenImage provider (Runware) is out of credits; the operator must "
+                           "top up. Use real photos or report the blocker.")
         return False, r.stdout[-160:]
     open(f"img{i}.png","wb").write(base64.b64decode(re.sub(r"^data:image/\w+;base64,","",b64)))
     return True, None
