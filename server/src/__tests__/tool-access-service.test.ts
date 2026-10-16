@@ -2441,7 +2441,7 @@ describeEmbeddedPostgres("tool access service", () => {
     }
   });
 
-  it.each(["airtable", "beehiiv", "miro", "netlify", "sentry", "supabase", "todoist", "ticktick", "hugging-face"])(
+  it.each(["airtable", "beehiiv", "miro", "netlify", "sentry", "supabase", "todoist", "ticktick", "hugging-face", "trypost"])(
     "requests the reviewed read/write scopes for %s without adopting advertised admin scopes",
     async (slug) => {
       const company = await createCompany(db);
@@ -5123,7 +5123,7 @@ describeEmbeddedPostgres("tool access service", () => {
         "youcom",
       ]),
     );
-    expect(res.body.apps).toHaveLength(58);
+    expect(res.body.apps).toHaveLength(59);
     expect(
       res.body.apps.find((app: { slug: string }) => app.slug === "gmail")
         .ownershipAvailability,
