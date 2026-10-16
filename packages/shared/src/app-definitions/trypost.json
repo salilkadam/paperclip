@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "slug": "trypost",
+  "name": "TryPost",
+  "description": "Plan, schedule, and publish social posts across every connected network from your TryPost workspace.",
+  "categories": [
+    "communication"
+  ],
+  "featured": false,
+  "branding": {
+    "logoUrl": "/brands/apps/trypost.png"
+  },
+  "urlPatterns": [
+    "https://app.trypost.it/*"
+  ],
+  "docsUrl": "https://docs.trypost.it/ai/introduction",
+  "redirectConstraints": "https-or-loopback-http",
+  "methods": [
+    {
+      "key": "mcp-oauth",
+      "transport": "mcp_remote",
+      "auth": "oauth",
+      "ownershipModes": [
+        "dcr"
+      ],
+      "whenToUse": "Use browser sign-in for the provider-hosted MCP server.",
+      "defaults": {
+        "serverUrl": "https://app.trypost.it/mcp/trypost",
+        "scopesHint": [
+          "mcp:use"
+        ]
+      },
+      "guidanceMd": "Sign in to TryPost and pick the workspace agents should publish from. Every tool acts inside that one workspace, and members who need approval get a pending_approval post instead of a live post.",
+      "riskTier": "S4",
+      "label": "Sign in with TryPost",
+      "consoleLinks": {
+        "docs": "https://docs.trypost.it/ai/introduction"
+      },
+      "warnings": [
+        "Publishing reaches the connected social networks, so review posts before any publish, approve, or delete tool runs.",
+        "This card always uses TryPost Cloud. A self-hosted TryPost deployment connects by pasting its own MCP URL."
+      ]
+    }
+  ]
+}

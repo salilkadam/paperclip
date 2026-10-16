@@ -14,3 +14,15 @@ Both files preserve provider artwork without recoloring. The shared AppLogo
 provides the standard gray frame and contained padding. Arcade’s SVG favicon
 wrapped embedded raster content; the 180px touch icon linked by the same official
 page was used to satisfy the repository’s artwork safety checks.
+
+## TryPost (added 2026-10-16)
+
+| File | Source | SHA-256 |
+| --- | --- | --- |
+| `ui/public/brands/apps/trypost.png` | [Upstream app icon](https://raw.githubusercontent.com/trypostit/trypost/main/public/images/trypost/icon.png) in the provider’s own repository (`trypostit/trypost@main`, git blob `4c6ed3541489a7eb406c6c707f843bf5126c3dd7`) | `041f024c565e5cf80de9a3df2736f8d3251e9cbd75b7555a5454d07bd132847f` |
+
+512x512 RGBA, stored byte-for-byte with no recoloring or re-export, so the
+artwork safety checks pass without an SVG sanitize step. Upstream publishes no
+separate brand-use policy; the code is AGPL-3.0 and the mark is kept unmodified
+and shown only to identify the provider’s own service. There is no dark variant:
+the mark carries its own transparent-background artwork, like `arcade.png`.

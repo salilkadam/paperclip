@@ -530,6 +530,12 @@
       "localAsset": "/brands/apps/browser-use.svg",
       "sourceUrl": "https://browser-use.com/logo-primary.svg",
       "retrievedAt": "2026-09-29"
+    },
+    {
+      "slug": "trypost",
+      "provider": "TryPost",
+      "catalogVisible": true,
+      "localAsset": "/brands/apps/trypost.png"
     }
   ]
 }

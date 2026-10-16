@@ -960,8 +960,9 @@ const categoryBySlug = {
   supabase: "data",
   "ticket-tailor": "commerce",
   ticktick: "productivity",
-  todoist: "productivity",
-  webflow: "content",
+  "todoist": "productivity",
+  "trypost": "communication",
+  "webflow": "content",
   wix: "content",
   xero: "commerce",
   youcom: "ai",
@@ -1111,6 +1112,17 @@ const specialMethodsFor = (entry) => {
     grantKinds: ["user"],
     defaults: { serverUrl: entry.serverUrl, scopesHint: ["openid", "profile", "email", "offline_access"] },
     guidanceMd: "Sign in to Supermemory, then choose a workspace, read or write access, and optional tags. Use a separate space for unrelated work.",
+  })];
+  if (entry.slug === "trypost") return [oauthMethodFor(entry, "mcp-oauth", entry.serverUrl, {
+    // TryPost publishes to public networks, so the method is S4 and its one
+    // advertised scope is requested explicitly instead of left to the provider.
+    defaults: { serverUrl: entry.serverUrl, scopesHint: ["mcp:use"] },
+    guidanceMd: `Sign in to ${entry.name} and pick the workspace agents should publish from. Every tool acts inside that one workspace, and members who need approval get a pending_approval post instead of a live post.`,
+    consoleLinks: { docs: entry.docsUrl },
+    warnings: [
+      "Publishing reaches the connected social networks, so review posts before any publish, approve, or delete tool runs.",
+      "This card always uses TryPost Cloud. A self-hosted TryPost deployment connects by pasting its own MCP URL.",
+    ],
   })];
   if (entry.slug === "fireflies")
     return [
@@ -1490,7 +1502,7 @@ for (const entry of researchManifest.entries) {
     schemaVersion: 1,
     slug: entry.slug,
     name: entry.name,
-    description: ({ mem0: "Remember preferences, conversations, events, and agent state.", zep: "Retrieve temporal graph memory and authorized business context.", supermemory: "Search and save shared memories, documents, and profiles.", honcho: "Remember conversations and retrieve context about peers." })[entry.slug] ?? (entry.slug === "fireflies"
+    description: ({ mem0: "Remember preferences, conversations, events, and agent state.", zep: "Retrieve temporal graph memory and authorized business context.", supermemory: "Search and save shared memories, documents, and profiles.", honcho: "Remember conversations and retrieve context about peers.", trypost: "Plan, schedule, and publish social posts across every connected network from your TryPost workspace." })[entry.slug] ?? (entry.slug === "fireflies"
       ? "Search meeting transcripts, read summaries and action items, and connect meeting-ready routines."
       : `Connect ${entry.name}'s provider-hosted MCP server.`),
     categories: [categoryBySlug[entry.slug] ?? "other"],

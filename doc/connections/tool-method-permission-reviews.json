@@ -2144,6 +2144,26 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run"
+    },
+    {
+      "app": "trypost",
+      "method": "mcp-oauth",
+      "auth": "oauth",
+      "policy": "explicit",
+      "requestedScopes": [
+        "mcp:use"
+      ],
+      "capability": "write",
+      "supportedActions": "Create, schedule, queue, publish, preview, and delete posts in the one workspace chosen at consent; manage labels, signatures, ideas, notes, queue slots, repurposes, webhooks, and API keys. Publishing, webhook delivery, and media fetch leave TryPost for the connected social networks.",
+      "evidence": [
+        "https://docs.trypost.it/ai/introduction",
+        "https://docs.trypost.it/ai/tools-reference",
+        "https://app.trypost.it/.well-known/oauth-protected-resource/mcp/trypost",
+        "https://app.trypost.it/.well-known/oauth-authorization-server"
+      ],
+      "evidenceLimit": "Provider docs and public OAuth metadata name 83 tools, mark publish/approve/reject/delete/rotate as destructive, and gate admin and publish-directly tools per workspace role. Only the single mcp:use scope exists, so it cannot narrow a connection to read-only.",
+      "reviewedAt": "2026-10-16",
+      "liveProof": "not-run"
     }
   ]
 }
