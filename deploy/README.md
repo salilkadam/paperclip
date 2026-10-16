@@ -109,6 +109,10 @@ Two Vault paths feed this deployment via ESO (both synced every 5 min — never 
 
 2. **`shared/api-keys`** (org-wide shared provider keys) → K8s Secret `bionic-org-api-keys`, mounted via `envFrom` so adapter child processes inherit provider credentials (keys land lowercase and verbatim). Contains `anthropic_api_key`, `claude_subscription_token`, `github_token`, `openai_api_key`, `gemini_api_key`, `openrouter_api_key`, and more. The deployment exposes uppercase CLI-convention aliases for `CLAUDE_CODE_OAUTH_TOKEN`, `GITHUB_TOKEN`, and `OPENAI_API_KEY` only. **`ANTHROPIC_API_KEY` is deliberately NOT aliased** (`vault.anthropicApiKeyAlias: false`): Claude Code/ACP auth precedence picks `ANTHROPIC_API_KEY` over `CLAUDE_CODE_OAUTH_TOKEN`, so a pod carrying it makes every `claude_local` agent bill the prepaid API account and silently ignore its Claude subscription login. This caused the 2026-10-06 incident where every claude_local run failed with "Credit balance is too low" while the ESO-synced subscription token in the same pod was healthy. Runs that should be on subscription show `usage_json->>'billingType' = 'subscription_included'`; `metered_api`/`api` means something re-introduced an API key.
 
+   `MCP_API_KEY` is also aliased (from `mcp_api_key`, `vault.mcpApiKeyAlias: true`) for the central media skills, which call the self-hosted GPU stack at `https://mcp.baisoln.com`.
+
+3. **`t6-apps/voice-studio/config`** (media bucket) → K8s Secret `bionic-org-media-keys` (`vault.mediaS3`). Only `minio_access_key`, `minio_secret_key` and `minio_bucket` are synced, exposed as `MEDIA_S3_ACCESS_KEY` / `MEDIA_S3_SECRET_KEY` / `MEDIA_S3_BUCKET`, plus the non-secret `MEDIA_S3_ENDPOINT` (`https://s3.baisoln.com`). Used by `skills/marketing-video-studio` to upload and presign avatalk inputs. Never the MinIO root pair.
+
 > **Re-seeding Board managed secrets:** after a Case-C rebuild, read the needed values from `bionic-org-api-keys` (`kubectl -n bionicorg get secret bionic-org-api-keys -o go-template=...`) and enter them once in the Board UI — the UI encrypts them into the DB under the master key; the env wiring covers CLI-level fallback.
 
 ## Kubernetes Resources Created
@@ -125,6 +129,7 @@ Two Vault paths feed this deployment via ESO (both synced every 5 min — never 
 | PVC | `bionic-org-data` | NFS RWX 20Gi at `/paperclip`: instance state (signing keys, local_disk storage, agent workspaces) |
 | ExternalSecret | `bionic-org-secrets` | Vault → K8s secret sync (5m), app config |
 | ExternalSecret | `bionic-org-api-keys` | Vault `shared/api-keys` → K8s secret sync (5m), provider keys |
+| ExternalSecret | `bionic-org-media-keys` | Vault `t6-apps/voice-studio/config` (3 properties) → media-bucket creds for the video skills |
 | ExternalSecret | `bionic-org-pg-superuser` | PG credentials (if separate) |
 
 ## Disaster Recovery — rebuilding the Org from scratch

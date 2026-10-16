@@ -1,0 +1,321 @@
+<!-- motion-explainer-studio scene template catalogue.
+     One file, split on the @template markers. Each block is the body of a scene;
+     everything it needs beyond theme.css lives in its own <style> here.
+     Props are documented in references/scene-library.md. -->
+
+
+<!-- @template title_card
+     props: eyebrow, headline, subhead, kicker -->
+<div class="content center">
+  {{#eyebrow}}<div class="eyebrow a-rise" style="--i:0">{{eyebrow}}</div>{{/eyebrow}}
+  <h1 class="display a-rise" style="--i:1">{{{headline}}}</h1>
+  {{#subhead}}<p class="lead a-rise" style="--i:2" >{{subhead}}</p>{{/subhead}}
+  <div class="rule a-fade" style="--i:3; width:220px"></div>
+  {{#kicker}}<div class="pill a-pop" style="--i:4"><span class="dot"></span>{{kicker}}</div>{{/kicker}}
+</div>
+
+
+<!-- @template statement
+     props: headline, subhead, align(center|left) -->
+<div class="content {{align}} a-zoom">
+  <h1 class="h1 a-rise" style="--i:0">{{{headline}}}</h1>
+  {{#subhead}}<p class="lead a-rise" style="--i:1">{{subhead}}</p>{{/subhead}}
+</div>
+
+
+<!-- @template problem
+     props: headline, items[{text, icon}] -->
+<style>
+  .pain { display: flex; flex-direction: column; gap: 26px; width: 100%; }
+  .pain .tile { border-left: 6px solid var(--accent); }
+  .pain .tile .ic { width: 58px; height: 58px; flex: none; color: var(--accent); }
+</style>
+<div class="content">
+  <h2 class="h2 a-rise" style="--i:0">{{{headline}}}</h2>
+  <div class="pain" data-stagger="1">
+    {{#items}}
+    <div class="tile a-left">
+      <div class="ic">{{{icon_svg}}}</div>
+      <div class="h3">{{text}}</div>
+    </div>
+    {{/items}}
+  </div>
+</div>
+
+
+<!-- @template solution_reveal
+     props: eyebrow, headline, body, art (image path) | figure(true), side(left|right) -->
+<div class="split {{side}}">
+  <div class="col">
+    {{#eyebrow}}<div class="eyebrow a-rise" style="--i:0">{{eyebrow}}</div>{{/eyebrow}}
+    <h2 class="h1 a-rise" style="--i:1; margin-top:14px">{{{headline}}}</h2>
+    {{#body}}<p class="lead a-rise" style="--i:2; margin-top:22px">{{body}}</p>{{/body}}
+    <div class="rule a-fade" style="--i:3; width:180px; margin-top:30px"></div>
+  </div>
+  <div class="col" style="display:flex; justify-content:center">
+    {{#art}}<img class="art a-pop a-float" style="--i:2" src="{{art}}" alt="">{{/art}}
+    {{^art}}
+    <div class="figure a-pop" style="--i:2">
+      <div class="head"></div><div class="body"></div>
+      <div class="arm l"></div><div class="arm r"></div>
+    </div>
+    {{/art}}
+  </div>
+</div>
+
+
+<!-- @template stat_burst
+     props: headline, stats[{value, from, prefix, suffix, dp, comma, label, at, dur}] -->
+<style>
+  .stats { display: flex; gap: 90px; justify-content: center; align-items: flex-start; }
+  .stat  { text-align: center; }
+  .stat .n { font: 800 148px/1 var(--font-head); letter-spacing: -.04em; color: var(--brand); }
+  .stat:nth-child(2) .n { color: var(--accent); }
+  .stat:nth-child(3) .n { color: var(--ok); }
+  .stat .l { font: 500 30px/1.35 var(--font-body); color: var(--muted); margin-top: 18px; max-width: 380px; }
+</style>
+<div class="content center">
+  {{#headline}}<h2 class="h2 a-rise" style="--i:0">{{{headline}}}</h2>{{/headline}}
+  <div class="stats" data-stagger="1">
+    {{#stats}}
+    <div class="stat a-pop">
+      <div class="n" data-count-to="{{value}}" data-count-from="{{from}}" data-at="{{at}}"
+           data-dur="{{dur}}" data-prefix="{{prefix}}" data-suffix="{{suffix}}"
+           data-dp="{{dp}}" data-comma="{{comma}}">0</div>
+      <div class="l">{{label}}</div>
+    </div>
+    {{/stats}}
+  </div>
+</div>
+
+
+<!-- @template ui_walkthrough
+     props: headline, url, rows[{w, accent}], callout, callout_at, chart(true) -->
+<style>
+  .uw { width: 1380px; }
+  .uw .head { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .uw .callout {
+    position: absolute; right: 90px; top: 300px; z-index: 6; max-width: 380px;
+    background: var(--accent); color: #10131f; border-radius: 22px; padding: 24px 30px;
+    font: 700 30px/1.3 var(--font-head); box-shadow: 0 24px 60px rgba(0,0,0,.45);
+  }
+  .uw .callout::after { content:''; position:absolute; left:-14px; top:36px;
+    border:14px solid transparent; border-right-color: var(--accent); }
+</style>
+<div class="content center uw">
+  {{#headline}}<h2 class="h2 a-rise" style="--i:0; margin-bottom:12px">{{{headline}}}</h2>{{/headline}}
+  <div class="browser a-rise" style="--i:1; --d:.15s">
+    <div class="bar"><u></u><u></u><u></u><div class="url">{{url}}</div></div>
+    <div class="viewport" data-stagger="3">
+      {{#rows}}<div class="skel a-wipe" style="width:{{w}}%; {{#accent}}background:var(--brand){{/accent}}"></div>{{/rows}}
+      {{#chart}}<div class="bar-row" style="margin-top:20px" data-stagger="6">
+        <b style="height:42%; animation-delay:calc(var(--i)*.11s)"></b>
+        <b style="height:58%; animation-delay:calc(var(--i)*.11s)"></b>
+        <b style="height:49%; animation-delay:calc(var(--i)*.11s)"></b>
+        <b style="height:76%; animation-delay:calc(var(--i)*.11s)"></b>
+        <b style="height:94%; animation-delay:calc(var(--i)*.11s)"></b>
+      </div>{{/chart}}
+    </div>
+  </div>
+  {{#callout}}<div class="callout a-pop" style="--d:{{callout_at}}s">{{callout}}</div>{{/callout}}
+</div>
+
+
+<!-- @template phone_walkthrough
+     props: headline, body, screen_title, rows[{w,accent}] -->
+<div class="split wide-left">
+  <div class="col">
+    <h2 class="h1 a-rise" style="--i:0">{{{headline}}}</h2>
+    {{#body}}<p class="lead a-rise" style="--i:1; margin-top:24px">{{body}}</p>{{/body}}
+  </div>
+  <div class="col" style="display:flex; justify-content:center">
+    <div class="phone a-rise a-float" style="--i:2">
+      <div class="screen" data-stagger="3">
+        <div class="h3 a-fade">{{screen_title}}</div>
+        {{#rows}}<div class="skel a-wipe" style="width:{{w}}%; {{#accent}}background:var(--brand){{/accent}}"></div>{{/rows}}
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- @template feature_grid
+     props: headline, items[{title, text, icon}] -->
+<style>
+  .fg { display: grid; grid-template-columns: repeat({{cols}}, 1fr); gap: 34px; width: 100%; }
+  .fg .card { display: flex; flex-direction: column; gap: 18px; }
+  .fg .ic { width: 66px; height: 66px; color: var(--brand); }
+  .fg .card:nth-child(2) .ic { color: var(--accent); }
+  .fg .card:nth-child(3) .ic { color: var(--ok); }
+  .fg .card:nth-child(4) .ic { color: var(--warn); }
+</style>
+<div class="content">
+  {{#headline}}<h2 class="h2 a-rise" style="--i:0; margin-bottom:16px">{{{headline}}}</h2>{{/headline}}
+  <div class="fg" data-stagger="1">
+    {{#items}}
+    <div class="card a-rise">
+      <div class="ic">{{{icon_svg}}}</div>
+      <div class="h3">{{title}}</div>
+      <div class="body">{{text}}</div>
+    </div>
+    {{/items}}
+  </div>
+</div>
+
+
+<!-- @template steps_flow
+     props: headline, steps[{title, text}] -->
+<style>
+  .flow { display: flex; align-items: stretch; gap: 0; width: 100%; }
+  .flow .step { flex: 1; display: flex; flex-direction: column; gap: 18px; padding: 0 30px; position: relative; }
+  .flow .step + .step::before {
+    content: ''; position: absolute; left: 0; top: 38px; width: 2px; height: calc(100% - 38px);
+    background: color-mix(in srgb, var(--ink) 14%, transparent);
+  }
+  .flow .connector { position: absolute; left: 0; right: 0; top: 38px; height: 4px;
+    background: var(--brand); opacity: .35; transform-origin: left;
+    animation: growx 1.1s cubic-bezier(.22,1,.36,1) both; animation-delay: .25s; }
+</style>
+<div class="content">
+  {{#headline}}<h2 class="h2 a-rise" style="--i:0; margin-bottom:26px">{{{headline}}}</h2>{{/headline}}
+  <div style="position:relative">
+    <div class="connector"></div>
+    <div class="flow" data-stagger="1">
+      {{#steps}}
+      <div class="step a-rise">
+        <div class="badge-num a-pop" style="--i:{{@n}}">{{@n}}</div>
+        <div class="h3">{{title}}</div>
+        <div class="body">{{text}}</div>
+      </div>
+      {{/steps}}
+    </div>
+  </div>
+</div>
+
+
+<!-- @template comparison
+     props: headline, before_title, before[], after_title, after[] -->
+<style>
+  .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 46px; width: 100%; }
+  .cmp .card { display: flex; flex-direction: column; gap: 20px; }
+  .cmp .side-b { border-top: 6px solid var(--muted); }
+  .cmp .side-a { border-top: 6px solid var(--ok); }
+  .cmp li { list-style: none; display: flex; gap: 16px; align-items: flex-start;
+            font: 400 30px/1.4 var(--font-body); color: var(--muted); }
+  .cmp .side-a li { color: var(--ink); }
+  .cmp li::before { content: '✕'; color: var(--muted); font-weight: 700; }
+  .cmp .side-a li::before { content: '✓'; color: var(--ok); }
+  .cmp ul { margin: 0; padding: 0; display: flex; flex-direction: column; gap: 18px; }
+</style>
+<div class="content">
+  {{#headline}}<h2 class="h2 a-rise" style="--i:0; margin-bottom:14px">{{{headline}}}</h2>{{/headline}}
+  <div class="cmp">
+    <div class="card side-b a-left" style="--i:1">
+      <div class="label">{{before_title}}</div>
+      <ul>{{#before}}<li>{{.}}</li>{{/before}}</ul>
+    </div>
+    <div class="card side-a a-right" style="--i:2">
+      <div class="label" style="color:var(--ok)">{{after_title}}</div>
+      <ul>{{#after}}<li>{{.}}</li>{{/after}}</ul>
+    </div>
+  </div>
+</div>
+
+
+<!-- @template chart_proof
+     props: headline, note, bars[{h, label}], metric{value,prefix,suffix,label,dp,comma} -->
+<style>
+  .cp { display: grid; grid-template-columns: 1.2fr 1fr; gap: 80px; align-items: center; width: 100%; }
+  .cp .labels { display: flex; gap: 22px; margin-top: 16px; }
+  .cp .labels span { flex: 1; text-align: center; font: 500 22px var(--font-body); color: var(--muted); }
+  .cp .big { font: 800 128px/1 var(--font-head); color: var(--ok); letter-spacing: -.04em; }
+</style>
+<div class="content">
+  {{#headline}}<h2 class="h2 a-rise" style="--i:0; margin-bottom:20px">{{{headline}}}</h2>{{/headline}}
+  <div class="cp">
+    <div class="card a-rise" style="--i:1">
+      <div class="bar-row" data-stagger="2">
+        {{#bars}}<b style="height:{{h}}%; animation-delay:calc(var(--i)*.12s)"></b>{{/bars}}
+      </div>
+      <div class="labels">{{#bars}}<span>{{label}}</span>{{/bars}}</div>
+    </div>
+    <div class="a-right" style="--i:3">
+      <div class="big" data-count-to="{{metric.value}}" data-at="0.6" data-dur="1.5"
+           data-prefix="{{metric.prefix}}" data-suffix="{{metric.suffix}}"
+           data-dp="{{metric.dp}}" data-comma="{{metric.comma}}">0</div>
+      <div class="lead" style="margin-top:16px">{{metric.label}}</div>
+      {{#note}}<div class="body" style="margin-top:26px">{{note}}</div>{{/note}}
+    </div>
+  </div>
+</div>
+
+
+<!-- @template quote
+     props: quote, name, role, avatar (image path, optional) -->
+<style>
+  .qt { max-width: 1300px; text-align: center; }
+  .qt .mark { font: 800 200px/0.6 var(--font-head); color: var(--brand); opacity: .35; }
+  .qt .who { display: flex; gap: 20px; align-items: center; justify-content: center; margin-top: 40px; }
+  .qt .av { width: 84px; height: 84px; border-radius: 50%; background: var(--accent); object-fit: cover; }
+</style>
+<div class="content center qt">
+  <div class="mark a-pop" style="--i:0">“</div>
+  <div class="h2 a-rise" style="--i:1; line-height:1.25">{{{quote}}}</div>
+  <div class="who a-fade" style="--i:2">
+    {{#avatar}}<img class="av" src="{{avatar}}" alt="">{{/avatar}}
+    {{^avatar}}<div class="av"></div>{{/avatar}}
+    <div style="text-align:left">
+      <div class="h3" style="font-size:34px">{{name}}</div>
+      <div class="label">{{role}}</div>
+    </div>
+  </div>
+</div>
+
+
+<!-- @template logo_wall
+     props: headline, names[] -->
+<style>
+  .wall { display: flex; flex-wrap: wrap; gap: 26px; justify-content: center; max-width: 1400px; }
+  .wall .chip { font-size: 34px; padding: 20px 40px; }
+</style>
+<div class="content center">
+  {{#headline}}<h2 class="h2 a-rise" style="--i:0">{{{headline}}}</h2>{{/headline}}
+  <div class="wall" data-stagger="1">
+    {{#names}}<div class="chip a-pop">{{.}}</div>{{/names}}
+  </div>
+</div>
+
+
+<!-- @template cta_outro
+     props: headline, subhead, url, button, logo_big -->
+<style>
+  .cta .btn {
+    display: inline-flex; align-items: center; gap: 18px; padding: 26px 52px; border-radius: 999px;
+    background: var(--brand); color: #fff; font: 700 38px var(--font-head);
+    box-shadow: 0 22px 60px color-mix(in srgb, var(--brand) 45%, transparent);
+  }
+  .cta .url { font: 600 46px var(--font-head); color: var(--accent); letter-spacing: .01em; }
+</style>
+<div class="content center cta">
+  {{#logo_big}}<img src="{{logo_big}}" alt="" style="height:110px" class="a-pop">{{/logo_big}}
+  <h1 class="display a-rise" style="--i:1">{{{headline}}}</h1>
+  {{#subhead}}<p class="lead a-rise" style="--i:2">{{subhead}}</p>{{/subhead}}
+  {{#button}}<div class="btn a-pop" style="--i:3">{{button}}</div>{{/button}}
+  {{#url}}<div class="url a-rise" style="--i:4">{{url}}</div>{{/url}}
+</div>
+
+
+<!-- @template full_art
+     props: art (image path), headline, subhead, overlay(true) -->
+<style>
+  .fa { position: absolute; inset: 0; z-index: 1; }
+  .fa img { width: 100%; height: 100%; object-fit: cover; }
+  .fa .veil { position: absolute; inset: 0;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 20%, transparent) 0%,
+                                        color-mix(in srgb, var(--bg) 88%, transparent) 100%); }
+</style>
+<div class="fa a-zoom"><img src="{{art}}" alt="">{{#overlay}}<div class="veil"></div>{{/overlay}}</div>
+<div class="content center" style="z-index:3">
+  <h1 class="h1 a-rise" style="--i:0">{{{headline}}}</h1>
+  {{#subhead}}<p class="lead a-rise" style="--i:1">{{subhead}}</p>{{/subhead}}
+</div>

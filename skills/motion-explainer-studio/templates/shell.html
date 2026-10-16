@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{id}} — {{project_title}}</title>
+<!--
+  Materialized by motion-explainer-studio from template "{{template}}".
+  This file is standalone: open it in a browser to preview the scene.
+  Edit it freely — the build detects hand edits and will not overwrite it.
+  To go back to the generated version:  mes.py build --scene {{id}} --force
+-->
+<style>{{{css}}}</style>
+<style>{{{scene_css}}}</style>
+</head>
+<body>
+<div class="stage {{mode}}" data-scene="{{id}}" data-duration="{{duration}}">
+  <div class="mesh" aria-hidden="true"><i></i><i></i><i></i></div>
+  {{#grid}}<div class="grid-lines" aria-hidden="true"></div>{{/grid}}
+
+  {{{body}}}
+
+  {{#caption}}
+  <div class="caption">
+    <div class="c1 a-rise" style="--d:.55s">{{caption}}</div>
+    {{#sub}}<div class="c2 a-fade" style="--d:.8s">{{sub}}</div>{{/sub}}
+  </div>
+  {{/caption}}
+
+  {{#logo}}<img class="logo-mark {{logo_pos}} a-fade" style="--d:.4s" src="{{logo}}" alt="">{{/logo}}
+  <div class="enter" aria-hidden="true"></div>
+</div>
+<script>{{{engine}}}</script>
+</body>
+</html>

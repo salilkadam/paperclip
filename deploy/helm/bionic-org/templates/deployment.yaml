@@ -112,6 +112,41 @@ spec:
                   key: openai_api_key
                   name: {{ .Values.vault.apiKeysSecretName }}
                   optional: true
+            {{- if .Values.vault.mcpApiKeyAlias }}
+            # Self-hosted GPU stack key (mcp.baisoln.com X-API-Key) for the
+            # central media skills. Vault shared/api-keys:mcp_api_key via ESO.
+            - name: MCP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: mcp_api_key
+                  name: {{ .Values.vault.apiKeysSecretName }}
+                  optional: true
+            {{- end }}
+            {{- end }}
+            {{- if .Values.vault.mediaS3.enabled }}
+            # Scoped media-bucket credentials for skills/marketing-video-studio
+            # (Vault {{ .Values.vault.mediaS3.path }} via ESO secret
+            # {{ .Values.vault.mediaS3.secretName }}). Never the MinIO root pair.
+            - name: MEDIA_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: access_key
+                  name: {{ .Values.vault.mediaS3.secretName }}
+                  optional: true
+            - name: MEDIA_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: secret_key
+                  name: {{ .Values.vault.mediaS3.secretName }}
+                  optional: true
+            - name: MEDIA_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  key: bucket
+                  name: {{ .Values.vault.mediaS3.secretName }}
+                  optional: true
+            - name: MEDIA_S3_ENDPOINT
+              value: {{ .Values.vault.mediaS3.endpoint | quote }}
             {{- end }}
             - name: DATABASE_URL
               valueFrom:

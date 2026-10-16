@@ -202,6 +202,26 @@ vault:
   agentGithubPat:
     enabled: false
     secretKey: sr_eng_agent_pat
+  # Pod-wide MCP_API_KEY alias of shared/api-keys:mcp_api_key (already ESO-synced
+  # into apiKeysSecretName). The central media skills
+  # (skills/marketing-video-studio, skills/motion-explainer-studio) call the
+  # self-hosted GPU stack at https://mcp.baisoln.com with X-API-Key: $MCP_API_KEY.
+  # Lives inside the apiKeysPath env block, so it requires apiKeysPath set.
+  mcpApiKeyAlias: true
+  # Scoped media-bucket credentials for the video skills' asset upload/presign
+  # (avatalk fetches inputs by presigned URL). Synced by ESO from Vault into a
+  # dedicated K8s secret and exposed as MEDIA_S3_* env. Deliberately NOT the
+  # MinIO root credentials.
+  mediaS3:
+    enabled: true
+    path: t6-apps/voice-studio/config
+    secretName: bionic-org-media-keys
+    accessKeyProperty: minio_access_key
+    secretKeyProperty: minio_secret_key
+    bucketProperty: minio_bucket
+    # Public S3 ingress: the only host both agents and avatalk can reach, so
+    # presigned URLs work for both. Non-secret.
+    endpoint: https://s3.baisoln.com
   # Secret store (ClusterSecretStore)
   secretStore: vault-backend
   # Refresh interval for ESO sync (JWT auth auto-mints tokens; 1h is plenty)
