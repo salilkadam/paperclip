@@ -51,7 +51,12 @@ def main():
     p.add_argument("--interpolate", default="",
                    help="comma-separated scene-name prefixes that are avatar renders")
     p.add_argument("--interval", type=int, default=60)
+    p.add_argument("--max-wait", type=int, default=5400,
+                   help="give up on still-pending jobs after this many seconds")
+    p.add_argument("--max-restarts", type=int, default=6,
+                   help="flag a job whose started_at keeps changing (dispatcher requeue loop)")
     a = p.parse_args()
+    t0 = time.time()
 
     k = key()
     interp = [s for s in a.interpolate.split(",") if s]
@@ -64,7 +69,8 @@ def main():
         for line in open(jf):
             if line.strip():
                 nm, jid = line.split()
-                jobs.append({"name": nm, "id": jid, "out": outdir, "done": False})
+                jobs.append({"name": nm, "id": jid, "out": outdir, "done": False,
+                             "started": None, "restarts": 0, "stuck": False})
 
     if not jobs:
         raise SystemExit("no jobs found")
@@ -93,8 +99,24 @@ def main():
             elif st in ("failed", "canceled"):
                 print(f"[{time.strftime('%H:%M:%S')}] {j['name']} {st}: {d.get('error')}", flush=True)
                 j["done"] = True
+            elif st == "running":
+                # The dispatcher requeues a job that crashes (e.g. GPU out of memory)
+                # but keeps reporting "running"; each requeue resets started_at.
+                started = d.get("started_at")
+                if started and j["started"] and started != j["started"]:
+                    j["restarts"] += 1
+                j["started"] = started or j["started"]
+                if j["restarts"] >= a.max_restarts and not j["stuck"]:
+                    j["stuck"] = True
+                    print(f"[{time.strftime('%H:%M:%S')}] {j['name']} restarted {j['restarts']}x "
+                          "with no progress: avatalk is requeueing it (usually the GPU is out "
+                          f"of memory). Cancel with DELETE /avatalk/v1/jobs/{j['id']} and report "
+                          "the GPU capacity blocker; offer a Ken-Burns still instead.", flush=True)
         n = sum(1 for j in jobs if j["done"])
         print(f"[{time.strftime('%H:%M:%S')}] {n}/{len(jobs)}", flush=True)
+        if n < len(jobs) and time.time() - t0 > a.max_wait:
+            left = " ".join(j["name"] for j in jobs if not j["done"])
+            raise SystemExit(f"gave up after {a.max_wait}s; still pending: {left}")
         if n < len(jobs):
             time.sleep(a.interval)
 

@@ -152,6 +152,9 @@ Tasks: `avatar`, `i2v`, `t2v`, `video.continue`, `video.long`, `refine`.
 - GenImage FLUX-dev → timeout. Default model.
 - avatalk base64 or cluster DNS → fails. Presign via `s3.baisoln.com`.
 - avatalk `source:tts` → name resolution failure. Use `source:url`.
+- avatalk job stuck "running" at 0% while `started_at` keeps changing → the dispatcher is
+  requeueing a crash (usually GPU out of memory). `poll_jobs.py` flags it; cancel the job,
+  report the GPU capacity blocker, and fall back to Ken-Burns stills.
 - avatalk centre-crops and returns 16fps → **read `geometry.md`**.
 - Concat without CFR-normalising first → dropped frames, truncated ending.
 - Secret-decoding shell commands may be classifier-blocked → read secrets inside scripts.
