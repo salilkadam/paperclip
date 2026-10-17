@@ -28,7 +28,9 @@ spec:
       automountServiceAccountToken: false
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
       {{- end }}
       securityContext:
         # Image runs as `node` (uid/gid 1000); fsGroup makes the dsh-state
