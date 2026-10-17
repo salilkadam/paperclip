@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { prepareOpenCodeRuntimeConfig } from "./runtime-config.js";
+import { applyOpenCodeAgentDataHome, prepareOpenCodeRuntimeConfig } from "./runtime-config.js";
 
 const cleanupPaths = new Set<string>();
 
@@ -29,6 +29,27 @@ async function makeConfigHome(initialConfig?: Record<string, unknown>) {
   }
   return root;
 }
+
+describe("applyOpenCodeAgentDataHome", () => {
+  it("assigns per-agent data and state directories under the deployment root", () => {
+    const env: Record<string, string> = {};
+    const assigned = applyOpenCodeAgentDataHome(env, "agent-1", "/paperclip/agents");
+    expect(env.XDG_DATA_HOME).toBe("/paperclip/agents/agent-1/opencode/data");
+    expect(env.XDG_STATE_HOME).toBe("/paperclip/agents/agent-1/opencode/state");
+    expect(assigned).toHaveLength(2);
+  });
+
+  it("keeps directories the agent already sets and does nothing without a root", () => {
+    const env: Record<string, string> = { XDG_DATA_HOME: "/custom/data" };
+    applyOpenCodeAgentDataHome(env, "agent-1", "/paperclip/agents");
+    expect(env.XDG_DATA_HOME).toBe("/custom/data");
+    expect(env.XDG_STATE_HOME).toBe("/paperclip/agents/agent-1/opencode/state");
+
+    const untouched: Record<string, string> = {};
+    expect(applyOpenCodeAgentDataHome(untouched, "agent-1", "")).toEqual([]);
+    expect(untouched).toEqual({});
+  });
+});
 
 describe("prepareOpenCodeRuntimeConfig", () => {
   it("allows all tools and connected tools by default", async () => {

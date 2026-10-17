@@ -25,3 +25,11 @@ data:
   MINIO_USE_SSL: {{ tpl .Values.env.MINIO_USE_SSL . | quote }}
   MAIL_FROM: {{ .Values.env.MAIL_FROM | quote }}
   BIONIC_INTERNAL_BASE_URL: {{ .Values.env.BIONIC_INTERNAL_BASE_URL | quote }}
+  {{- if .Values.modelAccess.enabled }}
+  # Central model access (values.yaml modelAccess). Read by the server process:
+  # the OpenCode adapter falls back to these when an agent sets none.
+  PAPERCLIP_OPENCODE_PROVIDERS: {{ .Values.modelAccess.opencode.providers | toJson | quote }}
+  PAPERCLIP_OPENCODE_SMALL_MODEL: {{ .Values.modelAccess.opencode.smallModel | quote }}
+  PAPERCLIP_OPENCODE_AGENT_DATA_ROOT: {{ .Values.modelAccess.opencode.agentDataRoot | quote }}
+  PAPERCLIP_ADAPTER_MODELS: {{ dict "opencode_local" .Values.modelAccess.opencode.models | toJson | quote }}
+  {{- end }}

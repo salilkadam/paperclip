@@ -125,6 +125,7 @@ import {
   type WorkspaceDiffReprojectionSkipReason,
 } from "../services/provider-trace-workspace-diff-reprojection.js";
 import {
+  declaredAdapterModelIds,
   detectAdapterModel,
   findActiveServerAdapter,
   findServerAdapter,
@@ -2722,13 +2723,34 @@ export function agentRoutes(
       return ensureGatewayDeviceKey(adapterType, next);
     }
     if (adapterType === "opencode_local" && !asNonEmptyString(next.model)) {
-      next.model = DEFAULT_OPENCODE_LOCAL_MODEL;
+      next.model = declaredAdapterModelIds(adapterType)?.[0] ?? DEFAULT_OPENCODE_LOCAL_MODEL;
       return ensureGatewayDeviceKey(adapterType, next);
     }
     if (adapterType === "cursor" && !asNonEmptyString(next.model)) {
       next.model = DEFAULT_CURSOR_LOCAL_MODEL;
     }
     return ensureGatewayDeviceKey(adapterType, next);
+  }
+
+  // When the deployment declares the opencode_local models it serves
+  // (PAPERCLIP_ADAPTER_MODELS), every NEW agent must run on one of them. The
+  // deployment owns model access centrally (gateway provider and shared key in
+  // the server environment), so an agent created on an undeclared model would
+  // have no provider behind it. Existing agents can still be edited by the
+  // board.
+  function assertNewAgentUsesDeclaredModel(
+    adapterType: string | null | undefined,
+    adapterConfig: Record<string, unknown>,
+  ) {
+    if (adapterType !== "opencode_local") return;
+    const declared = declaredAdapterModelIds(adapterType);
+    if (!declared || declared.length === 0) return;
+    const model = asNonEmptyString(adapterConfig.model);
+    if (model && declared.includes(model)) return;
+    throw unprocessable(
+      `This deployment provides opencode_local models centrally; choose one of: ${declared.join(", ")}`,
+      { code: "model_not_provided_by_deployment", model: model ?? null, availableModelIds: declared },
+    );
   }
 
   async function assertAdapterConfigConstraints(
@@ -4602,6 +4624,7 @@ export function agentRoutes(
       hireInput.adapterType,
       authInheritance.adapterConfig,
     );
+    assertNewAgentUsesDeclaredModel(hireInput.adapterType, requestedAdapterConfig);
     assertExternalInstructionsAdmin(req, {
       id: hiredAgentId,
       companyId,
@@ -4910,6 +4933,7 @@ export function agentRoutes(
         ),
       ),
     );
+    assertNewAgentUsesDeclaredModel(createInput.adapterType, requestedAdapterConfig);
     assertExternalInstructionsAdmin(req, {
       id: agentId,
       companyId,

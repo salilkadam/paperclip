@@ -71,7 +71,7 @@ import {
   help,
   adapterLabels,
 } from "./agent-config-primitives";
-import { defaultCreateValues } from "./agent-config-defaults";
+import { defaultCreateValues, deploymentDefaultModel } from "./agent-config-defaults";
 import { getUIAdapter } from "../adapters";
 import { ClaudeLocalAdvancedFields } from "../adapters/claude-local/config-fields";
 import { MarkdownEditor } from "./MarkdownEditor";
@@ -912,6 +912,13 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const [refreshModelsError, setRefreshModelsError] = useState<string | null>(null);
   const [refreshingModels, setRefreshingModels] = useState(false);
   const models = fetchedModels ?? externalModels ?? [];
+  const createModel = isCreate ? props.values.model : "";
+  useEffect(() => {
+    if (!isCreate || adapterType !== "opencode_local" || !fetchedModels) return;
+    const next = deploymentDefaultModel(createModel, DEFAULT_OPENCODE_LOCAL_MODEL, fetchedModels);
+    if (next) props.onChange({ model: next });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreate, adapterType, fetchedModels, createModel]);
   const adapterCommandField = "command";
   const {
     data: detectedModelData,

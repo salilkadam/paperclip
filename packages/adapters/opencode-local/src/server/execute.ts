@@ -59,7 +59,11 @@ import {
   requireOpenCodeModelId,
 } from "./models.js";
 import { removeMaintainerOnlySkillSymlinks } from "@paperclipai/adapter-utils/server-utils";
-import { prepareOpenCodeRuntimeConfig, prepareManagedOpenCodeRemoteHomes } from "./runtime-config.js";
+import {
+  applyOpenCodeAgentDataHome,
+  prepareOpenCodeRuntimeConfig,
+  prepareManagedOpenCodeRemoteHomes,
+} from "./runtime-config.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 import { resolveOpenCodeSkillsHome } from "./skills.js";
 
@@ -319,6 +323,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     executionTargetIsRemote,
     executionCwd: effectiveExecutionCwd,
   });
+  if (!executionTargetIsRemote) {
+    for (const dir of applyOpenCodeAgentDataHome(env, agent.id)) {
+      await fs.mkdir(path.join(dir, "opencode"), { recursive: true });
+    }
+  }
   // Prevent OpenCode from writing an opencode.json config file into the
   // project working directory (which would pollute the git repo).  Model
   // selection is already handled via the --model CLI flag.  Set after the

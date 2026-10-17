@@ -1,5 +1,6 @@
 export {
   getServerAdapter,
+  declaredAdapterModelIds,
   listAdapterModels,
   refreshAdapterModels,
   listServerAdapters,

@@ -27,6 +27,30 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // resolution happens inside the (possibly sandboxed) run process, whose env
 // plumbing is not guaranteed to carry the key to OpenCode's spawned server -- so
 // we resolve it here. Unresolvable placeholders are left intact for OpenCode to try.
+/**
+ * Give each agent its own OpenCode data/state directories under a deployment
+ * root (PAPERCLIP_OPENCODE_AGENT_DATA_ROOT), so concurrent agents never share
+ * one OpenCode SQLite database (`database is locked`). Values the agent's own
+ * env already sets win. Returns the directories it assigned, or [] when the
+ * root is unset.
+ */
+export function applyOpenCodeAgentDataHome(
+  env: Record<string, string>,
+  agentId: string,
+  root: string | undefined = process.env.PAPERCLIP_OPENCODE_AGENT_DATA_ROOT,
+): string[] {
+  const trimmedRoot = root?.trim();
+  if (!trimmedRoot || !agentId.trim()) return [];
+  const base = path.join(trimmedRoot, agentId, "opencode");
+  const assigned: string[] = [];
+  for (const [key, leaf] of [["XDG_DATA_HOME", "data"], ["XDG_STATE_HOME", "state"]] as const) {
+    if (typeof env[key] === "string" && env[key].trim().length > 0) continue;
+    env[key] = path.join(base, leaf);
+    assigned.push(env[key]);
+  }
+  return assigned;
+}
+
 function expandEnvPlaceholders<T>(value: T, resolve: (name: string) => string | undefined): T {
   if (typeof value === "string") {
     return value.replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => {

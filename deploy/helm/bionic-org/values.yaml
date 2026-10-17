@@ -289,6 +289,41 @@ env:
   BIONIC_INTERNAL_BASE_URL: "https://org.baisoln.com"
 
 # ---------------------------------------------------------------------------
+# Central model access for every opencode_local agent, in every company.
+# The platform, not each agent or each user, provides the model gateway:
+#   - providers: the GPU-AI gateway definition. The key is the pod-wide
+#     MCP_API_KEY (Vault shared/api-keys -> ESO), referenced as {env:...},
+#     so no key value is stored here or in any agent.
+#   - models: the models the deployment serves. New agents default to the
+#     first entry and may only be created on a listed model (server mandate).
+#   - agentDataRoot: each agent gets its own OpenCode data/state directory
+#     under this root, so concurrent agents never share one SQLite database.
+# An agent's own env still overrides these (board-only escape hatch).
+# ---------------------------------------------------------------------------
+modelAccess:
+  enabled: true
+  opencode:
+    providers:
+      gpuai:
+        npm: "@ai-sdk/openai-compatible"
+        name: "GPU-AI Gateway"
+        options:
+          baseURL: "https://mcp.baisoln.com/gpu-ai/v1"
+          apiKey: "{env:MCP_API_KEY}"
+        models:
+          auto:
+            name: "Auto router"
+          qwen3.8-flash-next:
+            name: "Qwen3.8 Flash Next"
+    smallModel: "gpuai/qwen3.8-flash-next"
+    models:
+      - id: "gpuai/qwen3.8-flash-next"
+        label: "Qwen3.8 Flash Next (GPU-AI)"
+      - id: "gpuai/auto"
+        label: "Auto router (GPU-AI)"
+    agentDataRoot: /paperclip/agents
+
+# ---------------------------------------------------------------------------
 # Node/DNS config (mimics bionic-platform)
 # ---------------------------------------------------------------------------
 dnsConfig:
