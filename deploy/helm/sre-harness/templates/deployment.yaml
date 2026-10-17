@@ -26,6 +26,10 @@ spec:
       # for the kubectl the harness shells out to.
       serviceAccountName: {{ .Values.serviceAccount.name }}
       automountServiceAccountToken: false
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         # Image runs as `node` (uid/gid 1000); fsGroup makes the dsh-state
         # PVC writable by that user.
