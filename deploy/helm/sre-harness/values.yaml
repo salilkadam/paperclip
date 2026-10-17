@@ -33,22 +33,28 @@ vault:
   configPath: t6-apps/bionic-org/config
   configKeys:
     # secretKey in the synced K8s secret -> property name in Vault.
-    # Confirm these property names with `vault kv get` before deploying.
-    - secretKey: DEEPSEEK_API_KEY
-      property: deepseek_api_key
+    # Verified against Vault 2026-10-16: this config path holds
+    # sr_eng_agent_pat (and app secrets) but NO DeepSeek or SSH key.
+    # The Vault identity in use is scoped per app path, so the missing
+    # entries must be provisioned here (or another readable path set) at
+    # harness install time; they sync as optional until then.
     - secretKey: GIT_PAT
       property: sr_eng_agent_pat
+      optional: false
+    - secretKey: DEEPSEEK_API_KEY
+      property: deepseek_api_key
+      optional: true
     - secretKey: GIT_SSH_PRIVATE_KEY
       property: sre_harness_ssh_key
-  # Slack token secret path. Verify the exact path and property names at
-  # apply time (throwaway ExternalSecret dry-run); the cluster KV2 convention
-  # is <org>/<app> under the secret mount.
+      optional: true
+  # Slack notification target. The srenix/slack Vault path holds incoming
+  # webhook URLs only (verified 2026-10-16: cha-slack-ceph-alerts,
+  # cha-slack-ceph-critical, cha-slack-healthinfo), so the harness posts via
+  # webhook; no bot token or signing secret exists there.
   slackPath: srenix/slack
   slackKeys:
-    - secretKey: SLACK_BOT_TOKEN
-      property: slack_bot_token
-    - secretKey: SLACK_SIGNING_SECRET
-      property: slack_signing_secret
+    - secretKey: SLACK_WEBHOOK_URL
+      property: cha-slack-healthinfo__WEBHOOK_URL
 
 persistence:
   enabled: true
