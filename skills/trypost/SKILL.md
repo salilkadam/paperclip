@@ -29,8 +29,13 @@ curl -s -X POST -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
   -d '{}' "$API/api/tool-gateway/sessions"
 # -> { "sessionId": "...", "token": "...", "expiresAt": "...", "toolsUrl", "callUrl" }
 
-curl -s -H "Authorization: Bearer <sessionToken>" "$API/api/tool-gateway/tools"
-curl -s -X POST -H "Authorization: Bearer <sessionToken>" \
+# The session token goes in X-Paperclip-Tool-Gateway-Token, NOT in
+# Authorization. Bearer<sessionToken> is rejected as an agent token (401
+# "Agent token did not verify"). See server/src/routes/tool-gateway.ts:
+# gatewayToken() only reads x-paperclip-tool-gateway-token.
+curl -s -H "X-Paperclip-Tool-Gateway-Token: <sessionToken>" \
+  "$API/api/tool-gateway/tools"
+curl -s -X POST -H "X-Paperclip-Tool-Gateway-Token: <sessionToken>" \
   -H "Content-Type: application/json" \
   -d '{"tool":"get-workspace-tool","parameters":{}}' "$API/api/tool-gateway/tools/call"
 
@@ -51,6 +56,20 @@ curl -s -X POST -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
 - Gateway `502` on a write tool almost always means TryPost rejected the
   arguments (see the content-type quirk below), not an auth problem. Re-read
   `list-content-types-tool` and retry; do not escalate to the user as "blocked".
+- The gateway replays identical (tool, arguments) calls per issue
+  (args-hash dedupe). A retried write whose arguments are byte-identical can
+  return the cached (failed) result, and a provider 502 still burns the
+  upload token/idempotency key. When retrying a failed write, change the
+  arguments (e.g. re-upload media), do not resend byte-for-byte.
+
+## Known provider quirk: media attach
+
+`request-media-upload-tool` returns both an `upload_token` and a `media_id`
+plus a direct upload URL. Attaching via `media: [{ upload_token }]` on
+`create-post-tool`/`update-post-tool` (and the `attach-media-from-*` tools)
+fails with a provider 502 in some deployments. Attach with
+`media: [{ id: <media_id> }]` instead — verified working end-to-end on
+LinkedIn image posts and YouTube Shorts.
 
 ## Known provider quirk: LinkedIn pages
 
