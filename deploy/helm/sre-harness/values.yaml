@@ -1,0 +1,87 @@
+# Default configuration for the external SRE harness.
+
+# Namespace the harness pod runs in. Keep it separate from the Paperclip
+# server namespace even though the RBAC ServiceAccount lives there.
+namespace: sre-harness
+
+image:
+  # Pinned dsh harness image. Do NOT use a floating tag: the harness must
+  # not change silently. Cut a new tag per reviewed upgrade.
+  repository: docker4zerocool/dsh
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# dsh web gateway served inside the cluster (UI on the nodePort).
+ui:
+  host: "0.0.0.0"
+  port: 3080
+  nodePort: 30830
+
+serviceAccount:
+  # Name of the pre-provisioned RBAC ServiceAccount (deploy/rbac/sre-harness.yaml).
+  # The chart does NOT create RBAC; it only consumes the existing SA.
+  name: sre-harness-sa
+
+# Vault-backed credentials for the harness, via External Secrets Operator.
+vault:
+  enabled: true
+  secretStoreKind: ClusterSecretStore
+  secretStore: vault-backend
+  refreshInterval: "1h"
+  # Config secret holding the harness credentials. The chart syncs selected
+  # properties; verify property names against Vault before first install.
+  configPath: t6-apps/bionic-org/config
+  configKeys:
+    # secretKey in the synced K8s secret -> property name in Vault.
+    # Confirm these property names with `vault kv get` before deploying.
+    - secretKey: DEEPSEEK_API_KEY
+      property: deepseek_api_key
+    - secretKey: GIT_PAT
+      property: sr_eng_agent_pat
+    - secretKey: GIT_SSH_PRIVATE_KEY
+      property: sre_harness_ssh_key
+  # Slack token secret path. Verify the exact path and property names at
+  # apply time (throwaway ExternalSecret dry-run); the cluster KV2 convention
+  # is <org>/<app> under the secret mount.
+  slackPath: srenix/slack
+  slackKeys:
+    - secretKey: SLACK_BOT_TOKEN
+      property: slack_bot_token
+    - secretKey: SLACK_SIGNING_SECRET
+      property: slack_signing_secret
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClassName: ""   # empty uses cluster default
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+# Keep the harness off the node that hosts Paperclip, so a harness crash
+# storm cannot compete with the system it monitors.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values:
+                - gpu
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: bionic-org
+
+nodeSelector: {}
+tolerations: []

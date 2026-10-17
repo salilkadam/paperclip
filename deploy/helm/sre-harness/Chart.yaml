@@ -1,0 +1,9 @@
+apiVersion: v2
+name: sre-harness
+description: >-
+  External SRE harness pod (DeepSeek dsh) that monitors and maintains the
+  Paperclip stack and the marketing website namespaces. Deploy/restart rights
+  for Paperclip exist only here; see deploy/rbac/sre-harness.yaml.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

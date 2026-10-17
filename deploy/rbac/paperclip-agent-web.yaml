@@ -1,0 +1,143 @@
+# Scoped website-content rights for in-Paperclip agents.
+#
+# Purpose: let Paperclip agents in the Paperclip namespace update the marketing
+# website deployments (image swaps for content changes) in the two website
+# namespaces, WITHOUT giving them deploy, delete, secret, or other blast-radius
+# rights. Deploy and restart rights for Paperclip itself belong to the external
+# SRE harness (see sre-harness.yaml).
+#
+# This manifest is a template. Render it with envsubst before applying
+# (use deploy/rbac/apply.sh). Placeholders:
+#   ${PAPERCLIP_NS}  the Paperclip namespace (e.g. bionicorg)
+#   ${WEB_NS}        the Bionic AI Solutions website namespace (e.g. web)
+#   ${WEBSITE_NS}    the Reliora website namespace (e.g. reliora-website)
+#
+# Deliberately excluded from the write allowlist:
+#   contact-api (${WEB_NS}) and reliora-forms-api (${WEBSITE_NS}) are API
+#   services, not marketing content. resourceNames pinning excludes them.
+# ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: paperclip-agent-web-sa
+  namespace: ${PAPERCLIP_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+automountServiceAccountToken: false
+---
+# Read-only view of the Paperclip namespace: agents can see their own pods,
+# logs, events, and deployments for diagnosis. No writes, no secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: paperclip-agent-paperclip-ns-read
+  namespace: ${PAPERCLIP_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: paperclip-agent-web-publisher
+  namespace: ${WEB_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+rules:
+  # Observability for the website namespace.
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Write rights, pinned to the single marketing website deployment.
+  # contact-api and reliora-forms-api are NOT in resourceNames and therefore
+  # cannot be patched by this role.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch", "update"]
+    resourceNames: ["baisoln-web"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: paperclip-agent-website-publisher
+  namespace: ${WEBSITE_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+rules:
+  # Observability for the website namespace.
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Write rights, pinned to the single marketing website deployment.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch", "update"]
+    resourceNames: ["reliora-website"]
+---
+# Bindings: the agent ServiceAccount lives in ${PAPERCLIP_NS} and is
+# referenced cross-namespace from each website namespace role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: paperclip-agent-web-publisher
+  namespace: ${WEB_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+subjects:
+  - kind: ServiceAccount
+    name: paperclip-agent-web-sa
+    namespace: ${PAPERCLIP_NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: paperclip-agent-web-publisher
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: paperclip-agent-website-publisher
+  namespace: ${WEBSITE_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+subjects:
+  - kind: ServiceAccount
+    name: paperclip-agent-web-sa
+    namespace: ${PAPERCLIP_NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: paperclip-agent-website-publisher
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: paperclip-agent-paperclip-ns-read
+  namespace: ${PAPERCLIP_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+subjects:
+  - kind: ServiceAccount
+    name: paperclip-agent-web-sa
+    namespace: ${PAPERCLIP_NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: paperclip-agent-paperclip-ns-read
