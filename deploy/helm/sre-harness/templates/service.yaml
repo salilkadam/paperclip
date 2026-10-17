@@ -6,7 +6,10 @@ metadata:
   labels:
     {{- include "sre-harness.labels" . | nindent 4 }}
 spec:
-  type: NodePort
+  # ClusterIP only: the dsh web UI has no auth of its own. Operators reach it
+  # via `kubectl port-forward svc/sre-harness 3080:3080` (localhost authority
+  # passes the dsh browser-trust fence).
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: {{ include "sre-harness.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
@@ -14,4 +17,3 @@ spec:
     - name: http
       port: {{ .Values.ui.port }}
       targetPort: http
-      nodePort: {{ .Values.ui.nodePort }}

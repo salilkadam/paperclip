@@ -26,6 +26,13 @@ spec:
       # for the kubectl the harness shells out to.
       serviceAccountName: {{ .Values.serviceAccount.name }}
       automountServiceAccountToken: false
+      securityContext:
+        # Image runs as `node` (uid/gid 1000); fsGroup makes the dsh-state
+        # PVC writable by that user.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       affinity:
         {{- toYaml .Values.affinity | nindent 8 }}
       {{- with .Values.nodeSelector }}
@@ -73,7 +80,7 @@ spec:
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
             - name: state
-              mountPath: /home/dsh/.dsh
+              mountPath: {{ .Values.persistence.home }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
