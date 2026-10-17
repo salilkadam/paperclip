@@ -19,13 +19,14 @@ image:
   pullSecrets:
     - dockerhub-pull-secret
 
-# dsh web gateway, ClusterIP only on purpose: the dsh web UI has no
-# authentication of its own (it relies on a browser-trust authority fence),
-# so it must never be exposed on a NodePort or Ingress. Access it with
-#   kubectl -n <ns> port-forward svc/sre-harness 3080:3080
-# The localhost authority is accepted by the fence by default.
+# dsh web gateway. Upstream refuses to bind 0.0.0.0 on purpose (the UI can
+# execute code), so dsh listens on loopback inside the pod. Operators reach
+# it with:
+#   kubectl -n bionicorg port-forward deploy/sre-harness 3080:3080
+# because kubectl port-forward dials the pod's localhost. The ClusterIP
+# Service is a naming convenience for port-forward; it cannot reach the UI.
 ui:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 3080
 
 serviceAccount:
