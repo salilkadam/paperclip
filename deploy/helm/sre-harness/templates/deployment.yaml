@@ -49,6 +49,38 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # Self-heal credential file permissions before dsh starts. dsh
+        # refuses to boot if .credentials.yaml is group/world readable
+        # (assertOwnerOnly); a UI write under fsGroup's setgid directory can
+        # produce mode 660 and permanently crashloop the harness.
+        - name: fix-state-perms
+          image: docker.io/library/alpine:3.20
+          command:
+            - sh
+            - -c
+            - >-
+              find {{ .Values.persistence.home }} -maxdepth 1 -name
+              '.credentials*' -exec chmod 600 {} + 2>/dev/null; exit 0
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          volumeMounts:
+            - name: state
+              mountPath: {{ .Values.persistence.home }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
       containers:
         - name: dsh
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -85,6 +117,19 @@ spec:
                   '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))
             initialDelaySeconds: 30
             periodSeconds: 20
+          {{- if .Values.gpuai.enabled }}
+          env:
+            # GPU-AI gateway key for the dsh llm-pi-ai gpuai provider
+            # (see deploy/harness-image/dsh-profile-patch.yml). optional:
+            # true so the harness still boots if bionic-org is not deployed
+            # yet; the gpuai route then fails auth instead of the pod.
+            - name: GPUAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gpuai.apiKeySecret }}
+                  key: {{ .Values.gpuai.apiKeySecretKey }}
+                  optional: true
+          {{- end }}
           envFrom:
             {{- if .Values.vault.enabled }}
             - secretRef:

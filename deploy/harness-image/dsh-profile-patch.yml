@@ -1,0 +1,45 @@
+# Runtime profile patch for the SRE harness (dsh).
+#
+# dsh composes its config from profile layers; the editable layer lives on
+# the state PVC at /home/node/.dsh/profiles/web/cordis.patch.yml. The chart
+# does NOT mount this file (dsh's own Settings UI also writes that file, and
+# a read-only mount would break it), so applying this patch is part of the
+# harness bring-up:
+#
+#   kubectl -n bionicorg cp deploy/harness-image/dsh-profile-patch.yml \
+#     <pod>:/home/node/.dsh/profiles/web/cordis.patch.yml -c dsh
+#   kubectl -n bionicorg rollout restart deploy/sre-harness
+#
+# Keep baseURL/model in sync with `gpuai` in deploy/helm/sre-harness/values.yaml,
+# and the GPUAI_API_KEY env var (deployment.yaml) in sync with apiKeyEnv below.
+# Model ids must exist on the gateway's /v1/models list (verified 2026-10-17:
+# qwen3.8-flash-next-think and qwen3.8-flash-next are served).
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    welcomeNoticeVersion: 2026-09-28.1
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      gpuai:
+        displayName: "GPU-AI Gateway"
+        api: openai-completions
+        baseURL: "https://mcp.baisoln.com/gpu-ai/v1"
+        apiKeyEnv: GPUAI_API_KEY
+        models:
+          - id: "qwen3.8-flash-next-think"
+            name: "Qwen3.8 Flash Next (think)"
+            contextWindow: 131072
+            maxTokens: 16384
+            input: [text]
+          - id: "qwen3.8-flash-next"
+            name: "Qwen3.8 Flash Next"
+            contextWindow: 131072
+            maxTokens: 16384
+            input: [text]
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: gpuai
+    model: "qwen3.8-flash-next-think"

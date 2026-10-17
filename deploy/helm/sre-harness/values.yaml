@@ -64,6 +64,21 @@ vault:
     - secretKey: SLACK_WEBHOOK_URL
       property: cha-slack-healthinfo__WEBHOOK_URL
 
+# GPU-AI gateway (OpenAI-compatible) as the harness model provider.
+# The key is the same mcp_api_key the Paperclip deployment already syncs from
+# Vault (shared/api-keys); the harness ESO cannot read that Vault path (its
+# per-app identity only covers t6-apps/bionic-org/config and srenix/slack),
+# so we reference the K8s secret bionic-org's ESO already owns in this
+# namespace instead of duplicating the secret in Vault.
+gpuai:
+  enabled: true
+  # OpenAI-compatible base URL served by the GPU box.
+  baseURL: "https://mcp.baisoln.com/gpu-ai/v1"
+  apiKeySecret: bionic-org-api-keys
+  apiKeySecretKey: mcp_api_key
+  # Model dsh uses by default (must exist on the gateway /v1/models list).
+  model: "qwen3.8-flash-next-think"
+
 persistence:
   enabled: true
   size: 5Gi
