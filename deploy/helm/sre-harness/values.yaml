@@ -14,6 +14,10 @@ image:
   repository: docker4zerocool/dsh
   tag: "0.2.0-rc.2-b1"
   pullPolicy: IfNotPresent
+  # The dsh repo is private (same Docker Hub account as the bionic image);
+  # the secret is created by the bionic-org deploy in the target namespace.
+  pullSecrets:
+    - dockerhub-pull-secret
 
 # dsh web gateway, ClusterIP only on purpose: the dsh web UI has no
 # authentication of its own (it relies on a browser-trust authority fence),
