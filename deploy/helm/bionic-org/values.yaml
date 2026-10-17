@@ -335,16 +335,33 @@ dnsConfig:
 # Liveness / Readiness probes
 # ---------------------------------------------------------------------------
 probes:
+  # Gates liveness/readiness until the server first answers /health. Startup
+  # time varies widely (entrypoint ownership repair on the NFS home, Composio
+  # login, then heartbeat recovery): 23s to well over 85s observed. Without
+  # this, liveness killed a still-starting server on every deploy. Budget:
+  # failureThreshold x periodSeconds = 5 minutes.
+  startup:
+    path: /health
+    port: 3100
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
   liveness:
     path: /health
     port: 3100
     initialDelaySeconds: 15
     periodSeconds: 30
+    # /health can exceed the 1s Kubernetes default while the event loop is
+    # busy (recovery sweeps, large runs); that is slow, not dead.
+    timeoutSeconds: 5
+    failureThreshold: 3
   readiness:
     path: /health
     port: 3100
     initialDelaySeconds: 5
     periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
 
 # ---------------------------------------------------------------------------
 # Pod annotations (e.g. force-pull)
