@@ -1,8 +1,11 @@
 # Default configuration for the external SRE harness.
 
-# Namespace the harness pod runs in. Keep it separate from the Paperclip
-# server namespace even though the RBAC ServiceAccount lives there.
-namespace: sre-harness
+# Namespace the harness pod runs in. It MUST be the Paperclip namespace:
+# the sre-harness-sa ServiceAccount lives there and a pod can only use a
+# ServiceAccount from its own namespace. Isolation comes from separate
+# workloads, labels, and its own PVC, and the RBAC matrix grants this SA
+# rights in bionicorg plus the three website/demo namespaces.
+namespace: bionicorg
 
 image:
   # Pinned dsh harness image. Do NOT use a floating tag: the harness must
@@ -37,20 +40,16 @@ vault:
   configPath: t6-apps/bionic-org/config
   configKeys:
     # secretKey in the synced K8s secret -> property name in Vault.
-    # Verified against Vault 2026-10-16: this config path holds
-    # sr_eng_agent_pat (and app secrets) but NO DeepSeek or SSH key.
-    # The Vault identity in use is scoped per app path, so the missing
-    # entries must be provisioned here (or another readable path set) at
-    # harness install time; they sync as optional until then.
+    # Verified against Vault 2026-10-16/17: this config path holds
+    # sr_eng_agent_pat and deepseek_api_key but no SSH key. Git goes over
+    # HTTPS with the PAT; add an ssh-key entry only once the property is
+    # actually provisioned in Vault.
     - secretKey: GIT_PAT
       property: sr_eng_agent_pat
       optional: false
     - secretKey: DEEPSEEK_API_KEY
       property: deepseek_api_key
-      optional: true
-    - secretKey: GIT_SSH_PRIVATE_KEY
-      property: sre_harness_ssh_key
-      optional: true
+      optional: false
   # Slack notification target. The srenix/slack Vault path holds incoming
   # webhook URLs only (verified 2026-10-16: cha-slack-ceph-alerts,
   # cha-slack-ceph-critical, cha-slack-healthinfo), so the harness posts via
