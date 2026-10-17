@@ -9459,6 +9459,23 @@ export function resolveHeartbeatSchedulingSuppression(
   return { suppressed: false, reason: null };
 }
 
+// A claim that violates the partial unique index issues_open_routine_execution_uq
+// means another open issue already holds the routine execution's single open
+// execution slot. The conflict clears once that issue settles, so the claim is
+// deferrable (same contract as isDeferrableClaimRejection): the run stays
+// queued and the rest of the queue — and startup recovery — must keep going.
+// Drizzle wraps Postgres errors in DrizzleQueryError with the PostgresError as
+// `cause`, which carries `code: "23505"` and the constraint name.
+export function isRoutineExecutionSlotConflict(err: unknown): boolean {
+  const outer = err as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
+  const inner = outer?.cause ?? outer;
+  if (inner?.code !== "23505") return false;
+  return (
+    inner?.constraint === "issues_open_routine_execution_uq" ||
+    String((err as { message?: unknown })?.message ?? "").includes("issues_open_routine_execution_uq")
+  );
+}
+
 export function heartbeatService(
   db: Db,
   options: HeartbeatServiceOptions = {},
@@ -20061,6 +20078,13 @@ export function heartbeatService(
         } catch (err) {
           if (isPermanentClaimRejection(err)) {
             rejectedClaims.push({ run: queuedRun, err });
+            continue;
+          }
+          if (isRoutineExecutionSlotConflict(err)) {
+            logger.warn(
+              { err, runId: queuedRun.id, agentId: queuedRun.agentId, companyId: queuedRun.companyId },
+              "queued heartbeat run claim hit the open routine-execution slot conflict; leaving it queued for the next recovery pass",
+            );
             continue;
           }
           if (!isDeferrableClaimRejection(err)) throw err;
