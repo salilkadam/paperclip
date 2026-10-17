@@ -145,6 +145,20 @@ describe("docker-entrypoint.sh", () => {
     expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
   });
 
+  it("still starts the server when entries vanish during the ownership repair (shared RWX home)", async () => {
+    // During a rolling update the previous replica keeps deleting files on the
+    // shared volume. The repair find then reports vanished entries and exits
+    // non-zero; under `set -e` that used to abort the boot (exit 1 restart).
+    installStubs({ uid: 0, gid: 0, homeMismatch: true });
+    writeStub("chown", `echo "chown $*" >> "${logFile}"\necho "chown: cannot access '$3': No such file or directory" >&2\nexit 1`);
+
+    const { stdout, stderr, calls } = await runEntrypoint({ PAPERCLIP_HOME: stubDir });
+
+    expect(stdout).toContain("ENTRYPOINT-CMD-RAN");
+    expect(stderr).toContain("ownership repair skipped entries that changed during the scan");
+    expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
+  });
+
   it("repairs ownership on a GID-only remap (stale group on persisted descendants)", async () => {
     installStubs({ uid: 0, gid: 0, homeMismatch: true });
 

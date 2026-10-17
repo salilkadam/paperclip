@@ -71,11 +71,20 @@ fi
 # chown -R of the whole home: it fixes exactly the entries the probe finds
 # (following -h so symlink ownership is set, not dereferenced) without
 # re-chowning every correct file on the volume.
+#
+# The repair is best-effort. On a shared (RWX) volume another pod -- e.g.
+# the previous replica during a rolling update -- keeps creating and
+# deleting files (npm cache temp entries, agent scratch files) while this
+# walk runs. find/chown then report entries that vanished mid-scan and exit
+# non-zero, and under `set -e` that aborted the boot (exit 1, one restart per
+# deploy). A vanished entry needs no repair, so never fail startup here.
 home_dir="${PAPERCLIP_HOME:-/paperclip}"
 if [ -d "$home_dir" ] && [ -n "$(find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)" ]; then
-    find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -exec chown -h node:node {} +
+    if ! find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -exec chown -h node:node {} + 2>/dev/null; then
+        echo "docker-entrypoint.sh: ownership repair skipped entries that changed during the scan (continuing)" >&2
+    fi
     if [ -d "$home_dir/instances" ]; then
-        chown -h node:node "$home_dir/instances"
+        chown -h node:node "$home_dir/instances" || true
     fi
 fi
 
