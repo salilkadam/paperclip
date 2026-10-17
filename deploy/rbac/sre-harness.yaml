@@ -1,0 +1,226 @@
+# Full operational rights for the external SRE harness (dsh harness pod).
+#
+# Purpose: the external harness is the ONLY workload with deploy, restart,
+# delete, exec, and secret rights across the four namespaces it monitors.
+# In-Paperclip agents never receive these rights (see paperclip-agent-web.yaml).
+# Blast radius is closed: no cluster-scoped rights of any kind.
+#
+# This manifest is a template. Render it with envsubst before applying
+# (use deploy/rbac/apply.sh). Placeholders:
+#   ${PAPERCLIP_NS}  the Paperclip namespace (e.g. bionicorg)
+#   ${WEB_NS}  the Bionic AI Solutions website namespace (e.g. web)
+#   ${WEBSITE_NS}  the Reliora website namespace (e.g. reliora-website)
+#   ${DEMO_NS}  the demo namespace (e.g. bionicaisolutions)
+#
+# Each monitored namespace gets its own sre-harness-full Role (RoleBindings can
+# only reference a Role in their own namespace), bound to the harness
+# ServiceAccount in ${PAPERCLIP_NS}.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sre-harness-sa
+  namespace: ${PAPERCLIP_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-harness-full
+  namespace: ${PAPERCLIP_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+rules:
+  # Workload lifecycle: deploy, scale, restart, delete.
+  - apiGroups: ["apps"]
+    resources:
+      ["deployments", "statefulsets", "daemonsets", "replicasets", "deployments/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pod lifecycle, logs, and exec.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Service and configuration repair.
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Job and CronJob repair.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Ingress repair.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Incident evidence.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-harness-full
+  namespace: ${PAPERCLIP_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+subjects:
+  - kind: ServiceAccount
+    name: sre-harness-sa
+    namespace: ${PAPERCLIP_NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-harness-full
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-harness-full
+  namespace: ${WEB_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+rules:
+  # Workload lifecycle: deploy, scale, restart, delete.
+  - apiGroups: ["apps"]
+    resources:
+      ["deployments", "statefulsets", "daemonsets", "replicasets", "deployments/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pod lifecycle, logs, and exec.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Service and configuration repair.
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Job and CronJob repair.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Ingress repair.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Incident evidence.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-harness-full
+  namespace: ${WEB_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+subjects:
+  - kind: ServiceAccount
+    name: sre-harness-sa
+    namespace: ${PAPERCLIP_NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-harness-full
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-harness-full
+  namespace: ${WEBSITE_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+rules:
+  # Workload lifecycle: deploy, scale, restart, delete.
+  - apiGroups: ["apps"]
+    resources:
+      ["deployments", "statefulsets", "daemonsets", "replicasets", "deployments/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pod lifecycle, logs, and exec.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Service and configuration repair.
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Job and CronJob repair.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Ingress repair.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Incident evidence.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-harness-full
+  namespace: ${WEBSITE_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+subjects:
+  - kind: ServiceAccount
+    name: sre-harness-sa
+    namespace: ${PAPERCLIP_NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-harness-full
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-harness-full
+  namespace: ${DEMO_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+rules:
+  # Workload lifecycle: deploy, scale, restart, delete.
+  - apiGroups: ["apps"]
+    resources:
+      ["deployments", "statefulsets", "daemonsets", "replicasets", "deployments/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pod lifecycle, logs, and exec.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Service and configuration repair.
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Job and CronJob repair.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Ingress repair.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Incident evidence.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-harness-full
+  namespace: ${DEMO_NS}
+  labels:
+    app.kubernetes.io/part-of: paperclip-scoped-rbac
+subjects:
+  - kind: ServiceAccount
+    name: sre-harness-sa
+    namespace: ${PAPERCLIP_NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-harness-full
