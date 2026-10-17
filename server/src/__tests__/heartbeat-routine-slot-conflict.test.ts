@@ -12,6 +12,23 @@ describe("isRoutineExecutionSlotConflict", () => {
     expect(isRoutineExecutionSlotConflict(err)).toBe(true);
   });
 
+  it("matches the postgres.js shape: constraint_name on the cause, name only in the cause message", () => {
+    // Exact shape observed in production: the outer DrizzleQueryError message
+    // is the failed SQL and never names the constraint.
+    const err = new Error(
+      'Failed query: update "issues" set "execution_run_id" = $1, "execution_agent_name_key" = $2 where ("issues"."id" = $5)\nparams: a,b',
+    );
+    Object.assign(err, {
+      cause: {
+        name: "PostgresError",
+        code: "23505",
+        constraint_name: SLOT_INDEX,
+        message: `duplicate key value violates unique constraint "${SLOT_INDEX}"`,
+      },
+    });
+    expect(isRoutineExecutionSlotConflict(err)).toBe(true);
+  });
+
   it("matches a bare PostgresError carrying the constraint name", () => {
     expect(
       isRoutineExecutionSlotConflict({ code: "23505", constraint: SLOT_INDEX }),

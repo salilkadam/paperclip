@@ -12,6 +12,7 @@ import {
   agentWakeupRequests,
   activityLog,
   costEvents,
+  financeEvents,
   heartbeatRunEvents,
   heartbeatRuns,
   issueExecutionDecisions,
@@ -32,6 +33,7 @@ import {
   normalizePaperclipRunnerAdapterConfig,
 } from "@paperclipai/adapter-utils/server-utils";
 import { conflict, notFound, unprocessable } from "../errors.js";
+import { isForeignKeyViolation } from "../db-errors.js";
 import {
   collectSecretRefs,
   collectUserSecretRefs,
@@ -1055,6 +1057,18 @@ export function agentService(db: Db) {
           featureKeys: builtInMarker.featureKeys,
         });
       }
+      // Spend records are the company's budget and finance history. Deleting
+      // an agent must never erase or orphan them, so an agent that has spent
+      // is terminated (which keeps its history), not hard-deleted.
+      const [costSpend] = await db.select({ id: costEvents.id }).from(costEvents)
+        .where(eq(costEvents.agentId, id)).limit(1);
+      const [financeSpend] = costSpend ? [] : await db.select({ id: financeEvents.id }).from(financeEvents)
+        .where(eq(financeEvents.agentId, id)).limit(1);
+      if (costSpend || financeSpend) {
+        throw conflict("This agent has recorded spend, so it cannot be deleted. Terminate it instead to keep its history.", {
+          code: "agent_has_spend_history",
+        });
+      }
 
       return db.transaction(async (tx) => {
         await tx
@@ -1089,6 +1103,16 @@ export function agentService(db: Db) {
           .returning()
           .then((rows) => rows[0] ?? null);
         return deleted ? normalizeAgentRow(deleted) : null;
+      }).catch((err) => {
+        // Other durable records (decisions, browser sessions, ...) can still
+        // reference this agent's runs. Report that as a conflict the board can
+        // act on, not an internal error.
+        if (isForeignKeyViolation(err)) {
+          throw conflict("This agent has history that other records still reference, so it cannot be deleted. Terminate it instead.", {
+            code: "agent_has_referenced_history",
+          });
+        }
+        throw err;
       });
     },
 

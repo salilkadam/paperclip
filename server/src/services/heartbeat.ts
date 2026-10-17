@@ -642,6 +642,7 @@ import {
 } from "./effective-run-config-fingerprints.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { serverVersion } from "../version.js";
+import { isUniqueViolation } from "../db-errors.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -9465,15 +9466,13 @@ export function resolveHeartbeatSchedulingSuppression(
 // deferrable (same contract as isDeferrableClaimRejection): the run stays
 // queued and the rest of the queue — and startup recovery — must keep going.
 // Drizzle wraps Postgres errors in DrizzleQueryError with the PostgresError as
-// `cause`, which carries `code: "23505"` and the constraint name.
+// `cause`. postgres.js names the constraint `constraint_name` (node-postgres:
+// `constraint`) and only the cause's message mentions it, so walk the cause
+// chain with the shared helper. Checking `cause.constraint` and the outer
+// "Failed query: ..." message missed the postgres.js shape, which let this
+// conflict escape startup recovery and exit the server.
 export function isRoutineExecutionSlotConflict(err: unknown): boolean {
-  const outer = err as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
-  const inner = outer?.cause ?? outer;
-  if (inner?.code !== "23505") return false;
-  return (
-    inner?.constraint === "issues_open_routine_execution_uq" ||
-    String((err as { message?: unknown })?.message ?? "").includes("issues_open_routine_execution_uq")
-  );
+  return isUniqueViolation(err, "issues_open_routine_execution_uq");
 }
 
 export function heartbeatService(
