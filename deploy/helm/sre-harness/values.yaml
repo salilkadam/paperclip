@@ -7,15 +7,19 @@ namespace: sre-harness
 image:
   # Pinned dsh harness image. Do NOT use a floating tag: the harness must
   # not change silently. Cut a new tag per reviewed upgrade.
+  # Built from deploy/harness-image/Dockerfile (npm @deepseek-ai/dsh pinned).
   repository: docker4zerocool/dsh
-  tag: "0.1.0"
+  tag: "0.2.0-rc.2-b1"
   pullPolicy: IfNotPresent
 
-# dsh web gateway served inside the cluster (UI on the nodePort).
+# dsh web gateway, ClusterIP only on purpose: the dsh web UI has no
+# authentication of its own (it relies on a browser-trust authority fence),
+# so it must never be exposed on a NodePort or Ingress. Access it with
+#   kubectl -n <ns> port-forward svc/sre-harness 3080:3080
+# The localhost authority is accepted by the fence by default.
 ui:
   host: "0.0.0.0"
   port: 3080
-  nodePort: 30830
 
 serviceAccount:
   # Name of the pre-provisioned RBAC ServiceAccount (deploy/rbac/sre-harness.yaml).
@@ -60,6 +64,8 @@ persistence:
   enabled: true
   size: 5Gi
   storageClassName: ""   # empty uses cluster default
+  # dsh home directory inside the image (node:24 user is `node`, uid 1000).
+  home: /home/node/.dsh
 
 resources:
   requests:
