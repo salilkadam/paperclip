@@ -103,7 +103,7 @@ curl -sS "$PAPERCLIP_API_URL/llms/agent-icons.txt" \
 - adapter type
 - `desiredSkills` from the company skill library when this role needs installed skills on day one
 - if any `desiredSkills` or adapter settings expand browser access, external-system reach, filesystem scope, or secret-handling capability, justify each one in the hire comment
-- adapter and runtime config aligned to this environment
+- adapter and runtime config aligned to this environment. When you hire on your own adapter type, the hire inherits your model access: for `opencode_local` it gets your model (if you name none), your gateway provider settings and your credential references; for `claude_local`/`codex_local`/`grok_local` it gets your credential references. Do not copy keys or provider blocks into `adapterConfig` yourself, and only override them when the role genuinely needs a different model
 - leave timer heartbeats off by default; only set `runtimeConfig.heartbeat.enabled=true` with an `intervalSec` when the role genuinely needs scheduled recurring work or the user explicitly asked for it
 - if the role may handle private advisories or sensitive disclosures, confirm a confidential workflow exists first (dedicated skill or documented manual process)
 - capabilities
