@@ -113,6 +113,24 @@ Two Vault paths feed this deployment via ESO (both synced every 5 min — never 
 
 3. **`t6-apps/voice-studio/config`** (media bucket) → K8s Secret `bionic-org-media-keys` (`vault.mediaS3`). Only `minio_access_key`, `minio_secret_key` and `minio_bucket` are synced, exposed as `MEDIA_S3_ACCESS_KEY` / `MEDIA_S3_SECRET_KEY` / `MEDIA_S3_BUCKET`, plus the non-secret `MEDIA_S3_ENDPOINT` (`https://s3.baisoln.com`). Used by `skills/marketing-video-studio` to upload and presign avatalk inputs. Never the MinIO root pair.
 
+## Central model access (mandatory for new agents)
+
+The platform, not each agent or each user, provides model access to every
+`opencode_local` agent in every company. `values.yaml` → `modelAccess` renders
+four server env vars into the ConfigMap:
+
+| Env var | Effect |
+|---|---|
+| `PAPERCLIP_OPENCODE_PROVIDERS` | GPU-AI gateway provider block. Its key is `{env:MCP_API_KEY}` (Vault `shared/api-keys` → ESO), so no key is stored in any agent or user secret |
+| `PAPERCLIP_OPENCODE_SMALL_MODEL` | Gateway-served helper model |
+| `PAPERCLIP_ADAPTER_MODELS` | The models the deployment serves. New agents default to the first entry; creating a **new** agent on any other `opencode_local` model is rejected (422 `model_not_provided_by_deployment`) |
+| `PAPERCLIP_OPENCODE_AGENT_DATA_ROOT` | Each agent gets `<root>/<agentId>/opencode/{data,state}` automatically, so agents never share one OpenCode SQLite DB |
+
+Consequences:
+- Agents need no per-agent provider env and no per-user GPU-AI key. Any board member can chat with any agent.
+- Board-created, onboarding-created and agent-hired agents all get the same setup. An agent hired by another agent also inherits its manager's model.
+- An agent's own env still overrides the central values (board-only escape hatch). Changing the gateway or the model list is a values change plus `helm upgrade`, with no per-agent edits.
+
 > **Re-seeding Board managed secrets:** after a Case-C rebuild, read the needed values from `bionic-org-api-keys` (`kubectl -n bionicorg get secret bionic-org-api-keys -o go-template=...`) and enter them once in the Board UI — the UI encrypts them into the DB under the master key; the env wiring covers CLI-level fallback.
 
 ## Kubernetes Resources Created

@@ -95,7 +95,7 @@ import { useDisabledAdaptersSync, useAdapterRegistryLoaded } from "../adapters/u
 import { useAdapterCapabilities } from "../adapters/use-adapter-capabilities";
 import { getAdapterDisplay } from "../adapters/adapter-display-registry";
 import { buildFixedClaudeOAuthBinding } from "./environment-variables-editor/model";
-import { defaultCreateValues } from "./agent-config-defaults";
+import { defaultCreateValues, deploymentDefaultModel } from "./agent-config-defaults";
 import { restoreOnboardingState } from "../lib/onboarding-state";
 import {
   buildOnboardingIssuePayload,
@@ -933,6 +933,11 @@ function OnboardingWizardInner({
     // Models are picked on step 4 (Connect a model).
     enabled: Boolean(createdCompanyId) && effectiveOnboardingOpen && step === 4
   });
+  useEffect(() => {
+    if (adapterType !== "opencode_local" || !adapterModels) return;
+    const next = deploymentDefaultModel(model, DEFAULT_OPENCODE_LOCAL_MODEL, adapterModels);
+    if (next) setModel(next);
+  }, [adapterType, adapterModels, model]);
   const getCapabilities = useAdapterCapabilities();
   const adapterCaps = getCapabilities(adapterType);
 

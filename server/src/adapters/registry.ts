@@ -1042,6 +1042,16 @@ function getDeclaredAdapterModels(): ReturnType<typeof parseAdapterModelsEnv> {
   return value;
 }
 
+/**
+ * The model ids the deployment declares for an adapter via
+ * PAPERCLIP_ADAPTER_MODELS, in declared order, or null when it declares none.
+ * A declared list is the deployment's mandate: new agents default to its first
+ * entry and may only be created on a listed model.
+ */
+export function declaredAdapterModelIds(type: string): string[] | null {
+  return declaredModelsForAdapter(type)?.map((model) => model.id) ?? null;
+}
+
 function declaredModelsForAdapter(type: string): { id: string; label: string }[] | null {
   const declared = getDeclaredAdapterModels()?.[type];
   return declared?.length

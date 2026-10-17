@@ -665,6 +665,55 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
     });
   });
 
+  describe("deployment-declared opencode_local models are mandatory for new agents", () => {
+    const previousDeclared = process.env.PAPERCLIP_ADAPTER_MODELS;
+    afterEach(() => {
+      if (previousDeclared === undefined) delete process.env.PAPERCLIP_ADAPTER_MODELS;
+      else process.env.PAPERCLIP_ADAPTER_MODELS = previousDeclared;
+    });
+    function declare(ids: string[]) {
+      process.env.PAPERCLIP_ADAPTER_MODELS = JSON.stringify({ opencode_local: ids.map((id) => ({ id })) });
+    }
+
+    it("defaults a board-created agent with no model to the first declared model", async () => {
+      declare(["gpuai/qwen-next", "gpuai/auto"]);
+      const companyId = await seedCompany();
+      const res = await hire(userActor(), companyId, {
+        name: "Board OpenCode",
+        role: "general",
+        adapterType: "opencode_local",
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      expect(res.body.agent.adapterConfig.model).toBe("gpuai/qwen-next");
+    });
+
+    it("rejects a new agent on a model the deployment does not provide", async () => {
+      declare(["gpuai/qwen-next"]);
+      const companyId = await seedCompany();
+      const res = await hire(userActor(), companyId, {
+        name: "Undeclared Model",
+        role: "general",
+        adapterType: "opencode_local",
+        adapterConfig: { model: "openai/gpt-5.2-codex" },
+      });
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("gpuai/qwen-next");
+      expect(await db.select().from(agents).where(eq(agents.companyId, companyId))).toHaveLength(0);
+    });
+
+    it("allows any model when the deployment declares none", async () => {
+      delete process.env.PAPERCLIP_ADAPTER_MODELS;
+      const companyId = await seedCompany();
+      const res = await hire(userActor(), companyId, {
+        name: "Free Choice",
+        role: "general",
+        adapterType: "opencode_local",
+        adapterConfig: { model: "openai/gpt-5.2-codex" },
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    });
+  });
+
   it("inherits the fixed Claude OAuth binding, keeps its version, and leaks no token value", async () => {
     const companyId = await seedCompany();
     const parent = await seedParentAgent(companyId, "claude_local", {
