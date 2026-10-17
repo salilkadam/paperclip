@@ -544,6 +544,127 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
     expect(res.body.agent.defaultEnvironmentId).toBe(environmentId);
   });
 
+  describe("opencode_local hires are equipped by the hiring manager", () => {
+    const GATEWAY_PROVIDERS = JSON.stringify({
+      gpuai: {
+        npm: "@ai-sdk/openai-compatible",
+        options: { baseURL: "https://gateway.example/v1", apiKey: "{env:MCP_API_KEY}" },
+        models: { "qwen-next": { name: "Qwen Next" } },
+      },
+    });
+
+    async function seedOpenCodeManager(companyId: string, extraEnv: Record<string, unknown> = {}) {
+      const parent = await seedParentAgent(companyId, "opencode_local", {});
+      await db.update(agents).set({
+        adapterConfig: {
+          model: "gpuai/qwen-next",
+          env: {
+            PAPERCLIP_OPENCODE_PROVIDERS: { type: "plain", value: GATEWAY_PROVIDERS },
+            PAPERCLIP_OPENCODE_SMALL_MODEL: { type: "plain", value: "gpuai/qwen-next" },
+            XDG_DATA_HOME: { type: "plain", value: `/paperclip/agents/${parent.id}/opencode/data` },
+            XDG_STATE_HOME: { type: "plain", value: `/paperclip/agents/${parent.id}/opencode/state` },
+            UNRELATED_PLAIN: { type: "plain", value: "manager-only" },
+            ...extraEnv,
+          },
+        },
+      }).where(eq(agents.id, parent.id));
+      return parent;
+    }
+
+    it("gives a hire with no model the manager's model, gateway providers and its own storage paths", async () => {
+      const companyId = await seedCompany();
+      const parent = await seedOpenCodeManager(companyId);
+
+      const res = await hire(agentActor(companyId, parent.id), companyId, {
+        name: "Content Marketer",
+        role: "general",
+        adapterType: "opencode_local",
+      });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      const childId = res.body.agent.id as string;
+      expect(res.body.agent.adapterConfig.model).toBe("gpuai/qwen-next");
+      const childEnv = childEnvOf(res);
+      expect(childEnv.PAPERCLIP_OPENCODE_PROVIDERS).toMatchObject({ type: "plain", value: GATEWAY_PROVIDERS });
+      expect(childEnv.PAPERCLIP_OPENCODE_SMALL_MODEL).toMatchObject({ value: "gpuai/qwen-next" });
+      expect(childEnv.XDG_DATA_HOME).toMatchObject({ value: `/paperclip/agents/${childId}/opencode/data` });
+      expect(childEnv.XDG_STATE_HOME).toMatchObject({ value: `/paperclip/agents/${childId}/opencode/state` });
+      expect(JSON.stringify(childEnv)).not.toContain(parent.id);
+      expect(childEnv.UNRELATED_PLAIN).toBeUndefined();
+    });
+
+    it("equips a hire that names the manager's gateway model and copies credential references", async () => {
+      const companyId = await seedCompany();
+      await secretService(db).createUserSecretDefinition(companyId, {
+        key: "GPUAI_API_KEY",
+        name: "GPU-AI API Key",
+        provider: "local_encrypted",
+      });
+      const parent = await seedOpenCodeManager(companyId, {
+        GPUAI_API_KEY: { type: "user_secret_ref", key: "GPUAI_API_KEY", version: "latest" },
+      });
+
+      const res = await hire(agentActor(companyId, parent.id), companyId, {
+        name: "Named Model Hire",
+        role: "general",
+        adapterType: "opencode_local",
+        adapterConfig: { model: "gpuai/qwen-next" },
+      });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      const childEnv = childEnvOf(res);
+      expect(childEnv.PAPERCLIP_OPENCODE_PROVIDERS).toBeDefined();
+      expect(childEnv.GPUAI_API_KEY).toMatchObject({ type: "user_secret_ref", key: "GPUAI_API_KEY" });
+    });
+
+    it("keeps request-supplied settings and skips equipment for a different model provider", async () => {
+      const companyId = await seedCompany();
+      const parent = await seedOpenCodeManager(companyId);
+
+      const own = await hire(agentActor(companyId, parent.id), companyId, {
+        name: "Own Small Model",
+        role: "general",
+        adapterType: "opencode_local",
+        adapterConfig: { env: { PAPERCLIP_OPENCODE_SMALL_MODEL: { type: "plain", value: "gpuai/other" } } },
+      });
+      expect(own.status, JSON.stringify(own.body)).toBe(201);
+      expect(childEnvOf(own).PAPERCLIP_OPENCODE_SMALL_MODEL).toMatchObject({ value: "gpuai/other" });
+      expect(childEnvOf(own).PAPERCLIP_OPENCODE_PROVIDERS).toBeDefined();
+
+      const other = await hire(agentActor(companyId, parent.id), companyId, {
+        name: "Other Provider",
+        role: "general",
+        adapterType: "opencode_local",
+        adapterConfig: { model: "openai/gpt-5.2-codex" },
+      });
+      expect(other.status, JSON.stringify(other.body)).toBe(201);
+      expect(childEnvOf(other).PAPERCLIP_OPENCODE_PROVIDERS).toBeUndefined();
+    });
+
+    it("equips nothing for a board hire or a manager in another company", async () => {
+      const companyId = await seedCompany();
+      const otherCompanyId = await seedCompany();
+      const parent = await seedOpenCodeManager(otherCompanyId);
+
+      const board = await hire(userActor(), companyId, {
+        name: "Board Hire",
+        role: "general",
+        adapterType: "opencode_local",
+        adapterConfig: { model: "gpuai/qwen-next" },
+      });
+      expect(board.status, JSON.stringify(board.body)).toBe(201);
+      expect(Object.keys(childEnvOf(board))).toHaveLength(0);
+
+      const crossCompany = await hire(agentActor(companyId, parent.id), companyId, {
+        name: "Cross Company Hire",
+        role: "general",
+        adapterType: "opencode_local",
+        adapterConfig: { model: "gpuai/qwen-next" },
+      });
+      expect(Object.keys(childEnvOf(crossCompany))).toHaveLength(0);
+    });
+  });
+
   it("inherits the fixed Claude OAuth binding, keeps its version, and leaks no token value", async () => {
     const companyId = await seedCompany();
     const parent = await seedParentAgent(companyId, "claude_local", {

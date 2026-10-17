@@ -2567,6 +2567,72 @@ export function agentRoutes(
     return record !== null && (record.type === "secret_ref" || record.type === "user_secret_ref");
   }
 
+  // Plain opencode_local settings that describe the model gateway rather than a
+  // credential. A gateway provider block names its key as an `{env:NAME}`
+  // placeholder, so copying it copies a pointer to a platform-provided
+  // variable, never a key value.
+  const OPENCODE_INHERITABLE_PLAIN_ENV_KEYS = [
+    "PAPERCLIP_OPENCODE_PROVIDERS",
+    "PAPERCLIP_OPENCODE_SMALL_MODEL",
+    "PAPERCLIP_OPENCODE_PROVIDER_HEADER_TIMEOUT_MS",
+  ] as const;
+  // Per-agent storage paths. The parent's value carries the parent's agent id;
+  // the child gets the same layout with its own id so two agents never share
+  // one OpenCode database.
+  const OPENCODE_PER_AGENT_PATH_ENV_KEYS = ["XDG_DATA_HOME", "XDG_STATE_HOME"] as const;
+
+  // A hiring manager equips an opencode_local hire with the tools it needs: the
+  // manager's model (when the request names none), its gateway provider
+  // settings, and its credential references. Without this a hire that only
+  // names a gateway model (e.g. `gpuai/...`) has no provider definition and
+  // every run fails before it starts. Request values always win, and a plain
+  // value that is not a known gateway setting is never copied.
+  async function applyHiringManagerOpenCodeEquipment(
+    req: Request,
+    companyId: string,
+    hiredAgentId: string,
+    adapterType: string | null | undefined,
+    rawAdapterConfig: Record<string, unknown>,
+    runtimeConfig: unknown,
+  ): Promise<Record<string, unknown>> {
+    if (adapterType !== "opencode_local") return rawAdapterConfig;
+    if (asRecord(runtimeConfig)?.aiConnection) return rawAdapterConfig;
+    if (req.actor.type !== "agent" || !req.actor.agentId) return rawAdapterConfig;
+    const parent = await svc.getById(req.actor.agentId);
+    if (!parent || parent.companyId !== companyId || parent.adapterType !== adapterType) return rawAdapterConfig;
+    if (aiConnectionBindingSchema.safeParse(parent.runtimeConfig.aiConnection).success) return rawAdapterConfig;
+    const parentConfig = asRecord(parent.adapterConfig) ?? {};
+    const parentEnv = asRecord(parentConfig.env) ?? {};
+
+    const next: Record<string, unknown> = { ...rawAdapterConfig };
+    const parentModel = asNonEmptyString(parentConfig.model);
+    if (!asNonEmptyString(next.model) && parentModel) next.model = parentModel;
+    // Only equip a hire that runs on the same model family the manager can serve.
+    const providerOf = (model: unknown) => asNonEmptyString(model)?.split("/")[0] ?? null;
+    if (providerOf(next.model) !== providerOf(parentModel)) return next;
+
+    const existingEnv = asRecord(next.env) ?? {};
+    const nextEnv: Record<string, unknown> = { ...existingEnv };
+    let changed = false;
+    for (const key of OPENCODE_INHERITABLE_PLAIN_ENV_KEYS) {
+      if (existingEnv[key] !== undefined || !asEnvBindingString(parentEnv[key])) continue;
+      nextEnv[key] = parentEnv[key];
+      changed = true;
+    }
+    for (const key of OPENCODE_PER_AGENT_PATH_ENV_KEYS) {
+      const parentPath = asEnvBindingString(parentEnv[key]);
+      if (existingEnv[key] !== undefined || !parentPath || !parentPath.includes(parent.id)) continue;
+      nextEnv[key] = { type: "plain", value: parentPath.split(parent.id).join(hiredAgentId) };
+      changed = true;
+    }
+    for (const [key, value] of Object.entries(parentEnv)) {
+      if (existingEnv[key] !== undefined || !isInheritableCredentialReference(value)) continue;
+      nextEnv[key] = { ...value };
+      changed = true;
+    }
+    return changed ? { ...next, env: nextEnv } : next;
+  }
+
   // A hired agent inherits the provider credential references the hiring
   // agent already holds for the same adapter type, so a freshly hired agent
   // can run without a separate credential setup step. The merge copies each
@@ -4519,7 +4585,14 @@ export function agentRoutes(
       hireInput.adapterType,
       applyCreateDefaultsByAdapterType(
         hireInput.adapterType,
-        rawHireAdapterConfig,
+        await applyHiringManagerOpenCodeEquipment(
+          req,
+          companyId,
+          hiredAgentId,
+          hireInput.adapterType,
+          rawHireAdapterConfig,
+          hireInput.runtimeConfig,
+        ),
       ),
       hireInput.runtimeConfig,
     );
@@ -4827,7 +4900,14 @@ export function agentRoutes(
       createInput.adapterType,
       applyCreateDefaultsByAdapterType(
         createInput.adapterType,
-        rawCreateAdapterConfig,
+        await applyHiringManagerOpenCodeEquipment(
+          req,
+          companyId,
+          agentId,
+          createInput.adapterType,
+          rawCreateAdapterConfig,
+          createInput.runtimeConfig,
+        ),
       ),
     );
     assertExternalInstructionsAdmin(req, {
