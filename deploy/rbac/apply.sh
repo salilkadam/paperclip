@@ -33,7 +33,10 @@ render() {
   if command -v envsubst >/dev/null 2>&1; then
     envsubst '${PAPERCLIP_NS} ${WEB_NS} ${WEBSITE_NS} ${DEMO_NS}'
   else
-    python3 -c 'import os,sys,re; sys.stdout.write(re.sub(r"\\$\\{(PAPERCLIP_NS|WEB_NS|WEBSITE_NS|DEMO_NS)\\}", lambda m: os.environ[m.group(1)], sys.stdin.read()))'
+    python3 -c 'import os,sys
+t=sys.stdin.read()
+for var in ("PAPERCLIP_NS","WEB_NS","WEBSITE_NS","DEMO_NS"): t=t.replace("${"+var+"}", os.environ[var])
+sys.stdout.write(t)'
   fi
 }
 
