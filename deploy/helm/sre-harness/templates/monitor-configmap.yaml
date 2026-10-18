@@ -1,0 +1,91 @@
+{{- if .Values.monitor.enabled }}
+# Everything the monitor CronJob needs, rebuilt with the release:
+#   prompt.md         the read-only sweep instructions (from .Values.monitor.prompt)
+#   gpuai.patch.yml   dsh model config, templated from .Values.gpuai so the
+#                     monitor always points at the same gateway/model as the
+#                     interactive harness without touching the state PVC
+#   run.sh            runner: dsh headless sweep -> Slack webhook post
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sre-harness.fullname" . }}-monitor-config
+  namespace: {{ include "sre-harness.namespace" . }}
+  labels:
+    {{- include "sre-harness.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitor
+data:
+  prompt.md: |
+    {{- .Values.monitor.prompt | nindent 4 }}
+  gpuai.patch.yml: |
+    - id: llm-pi-ai
+      name: "@deepseek-ai/dsh-llm-pi-ai"
+      config:
+        providers:
+          gpuai:
+            displayName: "GPU-AI Gateway"
+            api: openai-completions
+            baseURL: {{ .Values.gpuai.baseURL | quote }}
+            apiKeyEnv: GPUAI_API_KEY
+            models:
+              - id: {{ .Values.gpuai.model | quote }}
+                name: {{ .Values.gpuai.model | quote }}
+                contextWindow: 131072
+                maxTokens: 16384
+                input: [text]
+    - id: agent-default-model
+      name: "@deepseek-ai/dsh-agent-default-model"
+      config:
+        provider: gpuai
+        model: {{ .Values.gpuai.model | quote }}
+  run.sh: |
+    #!/bin/sh
+    # Paperclip health sweep: run the prompt through dsh headless, then post
+    # the agent's verdict to the Slack health webhook. Best-effort posting:
+    # a Slack failure must never mask (or fake) the monitor result.
+    set -eu
+
+    # Fresh dsh home every run. --from-default-profile seeds the profile from
+    # the image defaults, so a stale/edited profile on the (RWO, web-pod-only)
+    # state PVC can neither break the run nor silently change the model.
+    export HOME=/home/node/.dsh
+
+    post_to_slack() {
+      SLACK_TEXT="$1" node -e '
+        const url = process.env.SLACK_WEBHOOK_URL;
+        const text = process.env.SLACK_TEXT;
+        if (!url) {
+          console.log("[monitor] no webhook configured; verdict:\n" + text);
+          process.exit(0);
+        }
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text }),
+        })
+          .then((r) => {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            console.log("[monitor] verdict posted to slack");
+          })
+          .catch((e) => {
+            console.error("[monitor] slack post failed: " + e.message);
+            console.log("[monitor] verdict:\n" + text);
+          });
+      '
+    }
+
+    TASK="$(cat /config/prompt.md)"
+
+    set +e
+    OUT="$(dsh --profile monitor --from-default-profile headless \
+             --patch /config/gpuai.patch.yml "$TASK" 2>&1)"
+    RC=$?
+    set -e
+
+    if [ "$RC" -ne 0 ]; then
+      # The sweep itself failed; that is an operational signal, shout it.
+      post_to_slack "MONITOR RUN FAILED (dsh exit $RC): $OUT"
+      exit 1
+    fi
+
+    post_to_slack "$OUT"
+{{- end }}

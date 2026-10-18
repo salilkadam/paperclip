@@ -1,0 +1,123 @@
+{{- if .Values.monitor.enabled }}
+# Periodic read-only Paperclip health sweep (see monitor.prompt in
+# values.yaml). This is the harness's proactive eye: it never mutates
+# anything, it only reports to Slack. Fixes stay with the interactive
+# harness and the in-cluster Sr. Engineer agent.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "sre-harness.fullname" . }}-monitor
+  namespace: {{ include "sre-harness.namespace" . }}
+  labels:
+    {{- include "sre-harness.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitor
+spec:
+  schedule: {{ .Values.monitor.schedule | quote }}
+  # Two overlapping sweeps would double-post and race on the same evidence.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.monitor.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .Values.monitor.ttlSecondsAfterFinished }}
+      # A sweep is idempotent reporting; never retry a failed one (the next
+      # cron tick is the retry, and a retry could double-post).
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: {{ include "sre-harness.name" . }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: monitor
+        spec:
+          restartPolicy: Never
+          # Same pre-provisioned RBAC SA as the interactive harness; the
+          # sweep only needs get/list on bionicorg. Token projected
+          # explicitly because the SA disables auto-mounting.
+          serviceAccountName: {{ .Values.serviceAccount.name }}
+          automountServiceAccountToken: false
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+          # Reuse the harness placement rules: never on the node hosting
+          # Paperclip itself.
+          affinity:
+            {{- toYaml .Values.affinity | nindent 12 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: monitor
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Override the image entrypoint (tini + dsh web): the script
+              # invokes dsh headless itself.
+              command:
+                - /bin/sh
+                - /config/run.sh
+              env:
+                # GPU-AI gateway key (shared with the bionic-org ESO-owned
+                # secret). optional so a missing bionic-org deploy yields a
+                # clear dsh/auth failure, not an unschedulable job.
+                - name: GPUAI_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.gpuai.apiKeySecret }}
+                      key: {{ .Values.gpuai.apiKeySecretKey }}
+                      optional: true
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "sre-harness.fullname" . }}-slack
+                      key: SLACK_WEBHOOK_URL
+                      optional: true
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                  readOnly: true
+                - name: sa-token
+                  mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                  readOnly: true
+                - name: dsh-home
+                  mountPath: /home/node/.dsh
+              resources:
+                {{- toYaml .Values.monitor.resources | nindent 16 }}
+          volumes:
+            - name: config
+              configMap:
+                name: {{ include "sre-harness.fullname" . }}-monitor-config
+            - name: sa-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      expirationSeconds: 3600
+                  - configMap:
+                      name: kube-root-ca.crt
+                      items:
+                        - key: ca.crt
+                          path: ca.crt
+                  - downwardAPI:
+                      items:
+                        - path: namespace
+                          fieldRef:
+                            fieldPath: metadata.namespace
+            # Ephemeral dsh home. The web harness's state PVC is RWO and
+            # owned by its pod; the monitor must never mount it.
+            - name: dsh-home
+              emptyDir: {}
+{{- end }}

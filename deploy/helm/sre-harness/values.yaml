@@ -116,3 +116,51 @@ affinity:
 
 nodeSelector: {}
 tolerations: []
+
+# Proactive health monitor: a CronJob that runs the read-only sweep below
+# through dsh headless and posts the verdict to the Slack health webhook.
+# Deliberately read-only (get/list/logs/curl only): reporting is automated,
+# remediation stays a human/agent decision.
+monitor:
+  enabled: true
+  # Every half hour. The sweep itself takes 1-3 minutes.
+  schedule: "*/30 * * * *"
+  # Hard cap per run so a wedged dsh session cannot hold the Forbid lock.
+  activeDeadlineSeconds: 1200
+  # Keep finished job objects for a day for forensics, then clean up.
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  prompt: |
+    You are the Paperclip SRE health monitor. Run this read-only sweep of the
+    bionicorg namespace and report. You MUST NOT create, delete, scale, patch,
+    restart, or exec into anything: read-only kubectl (get/logs/events) and curl
+    only. If a command fails, that failure is itself evidence - report it.
+
+    Checks:
+    1. `kubectl -n bionicorg get pods -o wide` - flag pods not Running or
+       Completed, containers in CrashLoopBackOff/Error, or with restarts that
+       look recent (cross-check with events).
+    2. `curl -fsS -m 10 http://bionic-org.bionicorg.svc/api/health` - must
+       return HTTP 200 and a healthy payload.
+    3. `kubectl -n bionicorg logs deploy/bionic-org --since=40m` - search for
+       error/fatal/exception lines; report counts and the notable distinct
+       messages, ignoring known-benign routine noise.
+    4. `kubectl -n bionicorg get events --sort-by=.lastTimestamp` - Warning
+       events from the last 40 minutes.
+    5. `kubectl -n bionicorg get jobs -o wide` - any Failed jobs (the
+       sre-harness-monitor job failing is itself reportable).
+
+    Your final message MUST start with exactly one line, either:
+    PAPERCLIP HEALTH: OK
+    PAPERCLIP HEALTH: WARN
+    PAPERCLIP HEALTH: FAIL
+    Then at most 6 short evidence bullets (what/where/count). OK means every
+    check passed. WARN means degraded but serving (e.g. recent restarts,
+    benign-looking errors, stale warnings). FAIL means the API is unhealthy,
+    a workload is down/crashlooping, or fresh fatal errors are appearing.
