@@ -1,0 +1,68 @@
+{{- if .Values.remediate.enabled }}
+# Remediation engineer. Created by the monitor on WARN/FAIL (never on a
+# schedule: this CronJob is a suspended job template that the monitor
+# instantiates with `kubectl create job --from=cronjob/...`).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sre-harness.fullname" . }}-remediate-config
+  namespace: {{ include "sre-harness.namespace" . }}
+  labels:
+    {{- include "sre-harness.labels" . | nindent 4 }}
+    app.kubernetes.io/component: remediate
+data:
+  remediate-prompt.md: |
+    {{- tpl .Values.remediate.prompt . | nindent 4 }}
+  gpuai.patch.yml: |
+    {{- include "sre-harness.gpuaiPatch" . | nindent 4 }}
+  run.sh: |
+    #!/bin/sh
+    # One remediation session: full engineer runbook lives in the prompt;
+    # this wrapper only prepares identity, runs dsh headless, and relays
+    # the report to Slack.
+    set -eu
+
+    export HOME=/home/node/.dsh
+    {{- include "sre-harness.sshBootstrap" . | nindent 4 }}
+
+    post_to_slack() {
+      SLACK_TEXT="$1" node -e '
+        const url = process.env.SLACK_WEBHOOK_URL;
+        const text = process.env.SLACK_TEXT;
+        if (!url) {
+          console.log("[remediate] no webhook configured; report:\n" + text);
+          process.exit(0);
+        }
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text }),
+        })
+          .then((r) => {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            console.log("[remediate] report posted to slack");
+          })
+          .catch((e) => {
+            console.error("[remediate] slack post failed: " + e.message);
+            console.log("[remediate] report:\n" + text);
+          });
+      '
+    }
+
+    TASK="$(cat /config/remediate-prompt.md)"
+
+    set +e
+    OUT="$(dsh --profile remediate --from-default-profile headless \
+             --patch /config/gpuai.patch.yml "$TASK" 2>&1)"
+    RC=$?
+    set -e
+
+    printf '%s\n' "$OUT"
+    if [ "$RC" -ne 0 ]; then
+      # The engineer session itself failed mid-remediation: say so loudly,
+      # an interrupted fix is itself an operational signal.
+      post_to_slack "REMEDIATION RUN FAILED (dsh exit $RC) - partial state possible, check bionicorg + fork PRs: $OUT"
+      exit 1
+    fi
+    post_to_slack "SRE REMEDIATION REPORT: $OUT"
+{{- end }}

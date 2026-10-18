@@ -17,26 +17,7 @@ data:
   prompt.md: |
     {{- .Values.monitor.prompt | nindent 4 }}
   gpuai.patch.yml: |
-    - id: llm-pi-ai
-      name: "@deepseek-ai/dsh-llm-pi-ai"
-      config:
-        providers:
-          gpuai:
-            displayName: "GPU-AI Gateway"
-            api: openai-completions
-            baseURL: {{ .Values.gpuai.baseURL | quote }}
-            apiKeyEnv: GPUAI_API_KEY
-            models:
-              - id: {{ .Values.gpuai.model | quote }}
-                name: {{ .Values.gpuai.model | quote }}
-                contextWindow: 131072
-                maxTokens: 16384
-                input: [text]
-    - id: agent-default-model
-      name: "@deepseek-ai/dsh-agent-default-model"
-      config:
-        provider: gpuai
-        model: {{ .Values.gpuai.model | quote }}
+    {{- include "sre-harness.gpuaiPatch" . | nindent 4 }}
   run.sh: |
     #!/bin/sh
     # Paperclip health sweep: run the prompt through dsh headless, then post
@@ -88,8 +69,47 @@ data:
       exit 1
     fi
 
+    # Dispatch hook: WARN/FAIL summons one remediation engineer (bounded:
+    # one at a time, at most one per throttle window). The remediation
+    # job re-reads this verdict itself; we only pull the trigger here.
+    DISPATCH_NOTE=""
+    if [ "${REMEDIATION_ENABLED:-false}" = "true" ] && \
+       printf '%s\n' "$OUT" | grep -qE 'PAPERCLIP HEALTH: (WARN|FAIL)'; then
+      ACTIVE=$(kubectl get jobs -l app.kubernetes.io/component=remediate \
+        -o jsonpath='{.items[*].status.active}' 2>/dev/null || true)
+      LAST=$(kubectl get jobs -l app.kubernetes.io/component=remediate \
+        --sort-by=.metadata.creationTimestamp \
+        -o jsonpath='{.items[-1:].metadata.creationTimestamp}' 2>/dev/null || true)
+      THROTTLED=0
+      if [ -n "$LAST" ]; then
+        LAST_EPOCH=$(date -d "$LAST" +%s 2>/dev/null || echo 0)
+        NOW_EPOCH=$(date +%s)
+        if [ $(( (NOW_EPOCH - LAST_EPOCH) / 3600 )) -lt "${REMEDIATION_THROTTLE_HOURS:-6}" ]; then
+          THROTTLED=1
+        fi
+      fi
+      if [ -n "$ACTIVE" ]; then
+        DISPATCH_NOTE="remediation already in progress; no new dispatch"
+      elif [ "$THROTTLED" = "1" ]; then
+        DISPATCH_NOTE="remediation throttled (last run within ${REMEDIATION_THROTTLE_HOURS:-6}h)"
+      else
+        JOB="sre-harness-remediate-$(date +%s)"
+        if kubectl create job "$JOB" --from=cronjob/sre-harness-remediate >/dev/null 2>&1; then
+          DISPATCH_NOTE="remediation dispatched: $JOB"
+        else
+          DISPATCH_NOTE="ERROR: failed to dispatch remediation job"
+        fi
+      fi
+    fi
+
     # Record the verdict in the job log too, so evidence survives alongside
     # the Slack post (kubectl logs job/... is the forensic path).
     printf '%s\n' "$OUT"
-    post_to_slack "$OUT"
+    if [ -n "$DISPATCH_NOTE" ]; then
+      post_to_slack "$OUT
+
+    [$DISPATCH_NOTE]"
+    else
+      post_to_slack "$OUT"
+    fi
 {{- end }}

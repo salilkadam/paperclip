@@ -12,7 +12,7 @@ image:
   # not change silently. Cut a new tag per reviewed upgrade.
   # Built from deploy/harness-image/Dockerfile (npm @deepseek-ai/dsh pinned).
   repository: docker4zerocool/dsh
-  tag: "0.2.0-rc.2-b1"
+  tag: "0.2.0-rc.2-b2"
   pullPolicy: IfNotPresent
   # The dsh repo is private (same Docker Hub account as the bionic image);
   # the secret is created by the bionic-org deploy in the target namespace.
@@ -55,6 +55,21 @@ vault:
     - secretKey: DEEPSEEK_API_KEY
       property: deepseek_api_key
       optional: false
+    # GPU build-host SSH identity (dedicated dshci build user, key pinned
+    # to arrive only from the harness node; verified end-to-end 2026-10-18).
+    # optional so components that never SSH are unaffected if absent.
+    - secretKey: GPU_SSH_KEY
+      property: gpu_ssh_key
+      optional: true
+    - secretKey: GPU_SSH_USER
+      property: gpu_ssh_user
+      optional: true
+    - secretKey: GPU_SSH_PORT
+      property: gpu_ssh_port
+      optional: true
+    - secretKey: GPU_KNOWN_HOSTS
+      property: gpu_known_hosts
+      optional: true
   # Slack notification target. The srenix/slack Vault path holds incoming
   # webhook URLs only (verified 2026-10-16: cha-slack-ceph-alerts,
   # cha-slack-ceph-critical, cha-slack-healthinfo), so the harness posts via
@@ -117,6 +132,31 @@ affinity:
 nodeSelector: {}
 tolerations: []
 
+# Git + build-host coordinates for the code-fix and deploy workflows.
+repo:
+  api: "https://api.github.com"
+  # Fixes ALWAYS go to the fork. The upstream must never receive branches,
+  # PRs, or comments from this harness.
+  fork: "salilkadam/paperclip"
+  upstream: "paperclipai/paperclip"
+  baseBranch: "main"
+  # Labels are the machine-readable handshake between the remediate and
+  # approvals components; PRs this harness opens carry it, and only PRs
+  # with it are ever considered for auto-merge after approval.
+  fixLabel: "dsh-fix"
+
+buildHost:
+  # GPU box; sshd on a nonstandard port (socket-activated). User/port come
+  # from Vault env (GPU_SSH_USER/GPU_SSH_PORT) — this host is the address.
+  host: "192.168.0.10"
+  # Container image used for local CI runs on the build host.
+  ciImage: "node:24-trixie-slim"
+  # Named docker volume for the pnpm store, so CI runs reuse packages
+  # (first run minutes-slower, rest fast). Own residue, self-cleaned host.
+  pnpmVolume: "dshci-pnpm-store"
+  # CI container memory cap (repo pnpm install + build peaks ~8Gi).
+  ciMemory: "12g"
+
 # Proactive health monitor: a CronJob that runs the read-only sweep below
 # through dsh headless and posts the verdict to the Slack health webhook.
 # Deliberately read-only (get/list/logs/curl only): reporting is automated,
@@ -164,3 +204,156 @@ monitor:
     check passed. WARN means degraded but serving (e.g. recent restarts,
     benign-looking errors, stale warnings). FAIL means the API is unhealthy,
     a workload is down/crashlooping, or fresh fatal errors are appearing.
+
+# Remediation: dispatched BY the monitor when a sweep reports WARN/FAIL
+# (see monitor.remediation). One job, ~up to an hour, full engineer
+# latitude within bounded rules: diagnose -> classify -> fix (cluster ops
+# and/or code PR). It stops at an open PR; merging and deploying require
+# the operator's approval via the approvals component.
+remediate:
+  enabled: true
+  # Hard cap: diagnosis + CI on the GPU host can take tens of minutes.
+  activeDeadlineSeconds: 3600
+  # Never dispatch a second remediation if any remediate job started within
+  # this many hours (a chronic WARN must not summon an army).
+  throttleHours: 6
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  prompt: |
+    You are dsh, the external Site Reliability Engineer for the Paperclip
+    platform. The scheduled health monitor reported WARN or FAIL and you
+    were dispatched to remediate. You are an engineer, not a button: reach
+    root causes, fix with code when code is the fix, and report honestly.
+
+    Environment facts:
+    - Read the triggering verdict first:
+        kubectl -n bionicorg get jobs -l app.kubernetes.io/component=monitor --sort-by=.metadata.creationTimestamp
+        kubectl -n bionicorg logs <newest monitor job>
+    - bionicorg runs the platform (deploy/bionic-org). Postgres lives in the
+      pg namespace: NEVER touch pg/ceph namespaces or any database data.
+    - Git fork: salilkadam/paperclip on github.com; credential in $GIT_PAT;
+      clone via https://x-access-token:${GIT_PAT}@github.com/salilkadam/paperclip.git
+      NEVER open branches/PRs/comments against the upstream paperclipai/paperclip.
+    - GPU build host: ssh -p $GPU_SSH_PORT $GPU_SSH_USER@192.168.0.10
+      (key + pinned host keys already in ~/.ssh). Docker works there; it is
+      a build box - still clean up anything you create on it.
+    - Your final chat message is auto-posted to the operator's Slack.
+
+    Method, in order:
+    1. Re-verify current state independently; a transient may already be
+       gone. Never fix what is no longer broken.
+    2. Diagnose with evidence (logs, events, code). State the root cause
+       before touching anything.
+    3. Classify, then act:
+       a) External/transient (upstream 5xx, one-off DB lock timeout, node
+          blip): take no action; record the evidence.
+       b) Cluster-ops issue fixable in runtime state: least-invasive action
+          in the monitored namespaces only (rollout restart > delete a pod
+          that has a controller > restore intended replica count). Never
+          force-delete, never scale bionic-org to 0, no data mutations.
+       c) Code defect: fix it properly.
+          - Clone the fork into this run's scratch dir, branch
+            dshfix/<slug>-$(date -u +%m%d%H%M), minimal root-cause fix in
+            the codebase's style.
+          - Mandatory CI on the GPU build host (GitHub Actions is forbidden
+            for cost): push the branch, then
+              ssh -p $GPU_SSH_PORT $GPU_SSH_USER@192.168.0.10 docker run --rm \
+                -m {{ .Values.buildHost.ciMemory }} \
+                -v {{ .Values.buildHost.pnpmVolume }}:/pnpm -e HOME=/pnpm \
+                {{ .Values.buildHost.ciImage }} sh -c '<clone this branch,
+                corepack enable, pnpm install --frozen-lockfile,
+                pnpm -r typecheck, pnpm test:run, pnpm build>'
+            Allow tens of minutes. CI red -> iterate, or abandon the fix
+            and say so; NEVER open a PR with red CI.
+          - Open the PR into {{ .Values.repo.baseBranch }} of {{ .Values.repo.fork }}
+            with curl against {{ .Values.repo.api }} (no gh CLI). Title:
+            conventional-commit style. Body: follow the repo PR template
+            (Thinking Path / What Changed / Verification / Risks / Model
+            Used / Checklist) including the CI command summary and results.
+            Add label {{ .Values.repo.fixLabel }} (create the label first if
+            missing).
+          - STOP at the PR. You never merge and never deploy. Merge and
+            deploy happen only after the operator approves, via a separate
+            approvals job.
+    4. Final report (last message; auto-posted): verdict re-check, root
+       cause with evidence, classification a/b/c, actions taken, PR link
+       with 2-line why + CI evidence if opened, and what to watch next.
+
+    Hard bans: no secrets in logs or the report; no kubectl writes outside
+    the monitored namespaces; no DB writes; no merges; no deploys; no
+    upstream repo contact.
+
+# Approvals watcher: the operator's approve/decline gate. Every tick it
+# cheaply (no LLM) scans {{ .Values.repo.fork }} for OPEN PRs labeled
+# {{ .Values.repo.fixLabel }} that the approvers list has decided on. No decision ->
+# silent exit. Approved -> dsh runs the merge + GPU-build + helm-deploy
+# runbook. Declined -> PR closed with the reason recorded. The operator
+# approves with a GitHub PR review (Approve) or a PR comment starting
+# "deploy: approve" / "deploy: decline <reason>".
+approvals:
+  enabled: true
+  schedule: "*/15 * * * *"
+  # The scan is seconds; the deploy path minutes. Cap generously.
+  activeDeadlineSeconds: 3600
+  approvers:
+    - "salilkadam"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  prompt: |
+    You are dsh, the external SRE for Paperclip. The operator has just
+    rendered a decision on one of your fix PRs. Decision data (JSON):
+
+    __DECISION_JSON__
+
+    Rules of engagement:
+    - Act ONLY on the PR named in the decision. Never merge anything else;
+      never touch {{ .Values.repo.upstream }}.
+    - Use curl against {{ .Values.repo.api }} with $GIT_PAT (no gh CLI).
+    - Your final message is auto-posted to the operator's Slack.
+
+    If decision is APPROVE:
+    1. Re-verify: PR still open, still labeled {{ .Values.repo.fixLabel }}, head SHA
+       matches, approval still stands, and it is mergeable. If any check
+       fails (e.g. conflicts after main moved), post exactly what blocks it
+       and STOP - do not rebase-merge silently.
+    2. Squash-merge via the API with expected head sha. Record merge sha.
+    3. Update the build clone on the GPU host to {{ .Values.repo.baseBranch }} head = the
+       merge commit; deploy tag = `git rev-parse --short HEAD`.
+    4. Build + push on the GPU build host (ssh -p $GPU_SSH_PORT
+       $GPU_SSH_USER@192.168.0.10): clone {{ .Values.repo.fork }} at that sha into a
+       throwaway dir, run ./deploy/scripts/build-and-push.sh <tag> (it
+       builds, pushes, and cleans the local image itself), then delete the
+       clone dir. Do NOT touch the cluster from the build host.
+    5. Deploy from inside this pod with the harness's own scoped identity:
+       build a kubeconfig from the mounted service-account files under
+       /var/run/secrets/kubernetes.io/serviceaccount (server
+       https://kubernetes.default.svc, namespace {{ .Values.namespace }}), then from
+       the same clone:
+         helm upgrade --install bionic-org deploy/helm/bionic-org \
+           -n {{ .Values.namespace }} --set image.tag=<tag> --history-max 20 \
+           --wait --timeout 10m
+       (never --atomic). Then verify: kubectl rollout status
+       deploy/bionic-org; curl http://bionic-org.{{ .Values.namespace }}.svc/api/health.
+    6. Report: PR link + merge sha, image tag, helm old-rev -> new-rev
+       (helm history --max 3), rollout + health result. On ANY failure: do
+       not blind-rollback; post the failing state, helm history tail, and
+       the exact suggested rollback command, loudly marked FAILED.
+
+    If decision is DECLINE:
+    1. Comment on the PR recording the decline reason, then close it via
+       the API.
+    2. Report what was declined and why, so the finding is not lost.
+
+    Hard bans: no secrets in the report; no merges outside the decision;
+    no cluster writes from the GPU host; if deploy fails, report rather
+    than improvise.

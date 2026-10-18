@@ -1,0 +1,113 @@
+{{- if .Values.approvals.enabled }}
+# Approvals watcher CronJob (see approvals-configmap for the two-stage
+# design). Usually a few seconds of API polling and a silent exit; it
+# becomes an engineer only when the operator approves or declines.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "sre-harness.fullname" . }}-approvals
+  namespace: {{ include "sre-harness.namespace" . }}
+  labels:
+    {{- include "sre-harness.labels" . | nindent 4 }}
+    app.kubernetes.io/component: approvals
+spec:
+  schedule: {{ .Values.approvals.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.approvals.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .Values.monitor.ttlSecondsAfterFinished }}
+      # Deploy paths must never double-run; the next tick retries.
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: {{ include "sre-harness.name" . }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: approvals
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ .Values.serviceAccount.name }}
+          automountServiceAccountToken: false
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+          affinity:
+            {{- toYaml .Values.affinity | nindent 12 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: approvals
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - /bin/sh
+                - /config/run.sh
+              env:
+                - name: GPUAI_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.gpuai.apiKeySecret }}
+                      key: {{ .Values.gpuai.apiKeySecretKey }}
+                      optional: true
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "sre-harness.fullname" . }}-slack
+                      key: SLACK_WEBHOOK_URL
+                      optional: true
+              envFrom:
+                # GIT_PAT (GitHub API + clone + merge) and GPU SSH identity.
+                - secretRef:
+                    name: {{ include "sre-harness.fullname" . }}-config
+                    optional: true
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                  readOnly: true
+                - name: sa-token
+                  mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                  readOnly: true
+                - name: dsh-home
+                  mountPath: /home/node/.dsh
+              resources:
+                {{- toYaml .Values.approvals.resources | nindent 16 }}
+          volumes:
+            - name: config
+              configMap:
+                name: {{ include "sre-harness.fullname" . }}-approvals-config
+            - name: sa-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      expirationSeconds: 3600
+                  - configMap:
+                      name: kube-root-ca.crt
+                      items:
+                        - key: ca.crt
+                          path: ca.crt
+                  - downwardAPI:
+                      items:
+                        - path: namespace
+                          fieldRef:
+                            fieldPath: metadata.namespace
+            - name: dsh-home
+              emptyDir: {}
+{{- end }}

@@ -85,6 +85,11 @@ spec:
                       name: {{ include "sre-harness.fullname" . }}-slack
                       key: SLACK_WEBHOOK_URL
                       optional: true
+                # Dispatch policy for the WARN/FAIL -> remediate trigger.
+                - name: REMEDIATION_ENABLED
+                  value: {{ .Values.remediate.enabled | quote }}
+                - name: REMEDIATION_THROTTLE_HOURS
+                  value: {{ .Values.remediate.throttleHours | quote }}
               volumeMounts:
                 - name: config
                   mountPath: /config

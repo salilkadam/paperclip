@@ -1,0 +1,136 @@
+{{- if .Values.approvals.enabled }}
+# Approvals watcher. Cheap no-LLM scan every tick; an LLM deploy engineer
+# is only invoked when the operator has actually decided on a dsh-fix PR.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sre-harness.fullname" . }}-approvals-config
+  namespace: {{ include "sre-harness.namespace" . }}
+  labels:
+    {{- include "sre-harness.labels" . | nindent 4 }}
+    app.kubernetes.io/component: approvals
+data:
+  approvals-prompt.md: |
+    {{- tpl .Values.approvals.prompt . | nindent 4 }}
+  gpuai.patch.yml: |
+    {{- include "sre-harness.gpuaiPatch" . | nindent 4 }}
+  scan.js: |
+    // Prints exactly one JSON object: either {"decision":null} or a
+    // decision {decision, number, head_sha, title, by}. No secrets, ever.
+    const base = process.env.GITHUB_API || "https://api.github.com";
+    const repo = process.env.GH_REPO;
+    const label = process.env.GH_LABEL;
+    const approvers = (process.env.GH_APPROVERS || "").split(",");
+    const tok = process.env.GIT_PAT;
+
+    async function gh(path, opts) {
+      const r = await fetch(base + path, {
+        method: (opts && opts.method) || "GET",
+        headers: {
+          authorization: "Bearer " + tok,
+          accept: "application/vnd.github+json",
+          "user-agent": "sre-harness-approvals",
+          "x-github-api-version": "2022-11-28",
+        },
+        body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(path + " -> HTTP " + r.status);
+      return r.json();
+    }
+
+    async function main() {
+      // Self-provision the handshake label the first time.
+      const existing = await gh("/repos/" + repo + "/labels/" + encodeURIComponent(label));
+      if (!existing) {
+        await gh("/repos/" + repo + "/labels", {
+          method: "POST",
+          body: { name: label, color: "0e8a16",
+            description: "Fix proposed by the Paperclip SRE harness; deploy gated on operator approval" },
+        });
+      }
+      const items = await gh("/repos/" + repo + "/issues?state=open&labels=" + encodeURIComponent(label) + "&per_page=20") || [];
+      const decisions = [];
+      for (const it of items) {
+        if (!it.pull_request) continue;
+        const pr = await gh("/repos/" + repo + "/pulls/" + it.number);
+        if (!pr || pr.state !== "open") continue;
+        const reviews = await gh("/repos/" + repo + "/pulls/" + it.number + "/reviews") || [];
+        const comments = await gh("/repos/" + repo + "/issues/" + it.number + "/comments?per_page=100") || [];
+        const isOp = (u) => u && approvers.includes(u.login);
+        const declined = comments.find((c) => isOp(c.user) && /^deploy:\s*decline\b/i.test(c.body.trim()));
+        const approved =
+          reviews.find((r) => r.state === "APPROVED" && isOp(r.user)) ||
+          comments.find((c) => isOp(c.user) && /^deploy:\s*approve\b/i.test(c.body.trim()));
+        // decline beats approve if both exist (changed mind wins).
+        if (declined) decisions.push({ decision: "decline", number: it.number, head_sha: pr.head.sha, title: pr.title, by: declined.user.login });
+        else if (approved) decisions.push({ decision: "approve", number: it.number, head_sha: pr.head.sha, title: pr.title, by: approved.user.login, mergeable: pr.mergeable });
+      }
+      if (decisions.length === 0) { console.log(JSON.stringify({ decision: null })); return; }
+      // Oldest decided PR first (API returns newest-first); one action per tick.
+      console.log(JSON.stringify(decisions[decisions.length - 1]));
+    }
+
+    main().catch((e) => { console.error("[approvals-scan] " + e.message); process.exit(2); });
+  run.sh: |
+    #!/bin/sh
+    set -eu
+
+    export HOME=/home/node/.dsh
+    export GITHUB_API="{{ .Values.repo.api }}"
+    export GH_REPO="{{ .Values.repo.fork }}"
+    export GH_LABEL="{{ .Values.repo.fixLabel }}"
+    export GH_APPROVERS="{{ join "," .Values.approvals.approvers }}"
+    {{- include "sre-harness.sshBootstrap" . | nindent 4 }}
+
+    post_to_slack() {
+      SLACK_TEXT="$1" node -e '
+        const url = process.env.SLACK_WEBHOOK_URL;
+        const text = process.env.SLACK_TEXT;
+        if (!url) {
+          console.log("[approvals] no webhook configured; report:\n" + text);
+          process.exit(0);
+        }
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text }),
+        })
+          .then((r) => {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            console.log("[approvals] report posted to slack");
+          })
+          .catch((e) => {
+            console.error("[approvals] slack post failed: " + e.message);
+            console.log("[approvals] report:\n" + text);
+          });
+      '
+    }
+
+    # Stage 1: zero-token scan. Quiet exit when nothing is decided.
+    DECISION="$(node /config/scan.js)"
+    echo "decision: $DECISION"
+    case "$DECISION" in
+      *'"decision":null'*) exit 0 ;;
+    esac
+
+    # Stage 2: the operator decided; run the engineer (deploy or close).
+    TASK="$(node -e '
+      const fs = require("fs");
+      const tpl = fs.readFileSync("/config/approvals-prompt.md", "utf8");
+      process.stdout.write(tpl.replace("__DECISION_JSON__", process.argv[1]));
+    ' "$DECISION")"
+
+    set +e
+    OUT="$(dsh --profile approvals --from-default-profile headless \
+             --patch /config/gpuai.patch.yml "$TASK" 2>&1)"
+    RC=$?
+    set -e
+
+    printf '%s\n' "$OUT"
+    if [ "$RC" -ne 0 ]; then
+      post_to_slack "APPROVAL ACTION FAILED (dsh exit $RC) for $DECISION - partial state possible: $OUT"
+      exit 1
+    fi
+    post_to_slack "APPROVAL ACTION REPORT ($DECISION): $OUT"
+{{- end }}
