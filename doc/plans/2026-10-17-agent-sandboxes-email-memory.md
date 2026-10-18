@@ -649,3 +649,60 @@ entirely through the Paperclip product surface:
 - Sandbox sharing (one warm container per company/agent reused across runs):
   already covered by `reuseLease:true` per lease; a shared-team-sandbox mode would be
   a follow-up config on top of the same plugin (namePrefix + no per-run destroy).
+
+## 13. Ship record — PR #38, merge, deploy (2026-10-18 ~04:50 UTC)
+
+### 13.1 What shipped
+
+- **PR #38** `feat(plugins): add ssh-docker sandbox provider` — squash-merged to `main`
+  (`13c96c5c1`). Contents: the full `packages/plugins/sandbox-providers/ssh-docker`
+  package (now daytona-convention complete: `tsconfig` `paths` for the SDK, standalone
+  `pnpm-workspace.yaml`, README, lockfile, proven `image/Dockerfile`),
+  `BUNDLED_PLUGIN_CATALOG` entry `ssh-docker`, `CLOUD_BUNDLED_PLUGINS="daytona ssh-docker"`,
+  `deploy/scripts/brev-heartbeat.sh`, and this plan doc.
+- **Deployed:** `main` head `81a2ba82c` (includes #38; the SRE harness merged #39 during
+  this session) → `docker4zerocool/bionic:81a2ba82c` → helm rev **47**, pod
+  `bionic-org-79f548d6c9-jtsm9`, image tag == main short SHA. Post-deploy checks:
+  plugin `ready`, env `4123fb2c…` probe `ok` (fresh lease `paperclip-4123fb2c-895e4494`,
+  node v24.22.0), WebEngineer `defaultEnvironmentId` intact → **permanent binding (b) is
+  durable** through deploys.
+- Plugin image choice: committed `image/Dockerfile` reconciled to the *proven*
+  `.scratch/Dockerfile.sandbox-opencode` recipe (opencode-only); the richer
+  claude/codex variant stayed untested and was dropped.
+
+### 13.2 Build/deploy gotchas learned (operational record)
+
+1. **Devcontainer cannot build the image.** Its cgroup caps at 48 GiB; Zed language
+   servers held ~33 GiB, so the root `pnpm install --frozen-lockfile` layer died with
+   `cannot allocate memory` twice. **Build host = `paperclip-linux`** (`~/paperclip-build`,
+   clone `-b main` — repo default branch is `master`, clone must say `-b main`). Host
+   BuildKit cache made the whole build+push ~5 min.
+2. `build-and-push.sh` **deletes the local image after push**; its short SHA is 7 chars
+   on the host, while `deploy.sh` uses the (9-char) **local** `git rev-parse --short HEAD`.
+   Alias-push the extra tag (`docker tag …:81a2ba8 …:81a2ba82c && docker push …`) or pass
+   through, otherwise `deploy.sh` deploys a nonexistent tag.
+3. **`deploy.sh --timeout 5m` is too short** for a cold image pull (~100 s) + boot: first
+   attempt rolled back (rev 45 failed → rollback 46). Manual re-run with `--timeout 15m`
+   succeeded (rev 47). Consider raising the script timeout.
+
+### 13.3 The `/tmp` install incident (durability fix, keep in mind forever)
+
+The live plugin install recorded `package_path=/tmp/…` (the pod's writable layer). The
+rollout wiped `/tmp` → `Activation failed: Package root not found`. Fixed by copying the
+bundle to the **PVC** at `/paperclip/bundles/ssh-docker`, updating `plugins.package_path`
+in-place (row `0375dec5-…`), and `POST /api/plugins/:id/enable`. **Any local-path plugin
+install on this instance must live under `/paperclip` to survive restarts.** (Upstream
+could harden this by rejecting `isLocalPath` installs outside persistent roots.)
+
+### 13.4 Local gate notes
+
+- `cargo` is not installed here → `pnpm -r typecheck` / `pnpm test:run` / `pnpm build`
+  cannot run repo-wide (`paperclip-runner` + `server` depend on the Rust vendor build).
+  Gate actually run: plugin 22/22; `server` `tsc --noEmit` clean;
+  `cloud-image-bundled-plugins` + `distribution-plugin-catalog` + `bundled-plugins` green;
+  all 54 `plugin-*`/`environment-*` server suites green (`plugin-orchestration-apis`
+  needs a standalone run — 90 s, parallel-load flake only). Docker image build (which
+  has the Rust stage) doubles as the `build` gate.
+- `pnpm test:run` repo-wide exceeded 40 min on this box (serial stable runner + real-PG
+  integration suites). Killed; orphaned `tsx` servers from a killed run must be reaped
+  (`pgrep -f tsx`) or they starve everything.
