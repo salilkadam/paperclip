@@ -291,6 +291,24 @@ async function persistConfigSecretRefs(input: {
   return nextConfig;
 }
 
+/**
+ * Environments are instance-scoped and every company can use them, but secrets
+ * are company-scoped. `replaceSecretRefsForInstanceTarget` writes each
+ * config-derived binding under the company that owns the secret. So a run in a
+ * different company must resolve the secret under the owning company, not the
+ * run company, or the run fails with "Secret must belong to same company".
+ * The binding check still runs under the owning company, so only a secret that
+ * is bound to this environment at this config path resolves.
+ */
+async function environmentSecretOwnerCompanyId(
+  db: Db,
+  fallbackCompanyId: string,
+  secretId: string,
+): Promise<string> {
+  const secret = await secretService(db).getById(secretId);
+  return secret?.companyId ?? fallbackCompanyId;
+}
+
 async function resolveConfigSecretRefsForRuntime(input: {
   db: Db;
   companyId: string;
@@ -315,15 +333,20 @@ async function resolveConfigSecretRefsForRuntime(input: {
     nextConfig = writeConfigValueAtPath(
       nextConfig,
       path,
-      await secrets.resolveSecretValue(input.companyId, trimmed, "latest", {
-        consumerType: "environment",
-        consumerId: input.context.consumerId,
-        actorType: "system",
-        actorId: null,
-        issueId: input.context.issueId ?? null,
-        heartbeatRunId: input.context.heartbeatRunId ?? null,
-        configPath: path,
-      }),
+      await secrets.resolveSecretValue(
+        await environmentSecretOwnerCompanyId(input.db, input.companyId, trimmed),
+        trimmed,
+        "latest",
+        {
+          consumerType: "environment",
+          consumerId: input.context.consumerId,
+          actorType: "system",
+          actorId: null,
+          issueId: input.context.issueId ?? null,
+          heartbeatRunId: input.context.heartbeatRunId ?? null,
+          configPath: path,
+        },
+      ),
     );
   }
   return nextConfig;
@@ -678,7 +701,7 @@ export async function resolveEnvironmentDriverConfigForRuntime(
       config: {
         ...parsed.config,
         privateKey: await secrets.resolveSecretValue(
-          companyId,
+          await environmentSecretOwnerCompanyId(db, companyId, parsed.config.privateKeySecretRef.secretId),
           parsed.config.privateKeySecretRef.secretId,
           parsed.config.privateKeySecretRef.version ?? "latest",
           {
@@ -766,7 +789,7 @@ export async function resolveSandboxCleanupConfigSecrets(
     nextConfig = writeConfigValueAtPath(
       nextConfig,
       path,
-      await secrets.resolveSecretValueForSandboxCleanup(companyId, trimmed, "latest", {
+      await secrets.resolveSecretValueForSandboxCleanup(await environmentSecretOwnerCompanyId(db, companyId, trimmed), trimmed, "latest", {
         configPath: path,
         issueId: context?.issueId ?? null,
         heartbeatRunId: context?.heartbeatRunId ?? null,

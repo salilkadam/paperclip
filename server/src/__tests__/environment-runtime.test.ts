@@ -4584,6 +4584,34 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
       template: "base",
       apiKey: "resolved-provider-key",
     });
+
+    // Environments are instance-scoped. A run in another company resolves the
+    // bound secret under the company that owns it.
+    const otherCompanyId = randomUUID();
+    await db.insert(companies).values({
+      id: otherCompanyId,
+      name: "Other",
+      issuePrefix: `OT${otherCompanyId.slice(0, 4).toUpperCase()}`,
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const fromOtherCompany = await resolveEnvironmentDriverConfigForRuntime(db, otherCompanyId, environment);
+    expect(fromOtherCompany.config).toMatchObject({ apiKey: "resolved-provider-key" });
+
+    // The owner company's binding is still required: a secret that is not bound
+    // to this environment does not resolve, in any company.
+    const unboundSecret = await secretService(db).create(companyId, {
+      name: `unbound-plugin-api-key-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "must-not-resolve",
+    });
+    const unboundEnvironment = {
+      ...environment,
+      config: { ...providerConfig, apiKey: { type: "secret_ref", secretId: unboundSecret.id, version: "latest" } },
+    };
+    await expect(resolveEnvironmentDriverConfigForRuntime(db, otherCompanyId, unboundEnvironment))
+      .rejects.toMatchObject({ details: { code: "binding_missing" } });
   });
 
   it("waits briefly for a ready sandbox provider plugin worker to come online", async () => {
