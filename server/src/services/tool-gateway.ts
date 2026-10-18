@@ -458,6 +458,64 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+export type ToolConnectionProbeResult =
+  | { ok: true }
+  | { ok: false; reasonCode: string; message: string };
+
+const UPSTREAM_REAUTHORIZATION_PATTERN =
+  /\b(unauthorized_client|invalid_grant|invalid_client)\b|token has been expired or revoked/i;
+const MAX_PROBE_MESSAGE_LENGTH = 300;
+
+function probeFailureMessage(text: string) {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > MAX_PROBE_MESSAGE_LENGTH
+    ? `${compact.slice(0, MAX_PROBE_MESSAGE_LENGTH)}…`
+    : compact;
+}
+
+/**
+ * Classify a normalized remote tool result for a health probe. Some MCP
+ * servers report an upstream failure as a normal result with
+ * `{ "success": false }` in the text content, not as `isError`. A probe must
+ * treat both forms as a failure.
+ */
+export function classifyToolProbeResult(result: unknown): ToolConnectionProbeResult {
+  const record = asRecord(result);
+  const content = typeof record?.content === "string" ? record.content : "";
+  const data = asRecord(record?.data);
+  const structured = asRecord(data?.structuredContent);
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = asRecord(JSON.parse(content));
+  } catch {
+    parsed = null;
+  }
+  const transportError = Boolean(record?.error) || data?.isError === true;
+  if (!transportError && (parsed?.success === true || structured?.success === true)) {
+    return { ok: true };
+  }
+  const reportedFailure =
+    transportError ||
+    parsed?.success === false ||
+    structured?.success === false ||
+    (parsed !== null && parsed.error !== undefined && parsed.error !== null && parsed.success !== true);
+  if (UPSTREAM_REAUTHORIZATION_PATTERN.test(content)) {
+    return {
+      ok: false,
+      reasonCode: "upstream_reauthorization_required",
+      message: probeFailureMessage(content),
+    };
+  }
+  if (reportedFailure) {
+    return {
+      ok: false,
+      reasonCode: "tool_error",
+      message: probeFailureMessage(content || "The tool returned an error result."),
+    };
+  }
+  return { ok: true };
+}
+
 const sensitivePassthroughHeaderPattern =
   /(^|[-_])(auth|authorization|cookie|secret|session|token)([-_]|$)|(^|[-_])api[-_]?key([-_]|$)/i;
 const sensitivePassthroughHeaderNames = new Set([
@@ -9208,6 +9266,80 @@ export function createToolGatewayService(
         matchedPolicyIds: accessDecision.matchedPolicyIds,
         timeoutMs: input.timeoutMs,
       });
+    },
+
+    /**
+     * Deep health probe for the connection health sweep. It calls one
+     * board-configured tool (`config.healthProbes`) through the same grant,
+     * credential, and dispatch path that agents use. `tools/list` alone does
+     * not exercise upstream per-account tokens, so a connection can report
+     * `ok` while every real call fails.
+     *
+     * The probe skips the policy engine and records no invocation. It never
+     * creates an approval request and never consumes an agent rate limit.
+     */
+    async probeConnectionTool(input: {
+      companyId: string;
+      connectionId: string;
+      toolName: string;
+      parameters?: Record<string, unknown>;
+      agentId?: string | null;
+      timeoutMs?: number;
+    }): Promise<ToolConnectionProbeResult> {
+      try {
+        if (input.agentId) await assertAgentInCompany(input.companyId, input.agentId);
+        const tool = (
+          await connectedMcpToolsForConnection(input.companyId, input.connectionId)
+        ).find(
+          (candidate) =>
+            candidate.name === input.toolName ||
+            candidate.upstreamToolName === input.toolName,
+        );
+        if (!tool) {
+          return {
+            ok: false,
+            reasonCode: "tool_not_found",
+            message: `Health probe tool "${input.toolName}" is not an enabled tool on this connection.`,
+          };
+        }
+        if (tool.providerType !== "mcp_remote_http" && tool.providerType !== "provider_rest") {
+          return {
+            ok: false,
+            reasonCode: "unsupported_probe_transport",
+            message: `Health probe tool "${input.toolName}" is not a remote MCP tool.`,
+          };
+        }
+        const session: ToolGatewaySession = {
+          id: "health-probe",
+          token: "health-probe",
+          companyId: input.companyId,
+          agentId: input.agentId ?? null,
+          runId: null,
+          issueId: null,
+          projectId: null,
+          actorType: "system",
+          actorId: "tool_health_probe",
+          responsibleUserId: null,
+          createdAt: new Date(),
+          expiresAt: new Date(Date.now() + DEFAULT_SESSION_TTL_MS),
+        };
+        const parameters = await governedToolArguments(session, tool, input.parameters ?? {});
+        const execution = await executeRemoteHttpTool(
+          session,
+          tool,
+          parameters,
+          timeoutMs(input.timeoutMs),
+          randomUUID(),
+        );
+        return classifyToolProbeResult(execution.result);
+      } catch (error) {
+        return {
+          ok: false,
+          reasonCode:
+            error instanceof ToolGatewayHttpError ? error.reasonCode : "tool_execution_failed",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
 
     /**

@@ -482,6 +482,10 @@ type FakeMcpRequest = {
   body: Record<string, unknown> | null;
 };
 
+function asTestRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 async function startFakeRemoteMcpServer(handler: (request: FakeMcpRequest) => Promise<{
   status?: number;
   headers?: Record<string, string>;
@@ -648,6 +652,57 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
       const testEvents = await db.select().from(toolCallEvents).where(eq(toolCallEvents.invocationId, testCall.invocationId));
       expect(testEvents.some(event => event.eventType === "call_failed")).toBe(true);
       expect(testEvents.some(event => event.eventType === "call_completed")).toBe(false);
+    } finally {
+      await remote.close();
+    }
+  });
+
+  it("runs a health probe through the agent dispatch path and detects upstream account failures", async () => {
+    const company = await createCompany(db);
+    const otherCompany = await createCompany(db);
+    const remote = await startFakeRemoteMcpServer(({ body }) => {
+      const account = asTestRecord(asTestRecord(body?.params).arguments).account;
+      const text = account === "stale"
+        ? JSON.stringify({ success: false, error: "Token refresh failed: unauthorized_client" })
+        : JSON.stringify({ success: true, files: [{ name: "invalid_grant notes.txt" }] });
+      return { body: { jsonrpc: "2.0", id: body?.id, result: { content: [{ type: "text", text }] } } };
+    });
+    try {
+      const { connection } = await createRemoteMcpTool(db, company.id, {
+        url: remote.url, toolName: "gw_list_files", riskLevel: "read",
+      });
+      const gateway = createTestToolGatewayService(db);
+      const probe = (overrides: Partial<Parameters<typeof gateway.probeConnectionTool>[0]> = {}) =>
+        gateway.probeConnectionTool({
+          companyId: company.id,
+          connectionId: connection.id,
+          toolName: "gw_list_files",
+          parameters: { account: "fresh" },
+          ...overrides,
+        });
+
+      await expect(probe()).resolves.toEqual({ ok: true });
+      await expect(probe({ parameters: { account: "stale" } })).resolves.toEqual({
+        ok: false,
+        reasonCode: "upstream_reauthorization_required",
+        message: expect.stringContaining("unauthorized_client"),
+      });
+      await expect(probe({ toolName: "gw_delete_everything" })).resolves.toMatchObject({
+        ok: false,
+        reasonCode: "tool_not_found",
+      });
+      await expect(probe({ companyId: otherCompany.id })).resolves.toMatchObject({
+        ok: false,
+        reasonCode: "tool_not_found",
+      });
+
+      const toolCalls = remote.requests.filter((request) => request.body?.method === "tools/call");
+      expect(toolCalls.map((request) => asTestRecord(request.body?.params).name)).toEqual([
+        "gw_list_files",
+        "gw_list_files",
+      ]);
+      // A probe never enters the policy engine, so it leaves no invocation or approval.
+      expect(await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, company.id))).toEqual([]);
     } finally {
       await remote.close();
     }

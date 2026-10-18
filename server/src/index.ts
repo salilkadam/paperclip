@@ -86,6 +86,7 @@ import {
   toolAccessService,
   workspaceOperationService,
 } from "./services/index.js";
+import type { ToolConnectionProbeRunner } from "./services/tool-access.js";
 import { questionResponseDeliveryService } from "./services/question-response-delivery.js";
 import { deliverNativeQuestionResponse } from "./services/native-runtime/native-question-bridge.js";
 import { queueIssueAssignmentWakeup } from "./services/issue-assignment-wakeup.js";
@@ -1290,6 +1291,10 @@ async function startServerWithDatabaseTeardown(
       }));
   };
 
+  // Deep health probes run through the gateway, so they use the same grant and
+  // credential path as agent tool calls.
+  const toolHealthProbe: ToolConnectionProbeRunner = (input) =>
+    app.locals.toolGateway.probeConnectionTool(input);
   await chatCompletionDeliveries.sweepPending().catch((err) => logger.error({ err }, "startup chat completion delivery recovery failed"));
   await connectionDeliveries.sweepPending();
   await app.locals.toolGateway.sweepActionReviews().catch((err: unknown) => logger.error({ err }, "startup tool review recovery failed"));
@@ -1589,7 +1594,7 @@ async function startServerWithDatabaseTeardown(
       logger.warn({ ...setupCleanup }, "startup environment customImage setup cleanup changed sessions");
     }
 
-    const toolHealthSweep = await tools.sweepConnectionHealth();
+    const toolHealthSweep = await tools.sweepConnectionHealth({ toolProbe: toolHealthProbe });
     if (toolHealthSweep.failed > 0) {
       logger.warn({ ...toolHealthSweep }, "startup tool connection health sweep found failing connections");
     }
@@ -1736,7 +1741,7 @@ async function startServerWithDatabaseTeardown(
 
         if (heartbeatSchedulerStopped) return;
         trackHeartbeatSchedulerWork(tools
-          .sweepConnectionHealth()
+          .sweepConnectionHealth({ toolProbe: toolHealthProbe })
           .then((swept) => {
             if (swept.failed > 0) {
               logger.warn({ ...swept }, "periodic tool connection health sweep found failing connections");

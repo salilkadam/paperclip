@@ -246,6 +246,47 @@ and `fix-gws-grant-credential-ref-sql.sh` do both and are idempotent. Verify wit
 `deploy/scripts/prove-drive-list-e2e.sh` (read path) and
 `prove-drive-write-e2e.sh` (write path).
 
+### Deep health probes (keep upstream tokens in use)
+
+A plain health check sends only `tools/list`. That call does not use the
+per-account Google refresh tokens, so a connection can show `ok` while every
+real Drive call fails with `unauthorized_client`. To find this early, set
+`config.healthProbes` on the connection. Each probe is one read-only tool call:
+
+```json
+"healthProbes": [
+  {
+    "label": "Drive: salil-bionicaisolutions",
+    "toolName": "gw_list_files",
+    "arguments": {
+      "tenant_id": "base",
+      "account": "salil-bionicaisolutions",
+      "query": "'1MmJAx3Rkag90KSSlFISiVvkuWwvO38dK' in parents and trashed=false",
+      "max_results": 1
+    }
+  }
+]
+```
+
+- The 15-minute connection health sweep and the board **Check health** action
+  run each probe through the tool gateway. The probe uses the same grant,
+  credentials, and dispatch path as an agent call.
+- A probe skips the policy engine. It records no invocation, creates no
+  approval, and uses no agent rate limit.
+- A failed probe sets the connection health to `error` with the probe label and
+  the provider message. The connection then shows in apps-needing-attention.
+  `unauthorized_client`, `invalid_grant`, and `invalid_client` add a re-consent
+  hint.
+- The regular call also keeps each refresh token in use. Google expires a
+  refresh token after 6 months without use.
+- A probe cannot renew a revoked consent. A person must re-consent with
+  `deploy/scripts/mint-gws-consent-url.mjs <account>`.
+- If the OAuth consent screen for project `bionic-core-503216` has publishing
+  status "Testing", Google expires refresh tokens after 7 days. Set it to
+  "In production" (or audience "Internal") to stop weekly re-consent.
+- Maximum 5 probes for each connection. Use one probe for each account that
+  agents use.
+
 ### Consent: "Google hasn't verified this app" / blocked
 
 The default scope preset includes `gmail.modify` and `gmail.send`, which are

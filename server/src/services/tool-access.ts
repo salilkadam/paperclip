@@ -2830,11 +2830,59 @@ function isOAuthEndpointRejection(error: unknown): boolean {
   return typeof code === "string" && code.endsWith("_endpoint_rejected");
 }
 
+const MAX_CONNECTION_HEALTH_PROBES = 5;
+
+/**
+ * A board-configured deep health probe (`config.healthProbes`). The health
+ * check calls this read-only tool through the agent dispatch path, so it
+ * exercises upstream per-account tokens that `tools/list` never touches.
+ */
+export interface ToolConnectionHealthProbe {
+  toolName: string;
+  arguments: Record<string, unknown>;
+  label: string;
+  agentId: string | null;
+  timeoutMs?: number;
+}
+
+export type ToolConnectionProbeRunner = (input: {
+  companyId: string;
+  connectionId: string;
+  toolName: string;
+  parameters: Record<string, unknown>;
+  agentId: string | null;
+  timeoutMs?: number;
+}) => Promise<{ ok: true } | { ok: false; reasonCode: string; message: string }>;
+
+export function readConnectionHealthProbes(config: unknown): ToolConnectionHealthProbe[] {
+  const raw = asRecord(config).healthProbes;
+  if (!Array.isArray(raw)) return [];
+  const probes: ToolConnectionHealthProbe[] = [];
+  for (const entry of raw) {
+    const record = asRecord(entry);
+    const toolName = typeof record.toolName === "string" ? record.toolName.trim() : "";
+    if (!toolName) continue;
+    const timeoutMs = typeof record.timeoutMs === "number" && Number.isFinite(record.timeoutMs)
+      ? record.timeoutMs
+      : undefined;
+    probes.push({
+      toolName,
+      arguments: asRecord(record.arguments),
+      label: typeof record.label === "string" && record.label.trim() ? record.label.trim() : toolName,
+      agentId: typeof record.agentId === "string" && record.agentId.trim() ? record.agentId.trim() : null,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+    if (probes.length >= MAX_CONNECTION_HEALTH_PROBES) break;
+  }
+  return probes;
+}
+
 function healthFailureHttpStatus(failure: {
   status: ToolConnectionHealthStatus;
   code: string;
 }): number {
   if (failure.status === "missing_secret") return 422;
+  if (failure.code === "health_probe_failed") return 422;
   if (failure.code === "oauth_challenge") return 422;
   if (failure.code === "oauth_refresh_missing") return 422;
   if (failure.code === "oauth_reauthorization_required") return 422;
@@ -2868,6 +2916,9 @@ function sanitizeHttpFailure(error: unknown): {
       return { status: code === "grant_credential_invalid" ? "missing_secret" : "degraded", message: error.message, code };
     }
     if (code === "slack_mcp_access_disabled") {
+      return { status: "error", message: error.message, code };
+    }
+    if (code === "health_probe_failed") {
       return { status: "error", message: error.message, code };
     }
     if (code === "user_authorization_required") {
@@ -7117,13 +7168,47 @@ export function toolAccessService(
     return updated;
   }
 
+  /**
+   * Run the board-configured deep probes. A failure throws
+   * `health_probe_failed`, so the connection health becomes `error` and the
+   * board sees it in apps-needing-attention. A regular probe call also keeps
+   * upstream refresh tokens in use, so idle tokens do not expire.
+   */
+  async function runConnectionHealthProbes(
+    connection: typeof toolConnections.$inferSelect,
+    toolProbe: ToolConnectionProbeRunner,
+  ): Promise<number> {
+    const probes = readConnectionHealthProbes(connection.config);
+    for (const probe of probes) {
+      const result = await toolProbe({
+        companyId: connection.companyId,
+        connectionId: connection.id,
+        toolName: probe.toolName,
+        parameters: probe.arguments,
+        agentId: probe.agentId,
+        ...(probe.timeoutMs === undefined ? {} : { timeoutMs: probe.timeoutMs }),
+      });
+      if (result.ok) continue;
+      const hint =
+        result.reasonCode === "upstream_reauthorization_required"
+          ? " The upstream account needs re-consent. Reconnect it, then run the health check again."
+          : "";
+      throw unprocessable(
+        `Health probe "${probe.label}" failed: ${result.message}${hint}`,
+        { code: "health_probe_failed", probe: probe.label, reasonCode: result.reasonCode },
+      );
+    }
+    return probes.length;
+  }
+
   async function checkConnectionHealth(
     connectionId: string,
     actor?: ActorInfo,
-    options: { allowUnauthenticatedProbe?: boolean } = {},
+    options: { allowUnauthenticatedProbe?: boolean; toolProbe?: ToolConnectionProbeRunner } = {},
   ): Promise<ToolConnectionHealthCheckResult> {
     const connection = await getConnectionRow(connectionId);
     if (connection.connectionPurpose === "ai") return { connection: toConnection(connection), runtimeSlot: null };
+    let passedProbeCount = 0;
     try {
       assertSupportedConnection(connection);
       const config = asRecord(connection.config);
@@ -7186,6 +7271,9 @@ export function toolAccessService(
               ? {}
               : undefined;
         await remoteTools(connection, credentialHeaders, actor);
+        if (options.toolProbe && connection.status === "active" && connection.enabled) {
+          passedProbeCount = await runConnectionHealthProbes(connection, options.toolProbe);
+        }
       } else if (connection.transport === "local_stdio") {
         await resolveCredentialHeaders(connection);
         await stdioTemplateId(connection.companyId, connection.config);
@@ -7205,7 +7293,9 @@ export function toolAccessService(
             ? "AgentMail API key is connected."
             : connection.transport === "local_stdio"
               ? "Approved stdio template is ready."
-              : "Remote MCP server responded to tools/list.",
+              : passedProbeCount > 0
+                ? `Remote MCP server responded to tools/list and ${passedProbeCount} health probe${passedProbeCount === 1 ? "" : "s"} passed.`
+                : "Remote MCP server responded to tools/list.",
       );
       const runtimeSlot = await ensureRuntimeSlot(updated);
       await audit({
@@ -7722,7 +7812,7 @@ export function toolAccessService(
   }
 
   async function sweepConnectionHealth(
-    input: { staleAfterMs?: number; limit?: number } = {},
+    input: { staleAfterMs?: number; limit?: number; toolProbe?: ToolConnectionProbeRunner } = {},
   ) {
     const generatedAt = now();
     const staleAfterMs = input.staleAfterMs ?? 15 * 60 * 1000;
@@ -7760,10 +7850,14 @@ export function toolAccessService(
     const failedConnectionIds: string[] = [];
     for (const connection of due) {
       try {
-        await checkConnectionHealth(connection.id, {
-          actorType: "system",
-          actorId: "tool_health_sweep",
-        });
+        await checkConnectionHealth(
+          connection.id,
+          {
+            actorType: "system",
+            actorId: "tool_health_sweep",
+          },
+          input.toolProbe ? { toolProbe: input.toolProbe } : {},
+        );
         healthy += 1;
       } catch {
         failed += 1;

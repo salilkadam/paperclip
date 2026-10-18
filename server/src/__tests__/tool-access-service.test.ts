@@ -17683,6 +17683,74 @@ describeEmbeddedPostgres("tool access service", () => {
     });
   });
 
+  it("runs configured deep health probes and marks the connection unhealthy when an upstream account fails", async () => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "paperclip-catalog-refresh",
+          result: { tools: [{ name: "gw_list_files", description: "List files.", annotations: { readOnlyHint: true } }] },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ));
+    const connection = await service.createConnection(company.id, {
+      name: "Probed remote",
+      transport: "mcp_remote",
+      config: {
+        url: "https://fixture.example/mcp",
+        healthProbes: [
+          { label: "Drive (fresh)", toolName: "gw_list_files", arguments: { account: "fresh" } },
+          { label: "Drive (stale)", toolName: "gw_list_files", arguments: { account: "stale" } },
+          { label: "ignored without a tool name" },
+        ],
+      },
+      enabled: true,
+      status: "active",
+    });
+    const toolProbe = vi.fn(async (input: { parameters: Record<string, unknown> }) =>
+      input.parameters.account === "stale"
+        ? { ok: false as const, reasonCode: "upstream_reauthorization_required", message: "unauthorized_client" }
+        : { ok: true as const });
+
+    // Without a probe runner, the check stays shallow (tools/list only).
+    await expect(service.checkHealth(connection.id)).resolves.toMatchObject({
+      connection: { healthStatus: "ok", healthMessage: "Remote MCP server responded to tools/list." },
+    });
+    expect(toolProbe).not.toHaveBeenCalled();
+
+    await expect(service.checkHealth(connection.id, undefined, { toolProbe })).rejects.toMatchObject({
+      status: 422,
+      details: { code: "health_probe_failed" },
+    });
+    expect(toolProbe).toHaveBeenCalledTimes(2);
+    expect(toolProbe).toHaveBeenNthCalledWith(1, {
+      companyId: company.id,
+      connectionId: connection.id,
+      toolName: "gw_list_files",
+      parameters: { account: "fresh" },
+      agentId: null,
+    });
+    const [failed] = await db.select().from(toolConnections).where(eq(toolConnections.id, connection.id));
+    expect(failed).toMatchObject({
+      healthStatus: "error",
+      healthMessage: expect.stringContaining('Health probe "Drive (stale)" failed: unauthorized_client'),
+    });
+    expect(failed!.healthMessage).toContain("needs re-consent");
+
+    const sweep = await service.sweepConnectionHealth({ staleAfterMs: 0, limit: 1, toolProbe });
+    expect(sweep).toMatchObject({ checked: 1, failed: 1, failedConnectionIds: [connection.id] });
+
+    toolProbe.mockImplementation(async () => ({ ok: true as const }));
+    await expect(service.checkHealth(connection.id, undefined, { toolProbe })).resolves.toMatchObject({
+      connection: {
+        healthStatus: "ok",
+        healthMessage: "Remote MCP server responded to tools/list and 2 health probes passed.",
+      },
+    });
+  });
+
   it("enriches listConnections with lastUsedAt from the most recent tool-call event", async () => {
     const company = await createCompany(db);
     const service = createTestToolAccessService(db);

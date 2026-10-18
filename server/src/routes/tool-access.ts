@@ -2134,7 +2134,12 @@ function connectorEnrollmentPrincipal(req: Request): string {
     if (!existing) return;
     if (existing.credentialPolicy === "per_user") await assertToolConnectionAccess(req, existing);
     else await assertToolConnectionConfigureAccess(req, existing);
-    res.json(await svc.checkHealth(existing.id, getActorInfo(req)));
+    const toolGateway = options.toolGateway;
+    res.json(await svc.checkHealth(
+      existing.id,
+      getActorInfo(req),
+      toolGateway ? { toolProbe: (input) => toolGateway.probeConnectionTool(input) } : {},
+    ));
   });
 
   router.post(
