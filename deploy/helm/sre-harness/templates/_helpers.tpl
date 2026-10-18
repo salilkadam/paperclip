@@ -19,9 +19,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "sre-harness.buildNodeSelector" -}}
-# nodeSelector for workloads that SSH to the GPU build host. The dshci key is
-# source-IP restricted in authorized_keys, so these pods are pinned to the one
-# node the GPU host will accept them from.
+{{- /*
+nodeSelector for workloads that SSH to the GPU build host. The dshci key is
+source-IP restricted in authorized_keys, so these pods are pinned to the one
+node the GPU host will accept them from.
+
+This must stay a Helm action comment. Prose text here is emitted, lands on the
+same YAML line as the first mapping key after nindent, and is then parsed as a
+YAML comment -- which silently swallows that key and yields an empty
+nodeSelector. helm lint does not catch it.
+*/ -}}
 {{- $sel := dict -}}
 {{- with .Values.nodeSelector }}{{- $sel = merge (deepCopy .) $sel -}}{{- end }}
 {{- with .Values.build.nodeHostname }}{{- $_ := set $sel "kubernetes.io/hostname" . -}}{{- end }}
