@@ -176,7 +176,7 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     expect(await db.select().from(toolMcpGatewayTokens)).toHaveLength(2);
 
     await db.update(toolConnections)
-      .set({ healthStatus: "degraded", healthMessage: "fixture unavailable" })
+      .set({ healthStatus: "error", healthMessage: "fixture unavailable" })
       .where(eq(toolConnections.id, installedConnection!.id));
     await expect(
       buildPaperclipRuntimeMcpServers({

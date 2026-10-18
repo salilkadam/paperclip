@@ -273,10 +273,13 @@ real Drive call fails with `unauthorized_client`. To find this early, set
   credentials, and dispatch path as an agent call.
 - A probe skips the policy engine. It records no invocation, creates no
   approval, and uses no agent rate limit.
-- A failed probe sets the connection health to `error` with the probe label and
-  the provider message. The connection then shows in apps-needing-attention.
-  `unauthorized_client`, `invalid_grant`, and `invalid_client` add a re-consent
-  hint.
+- The check runs all probes. When one or more fail, the connection health
+  becomes `degraded` with each failing probe label and the provider message.
+  The connection then shows in apps-needing-attention. `unauthorized_client`,
+  `invalid_grant`, and `invalid_client` add a re-consent hint.
+- `degraded` does not hide the tools from agents. A connection with several
+  accounts stays usable for the accounts that still work. (`error`, `failed`,
+  and `missing_secret` still hide the tools.)
 - The regular call also keeps each refresh token in use. Google expires a
   refresh token after 6 months without use.
 - A probe cannot renew a revoked consent. A person must re-consent with

@@ -696,8 +696,15 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
         reasonCode: "tool_not_found",
       });
 
+      // A failed probe marks the connection `degraded`. Its tools stay available.
+      await db.update(toolConnections).set({ healthStatus: "degraded" }).where(eq(toolConnections.id, connection.id));
+      await expect(probe()).resolves.toEqual({ ok: true });
+      await db.update(toolConnections).set({ healthStatus: "error" }).where(eq(toolConnections.id, connection.id));
+      await expect(probe()).resolves.toMatchObject({ ok: false, reasonCode: "tool_not_found" });
+
       const toolCalls = remote.requests.filter((request) => request.body?.method === "tools/call");
       expect(toolCalls.map((request) => asTestRecord(request.body?.params).name)).toEqual([
+        "gw_list_files",
         "gw_list_files",
         "gw_list_files",
       ]);

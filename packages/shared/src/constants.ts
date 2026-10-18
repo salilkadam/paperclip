@@ -1062,6 +1062,22 @@ export function isToolConnectionAttentionHealth(status: ToolConnectionHealthStat
   return TOOL_CONNECTION_ATTENTION_HEALTH_STATUSES.includes(status);
 }
 
+/**
+ * Health states that stop agents from using a connection's tools. `degraded`
+ * needs attention but stays usable: the endpoint answers and some calls still
+ * work (for example, one of several upstream accounts failed a deep health
+ * probe, or a credential expires soon). Each call reports its own error.
+ */
+export const TOOL_CONNECTION_BLOCKING_HEALTH_STATUSES: readonly ToolConnectionHealthStatus[] = [
+  "failed",
+  "error",
+  "missing_secret",
+];
+
+export function isToolConnectionBlockingHealth(status: ToolConnectionHealthStatus): boolean {
+  return TOOL_CONNECTION_BLOCKING_HEALTH_STATUSES.includes(status);
+}
+
 export const TOOL_CATALOG_ENTRY_KINDS = ["tool", "resource", "prompt"] as const;
 export type ToolCatalogEntryKind = (typeof TOOL_CATALOG_ENTRY_KINDS)[number];
 

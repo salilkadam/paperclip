@@ -6,7 +6,7 @@ import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import { heartbeatRuns, type Db } from "@paperclipai/db";
 import type { PaperclipSkillEntry } from "@paperclipai/adapter-utils/server-utils";
-import { isToolConnectionAttentionHealth } from "@paperclipai/shared";
+import { isToolConnectionBlockingHealth } from "@paperclipai/shared";
 import {
   PAPERCLIP_OPERATIONAL_SKILL_KEY,
   resolvePaperclipDesiredSkillNames,
@@ -225,7 +225,7 @@ export async function resolveNativeRuntimeMcpSnapshot(input: { db: Db; agent: Pi
     && connection.enabled
     && (Boolean(runIdentity?.activeIdentityContextId) && (connection.config?.sourceTemplateKey === "github" || connection.transportConfig?.sourceTemplateKey === "github")
       || connection.credentialPolicy === "per_user"
-      || !isToolConnectionAttentionHealth(connection.healthStatus))
+      || !isToolConnectionBlockingHealth(connection.healthStatus))
     && (["mcp_remote", "local_stdio"].includes(connection.transport) || isBrowserUseConnection(connection) || githubBotConnectionIds.has(connection.id))
   ).map((connection) => connection.id));
   const assignment = {

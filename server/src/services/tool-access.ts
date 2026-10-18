@@ -2918,8 +2918,11 @@ function sanitizeHttpFailure(error: unknown): {
     if (code === "slack_mcp_access_disabled") {
       return { status: "error", message: error.message, code };
     }
+    // `degraded`, not `error`: the endpoint answered and other accounts can
+    // still work, so the gateway keeps the tools available while the board
+    // sees the connection in apps-needing-attention.
     if (code === "health_probe_failed") {
-      return { status: "error", message: error.message, code };
+      return { status: "degraded", message: error.message, code };
     }
     if (code === "user_authorization_required") {
       return { status: "error", message: error.message, code };
@@ -7170,7 +7173,7 @@ export function toolAccessService(
 
   /**
    * Run the board-configured deep probes. A failure throws
-   * `health_probe_failed`, so the connection health becomes `error` and the
+   * `health_probe_failed`, so the connection health becomes `degraded` and the
    * board sees it in apps-needing-attention. A regular probe call also keeps
    * upstream refresh tokens in use, so idle tokens do not expire.
    */
@@ -7179,6 +7182,7 @@ export function toolAccessService(
     toolProbe: ToolConnectionProbeRunner,
   ): Promise<number> {
     const probes = readConnectionHealthProbes(connection.config);
+    const failures: Array<{ label: string; reasonCode: string; message: string }> = [];
     for (const probe of probes) {
       const result = await toolProbe({
         companyId: connection.companyId,
@@ -7188,14 +7192,21 @@ export function toolAccessService(
         agentId: probe.agentId,
         ...(probe.timeoutMs === undefined ? {} : { timeoutMs: probe.timeoutMs }),
       });
-      if (result.ok) continue;
-      const hint =
-        result.reasonCode === "upstream_reauthorization_required"
-          ? " The upstream account needs re-consent. Reconnect it, then run the health check again."
-          : "";
+      if (!result.ok) failures.push({ label: probe.label, reasonCode: result.reasonCode, message: result.message });
+    }
+    if (failures.length > 0) {
+      const needsConsent = failures.some((failure) => failure.reasonCode === "upstream_reauthorization_required");
+      const summary = failures
+        .map((failure) => `Health probe "${failure.label}" failed: ${failure.message}`)
+        .join(" | ");
       throw unprocessable(
-        `Health probe "${probe.label}" failed: ${result.message}${hint}`,
-        { code: "health_probe_failed", probe: probe.label, reasonCode: result.reasonCode },
+        `${failures.length} of ${probes.length} health probes failed. ${summary}${
+          needsConsent ? " An upstream account needs re-consent. Reconnect it, then run the health check again." : ""
+        }`,
+        {
+          code: "health_probe_failed",
+          probes: failures.map(({ label, reasonCode }) => ({ label, reasonCode })),
+        },
       );
     }
     return probes.length;

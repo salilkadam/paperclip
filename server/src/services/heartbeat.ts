@@ -112,7 +112,7 @@ import {
   PROVIDER_QUOTA_MONITOR_SERVICE_NAME,
   envBindingSchema,
   isEnvironmentDriverSupportedForAdapter,
-  isToolConnectionAttentionHealth,
+  isToolConnectionBlockingHealth,
   type BillingType,
   type ChatProvider,
   type CostStatus,
@@ -4648,7 +4648,7 @@ export async function buildPaperclipRuntimeMcpServers(input: {
         (connection.config?.sourceTemplateKey === "github" ||
           connection.transportConfig?.sourceTemplateKey === "github")) ||
         connection.credentialPolicy === "per_user" ||
-        !isToolConnectionAttentionHealth(connection.healthStatus)) &&
+        !isToolConnectionBlockingHealth(connection.healthStatus)) &&
       (connection.transport === "mcp_remote" ||
         connection.transport === "local_stdio" || isBrowserUseConnection(connection) || githubBotConnectionIds.has(connection.id)),
   );

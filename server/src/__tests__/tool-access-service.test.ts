@@ -17701,8 +17701,8 @@ describeEmbeddedPostgres("tool access service", () => {
       config: {
         url: "https://fixture.example/mcp",
         healthProbes: [
-          { label: "Drive (fresh)", toolName: "gw_list_files", arguments: { account: "fresh" } },
           { label: "Drive (stale)", toolName: "gw_list_files", arguments: { account: "stale" } },
+          { label: "Drive (fresh)", toolName: "gw_list_files", arguments: { account: "fresh" } },
           { label: "ignored without a tool name" },
         ],
       },
@@ -17724,8 +17724,9 @@ describeEmbeddedPostgres("tool access service", () => {
       status: 422,
       details: { code: "health_probe_failed" },
     });
+    // A failing probe does not stop the others, so the board sees every broken account.
     expect(toolProbe).toHaveBeenCalledTimes(2);
-    expect(toolProbe).toHaveBeenNthCalledWith(1, {
+    expect(toolProbe).toHaveBeenNthCalledWith(2, {
       companyId: company.id,
       connectionId: connection.id,
       toolName: "gw_list_files",
@@ -17733,11 +17734,18 @@ describeEmbeddedPostgres("tool access service", () => {
       agentId: null,
     });
     const [failed] = await db.select().from(toolConnections).where(eq(toolConnections.id, connection.id));
+    // `degraded` keeps the tools discoverable for the accounts that still work,
+    // and still shows the connection in apps-needing-attention.
     expect(failed).toMatchObject({
-      healthStatus: "error",
-      healthMessage: expect.stringContaining('Health probe "Drive (stale)" failed: unauthorized_client'),
+      healthStatus: "degraded",
+      healthMessage: expect.stringContaining('1 of 2 health probes failed. Health probe "Drive (stale)" failed: unauthorized_client'),
     });
     expect(failed!.healthMessage).toContain("needs re-consent");
+    const attention = await service.listAppsNeedingAttention(company.id);
+    expect(attention.apps).toContainEqual(expect.objectContaining({
+      connection: expect.objectContaining({ id: connection.id }),
+      healthNeedsAttention: true,
+    }));
 
     const sweep = await service.sweepConnectionHealth({ staleAfterMs: 0, limit: 1, toolProbe });
     expect(sweep).toMatchObject({ checked: 1, failed: 1, failedConnectionIds: [connection.id] });

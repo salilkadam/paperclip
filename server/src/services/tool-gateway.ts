@@ -1307,8 +1307,12 @@ export function createToolGatewayService(
           // while the responsible user's grant is valid. Keep its cached active
           // catalog discoverable; execution resolves and validates that user's
           // grant, and a successful call restores the shared health indicator.
+          // `degraded` means partly working (for example, one upstream account
+          // of several failed a deep health probe, or a credential expires
+          // soon). Keep its tools discoverable. Each call still reports its own
+          // actionable error.
           or(
-            inArray(toolConnections.healthStatus, ["ok", "healthy"]),
+            inArray(toolConnections.healthStatus, ["ok", "healthy", "degraded"]),
             eq(toolConnections.credentialPolicy, "per_user"),
           ),
           eq(toolApplications.companyId, companyId),

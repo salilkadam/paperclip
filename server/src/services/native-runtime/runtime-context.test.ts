@@ -151,9 +151,9 @@ describe("buildNativeRuntimeContext", () => {
       .toBe("Original instructions.\n");
   });
 
-  it.each(["disabled", "degraded"] as const)(
-    "omits an unavailable native MCP connection when it is %s without aborting runtime context creation",
-    async (unavailableState) => {
+  it.each(["disabled", "error", "degraded"] as const)(
+    "binds a native MCP connection only when it is usable (%s)",
+    async (state) => {
       serviceMocks.exportFiles.mockResolvedValue({
         entryFile: "AGENTS.md",
         files: { "AGENTS.md": "Continue work without unavailable apps.\n" },
@@ -168,9 +168,9 @@ describe("buildNativeRuntimeContext", () => {
         installedConnections: [{
           id: "connection-1",
           transport: "mcp_remote",
-          enabled: unavailableState !== "disabled",
-          status: unavailableState === "disabled" ? "disabled" : "active",
-          healthStatus: unavailableState === "degraded" ? "degraded" : "healthy",
+          enabled: state !== "disabled",
+          status: state === "disabled" ? "disabled" : "active",
+          healthStatus: state === "disabled" ? "healthy" : state,
         }],
       });
 
@@ -188,7 +188,9 @@ describe("buildNativeRuntimeContext", () => {
         runtimeSkillEntries: [],
       });
 
-      expect(context.mcp.bindingId).toBeNull();
+      // `degraded` needs attention but stays usable (for example, one of
+      // several upstream accounts failed a deep health probe).
+      expect(context.mcp.bindingId).toBe(state === "degraded" ? "native-mcp:run-1" : null);
       expect(context.mcp.assignmentSetId).toMatch(/^sha256:[a-f0-9]{64}$/);
     },
   );
@@ -217,7 +219,7 @@ describe("buildNativeRuntimeContext", () => {
           transport: "mcp_remote",
           enabled: true,
           status: "active",
-          healthStatus: "degraded",
+          healthStatus: "error",
         },
         {
           id: "connection-healthy",
