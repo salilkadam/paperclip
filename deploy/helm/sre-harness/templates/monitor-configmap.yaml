@@ -83,9 +83,13 @@ data:
 
     if [ "$RC" -ne 0 ]; then
       # The sweep itself failed; that is an operational signal, shout it.
+      printf '%s\n' "$OUT"
       post_to_slack "MONITOR RUN FAILED (dsh exit $RC): $OUT"
       exit 1
     fi
 
+    # Record the verdict in the job log too, so evidence survives alongside
+    # the Slack post (kubectl logs job/... is the forensic path).
+    printf '%s\n' "$OUT"
     post_to_slack "$OUT"
 {{- end }}
