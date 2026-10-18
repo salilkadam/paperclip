@@ -197,6 +197,38 @@ curl -sk https://org.baisoln.com/api/health
 # "Secret decryption failed" in pod logs).
 ```
 
+## Brev sandbox environment (`paperclip-linux`, ssh-docker)
+
+The environment "Brev paperclip-linux (ssh-docker)" (`4123fb2c-ee70-4cc7-97bb-b0354ee66de3`)
+runs each sandbox lease in a Docker container on the Brev/Crusoe box
+`paperclip-linux` (`ubuntu@216.86.169.255`). The plugin connects with plain SSH
+to the public IP. It does **not** use a Brev CLI token, so a Brev session expiry
+does not disconnect it. A Brev token is only needed to start, stop, or recreate
+the instance (see `deploy/scripts/brev-heartbeat.sh`).
+
+- **Credential:** a dedicated ed25519 key, comment `paperclip-sandbox@bionic-org`.
+  An SSH key has no expiry.
+- **Source of truth:** Vault `secret/t6-apps/bionic-org/sandbox`
+  (`brev_ssh_private_key`, `brev_ssh_public_key`, `brev_known_hosts`,
+  `brev_host`, `brev_ssh_user`, `brev_instance`).
+- **Runtime copy:** Paperclip secret `a2c362be-7cfe-4a41-9f20-e4245c3aebe2`
+  (bound to the environment at `sshPrivateKey`, version `latest`). It is
+  encrypted with the Vault-sourced master key.
+- **Sync / rotate / disaster recovery:** `deploy/scripts/sync-brev-sandbox-key.sh`
+  pipes the key from Vault to `POST /api/secrets/:id/rotate`, then probes the
+  environment from every company. The key is never written to disk, a pod env
+  var, or the log.
+- **Why not an ESO env var:** local agent processes inherit the app pod
+  environment, and an agent must never hold the host key.
+- **Cross-company use:** the environment is instance-scoped, and the secret is
+  owned by Bionic AI Solutions. Since #44 the server resolves an environment
+  secret under the company that owns it. Before #44 every Reliora probe and run
+  failed with "Secret must belong to same company".
+- **If the box is recreated:** the public IP and host keys change. Update `host`
+  and `knownHosts` on the environment, update `brev_host` and
+  `brev_known_hosts` in Vault, add `brev_ssh_public_key` to
+  `~ubuntu/.ssh/authorized_keys`, then run the sync script.
+
 ## Google Drive artifact space ("AI Team")
 
 Agent-created documents are dropped into the approved Google Drive space
