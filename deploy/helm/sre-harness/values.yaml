@@ -189,7 +189,14 @@ monitor:
   # Every half hour. The sweep itself takes 1-3 minutes.
   schedule: "*/30 * * * *"
   # Hard cap per run so a wedged dsh session cannot hold the Forbid lock.
-  activeDeadlineSeconds: 1200
+  # A sweep on a quiet system takes 1-3 minutes, but one that overlaps a live
+  # incident legitimately runs much longer: on 2026-10-18 three consecutive
+  # sweeps investigating an MCP-upstream incident were killed mid-diagnosis at
+  # 1200s (job DeadlineExceeded x3), silencing the monitor exactly when an
+  # incident needed it, while healthy incident-free sweeps still took 4m50s-11m.
+  # 2400s keeps >3x margin over the longest healthy run yet still bounds a
+  # wedged session; a sweep that long skips at most one */30 tick (Forbid).
+  activeDeadlineSeconds: 2400
   # Keep finished job objects for a day for forensics, then clean up.
   ttlSecondsAfterFinished: 86400
   resources:
