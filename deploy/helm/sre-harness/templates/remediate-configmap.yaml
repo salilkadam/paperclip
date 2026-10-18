@@ -28,7 +28,7 @@ data:
     post_to_slack() {
       SLACK_TEXT="$1" node -e '
         const url = process.env.SLACK_WEBHOOK_URL;
-        const text = process.env.SLACK_TEXT;
+        const text = String(process.env.SLACK_TEXT || "").slice(0, 12000);
         if (!url) {
           console.log("[remediate] no webhook configured; report:\n" + text);
           process.exit(0);
@@ -50,19 +50,18 @@ data:
     }
 
     TASK="$(cat /config/remediate-prompt.md)"
+    DSH_PROFILE=remediate
 
     set +e
-    OUT="$(dsh --profile remediate --from-default-profile headless \
-             --patch /config/gpuai.patch.yml "$TASK" 2>&1)"
-    RC=$?
+    {{- include "sre-harness.runHeadless" . | nindent 4 }}
     set -e
 
-    printf '%s\n' "$OUT"
-    if [ "$RC" -ne 0 ]; then
+    if [ "$DSH_RC" -ne 0 ]; then
       # The engineer session itself failed mid-remediation: say so loudly,
-      # an interrupted fix is itself an operational signal.
-      post_to_slack "REMEDIATION RUN FAILED (dsh exit $RC) - partial state possible, check bionicorg + fork PRs: $OUT"
+      # an interrupted fix is itself an operational signal. Full event stream
+      # is in this job's log.
+      post_to_slack "REMEDIATION RUN FAILED (dsh exit $DSH_RC) - partial state possible, check bionicorg + fork PRs: $DSH_FINAL"
       exit 1
     fi
-    post_to_slack "SRE REMEDIATION REPORT: $OUT"
+    post_to_slack "SRE REMEDIATION REPORT: $DSH_FINAL"
 {{- end }}

@@ -47,9 +47,9 @@ spec:
             runAsGroup: 1000
           affinity:
             {{- toYaml .Values.affinity | nindent 12 }}
-          {{- with .Values.nodeSelector }}
+          {{- with (include "sre-harness.buildNodeSelector" .) }}
           nodeSelector:
-            {{- toYaml . | nindent 12 }}
+            {{- . | nindent 12 }}
           {{- end }}
           {{- with .Values.tolerations }}
           tolerations:
@@ -63,6 +63,9 @@ spec:
                 - /bin/sh
                 - /config/run.sh
               env:
+                # Nothing answers a tool-approval prompt inside a Job.
+                - name: DSH_PERMISSION_MODE
+                  value: {{ .Values.dsh.permissionMode | quote }}
                 - name: GPUAI_API_KEY
                   valueFrom:
                     secretKeyRef:

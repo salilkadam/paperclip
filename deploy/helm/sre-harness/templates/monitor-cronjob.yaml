@@ -70,6 +70,9 @@ spec:
                 - /bin/sh
                 - /config/run.sh
               env:
+                # Nothing answers a tool-approval prompt inside a Job.
+                - name: DSH_PERMISSION_MODE
+                  value: {{ .Values.dsh.permissionMode | quote }}
                 # GPU-AI gateway key (shared with the bionic-org ESO-owned
                 # secret). optional so a missing bionic-org deploy yields a
                 # clear dsh/auth failure, not an unschedulable job.

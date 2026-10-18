@@ -18,6 +18,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- .Values.namespace | default .Release.Namespace -}}
 {{- end -}}
 
+{{- define "sre-harness.buildNodeSelector" -}}
+# nodeSelector for workloads that SSH to the GPU build host. The dshci key is
+# source-IP restricted in authorized_keys, so these pods are pinned to the one
+# node the GPU host will accept them from.
+{{- $sel := dict -}}
+{{- with .Values.nodeSelector }}{{- $sel = merge (deepCopy .) $sel -}}{{- end }}
+{{- with .Values.build.nodeHostname }}{{- $_ := set $sel "kubernetes.io/hostname" . -}}{{- end }}
+{{- if $sel }}{{ toYaml $sel }}{{- end }}
+{{- end -}}
+
 {{- define "sre-harness.gpuaiPatch" -}}
 # dsh model config shared by every headless component (monitor, remediate,
 # approvals). Rendered into a ConfigMap key; mirrors
@@ -46,13 +56,74 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "sre-harness.sshBootstrap" -}}
 # Materialize the pinned GPU build-host SSH credentials from ESO-synced env
-# vars into ~/.ssh. required:false fallbacks so components without SSH work
-# still run when the Vault properties are absent.
+# vars. required:false fallbacks so components without SSH still run when the
+# Vault properties are absent.
+#
+# Path matters: OpenSSH resolves `~` through getpwuid(), NOT $HOME. These pods
+# export HOME=/home/node/.dsh for dsh state, so writing the key material under
+# $HOME/.ssh leaves ssh looking at /home/node/.ssh and every GPU build dies
+# with "Host key verification failed" (verified 2026-10-18). Write to the
+# passwd home instead.
 if [ -n "${GPU_SSH_KEY:-}" ]; then
-  mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
-  printf '%s\n' "$GPU_SSH_KEY" > "$HOME/.ssh/id_ed25519" && chmod 600 "$HOME/.ssh/id_ed25519"
-  printf '%s\n' "${GPU_KNOWN_HOSTS:-}" > "$HOME/.ssh/known_hosts" && chmod 644 "$HOME/.ssh/known_hosts"
+  SSH_DIR="{{ .Values.ssh.home }}/.ssh"
+  mkdir -p "$SSH_DIR" && chmod 700 "$SSH_DIR"
+  printf '%s\n' "$GPU_SSH_KEY" > "$SSH_DIR/id_ed25519" && chmod 600 "$SSH_DIR/id_ed25519"
+  printf '%s\n' "${GPU_KNOWN_HOSTS:-}" > "$SSH_DIR/known_hosts" && chmod 644 "$SSH_DIR/known_hosts"
+  # BatchMode makes an unattended session fail fast instead of blocking on a
+  # password/host-key prompt that nobody is there to answer.
+  printf '%s\n' \
+    'Host *' \
+    '    BatchMode yes' \
+    '    StrictHostKeyChecking yes' \
+    '    ConnectTimeout 10' \
+    '    ServerAliveInterval 15' \
+    '    ServerAliveCountMax 4' > "$SSH_DIR/config" && chmod 600 "$SSH_DIR/config"
+  export GIT_SSH_COMMAND="ssh -o BatchMode=yes"
   export GPU_SSH_USER="${GPU_SSH_USER:-dshci}"
-  export GPU_SSH_PORT="${GPU_SSH_PORT:-22}"
+  export GPU_SSH_PORT="${GPU_SSH_PORT:-52225}"
 fi
+{{- end -}}
+
+{{- define "sre-harness.runHeadless" -}}
+# Run one unattended dsh headless session with live forensics.
+# Reads DSH_PROFILE and TASK; sets DSH_RC and DSH_FINAL. Callers must wrap
+# this in `set +e` / `set -e` because a non-zero dsh exit is expected traffic.
+#
+# Why --json + tail instead of OUT="$(dsh ...)": a buffered command
+# substitution holds the whole session in memory, so when the job is killed on
+# activeDeadlineSeconds the pod dies with zero output and the run is
+# undebuggable. Streaming each event line to container stdout means `kubectl
+# logs` always shows how far the engineer actually got.
+DSH_LOG=/tmp/dsh-events.jsonl
+: > "$DSH_LOG"
+dsh --profile "$DSH_PROFILE" --from-default-profile headless \
+    --patch /config/gpuai.patch.yml --json "$TASK" >"$DSH_LOG" 2>&1 &
+DSH_PID=$!
+tail -f -n +1 "$DSH_LOG" 2>/dev/null &
+DSH_TAIL=$!
+wait "$DSH_PID"
+DSH_RC=$?
+kill "$DSH_TAIL" 2>/dev/null
+wait "$DSH_TAIL" 2>/dev/null
+DSH_FINAL="$(node -e '
+  const fs = require("fs");
+  const raw = fs.readFileSync(process.argv[1], "utf8");
+  let final = "";
+  const errs = [];
+  let tools = 0;
+  let turn = "";
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    if (e.type === "final") final = e.text || "";
+    else if (e.type === "tool_call") tools++;
+    else if (e.type === "error") errs.push(e.message || "unknown");
+    else if (e.type === "status" && e.phase === "turn_end") turn = JSON.stringify(e.reason || {});
+  }
+  const out = final
+    || (errs.length ? "dsh error: " + errs.join("; ") : "")
+    || "dsh produced no final answer (" + tools + " tool calls, turn_end " + (turn || "never reached") + ")";
+  process.stdout.write(String(out).slice(0, 20000));
+' "$DSH_LOG")"
 {{- end -}}

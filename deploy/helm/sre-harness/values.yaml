@@ -94,6 +94,29 @@ gpuai:
   # Model dsh uses by default (must exist on the gateway /v1/models list).
   model: "qwen3.8-flash-next-think"
 
+# Where ssh looks for key material. OpenSSH uses the passwd home for uid 1000
+# (`node`), not $HOME, so this is NOT the same path as `persistence.home`
+# even though the run scripts export HOME to that value.
+ssh:
+  home: /home/node
+
+# dsh permission mode for unattended sessions. The shipped profile derives its
+# tool-approval policy from this variable:
+#   (DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'
+# In a Job there is no human to answer an approval prompt, so `ask` can only
+# ever stall or fail. `danger-full-access` selects the supported headless
+# stance (approval policy `never`). Blast radius stays bounded by what matters:
+# the scoped sre-harness-sa RBAC, the fork-only Git identity, and the
+# key-restricted dshci build user.
+dsh:
+  permissionMode: danger-full-access
+
+build:
+  # The dshci build identity's authorized_keys entry is restricted to a single
+  # source node, so a build/deploy session scheduled anywhere else is refused
+  # by the GPU host. Pin the SSH-using jobs to that node; "" disables the pin.
+  nodeHostname: node1
+
 persistence:
   enabled: true
   size: 5Gi
@@ -206,14 +229,16 @@ monitor:
     a workload is down/crashlooping, or fresh fatal errors are appearing.
 
 # Remediation: dispatched BY the monitor when a sweep reports WARN/FAIL
-# (see monitor.remediation). One job, ~up to an hour, full engineer
+# (see monitor.remediation). One job, up to ~90 minutes, full engineer
 # latitude within bounded rules: diagnose -> classify -> fix (cluster ops
 # and/or code PR). It stops at an open PR; merging and deploying require
 # the operator's approval via the approvals component.
 remediate:
   enabled: true
-  # Hard cap: diagnosis + CI on the GPU host can take tens of minutes.
-  activeDeadlineSeconds: 3600
+  # Hard cap: diagnosis + CI on the GPU host can take tens of minutes, and a
+  # full `pnpm install/typecheck/test/build` cycle alone has been observed near
+  # 30 minutes. 3600 was tight enough to kill a healthy run mid-CI.
+  activeDeadlineSeconds: 5400
   # Never dispatch a second remediation if any remediate job started within
   # this many hours (a chronic WARN must not summon an army).
   throttleHours: 6
@@ -298,8 +323,9 @@ remediate:
 approvals:
   enabled: true
   schedule: "*/15 * * * *"
-  # The scan is seconds; the deploy path minutes. Cap generously.
-  activeDeadlineSeconds: 3600
+  # The scan is seconds; the deploy path is a GPU image build plus a helm
+  # rollout, which is not.
+  activeDeadlineSeconds: 5400
   approvers:
     - "salilkadam"
   resources:
