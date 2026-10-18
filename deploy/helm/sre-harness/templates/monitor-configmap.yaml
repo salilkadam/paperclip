@@ -33,7 +33,7 @@ data:
     post_to_slack() {
       SLACK_TEXT="$1" node -e '
         const url = process.env.SLACK_WEBHOOK_URL;
-        const text = process.env.SLACK_TEXT;
+        const text = String(process.env.SLACK_TEXT || "").slice(0, 12000);
         if (!url) {
           console.log("[monitor] no webhook configured; verdict:\n" + text);
           process.exit(0);
@@ -56,16 +56,19 @@ data:
 
     TASK="$(cat /config/prompt.md)"
 
+    # Stream the session. A buffered `OUT=$(dsh ...)` loses all evidence when a
+    # sweep is killed by activeDeadlineSeconds: the job log is empty and the
+    # verdict is unrecoverable, so we cannot tell a slow sweep from a broken
+    # prompt. --json events go to the log as they happen.
+    DSH_PROFILE=monitor
     set +e
-    OUT="$(dsh --profile monitor --from-default-profile headless \
-             --patch /config/gpuai.patch.yml "$TASK" 2>&1)"
-    RC=$?
+{{- include "sre-harness.runHeadless" . | nindent 4 }}
     set -e
 
-    if [ "$RC" -ne 0 ]; then
+    if [ "$DSH_RC" -ne 0 ]; then
       # The sweep itself failed; that is an operational signal, shout it.
-      printf '%s\n' "$OUT"
-      post_to_slack "MONITOR RUN FAILED (dsh exit $RC): $OUT"
+      printf '%s\n' "$DSH_FINAL"
+      post_to_slack "MONITOR RUN FAILED (dsh exit $DSH_RC): $DSH_FINAL"
       exit 1
     fi
 
@@ -74,7 +77,7 @@ data:
     # job re-reads this verdict itself; we only pull the trigger here.
     DISPATCH_NOTE=""
     if [ "${REMEDIATION_ENABLED:-false}" = "true" ] && \
-       printf '%s\n' "$OUT" | grep -qE 'PAPERCLIP HEALTH: (WARN|FAIL)'; then
+       printf '%s\n' "$DSH_FINAL" | grep -qE 'PAPERCLIP HEALTH: (WARN|FAIL)'; then
       ACTIVE=$(kubectl get jobs -l app.kubernetes.io/component=remediate \
         -o jsonpath='{.items[*].status.active}' 2>/dev/null || true)
       LAST=$(kubectl get jobs -l app.kubernetes.io/component=remediate \
@@ -104,12 +107,12 @@ data:
 
     # Record the verdict in the job log too, so evidence survives alongside
     # the Slack post (kubectl logs job/... is the forensic path).
-    printf '%s\n' "$OUT"
+    printf '%s\n' "$DSH_FINAL"
     if [ -n "$DISPATCH_NOTE" ]; then
-      post_to_slack "$OUT
+      post_to_slack "$DSH_FINAL
 
     [$DISPATCH_NOTE]"
     else
-      post_to_slack "$OUT"
+      post_to_slack "$DSH_FINAL"
     fi
 {{- end }}
