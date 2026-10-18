@@ -109,6 +109,10 @@ data:
     # the Slack post (kubectl logs job/... is the forensic path).
     printf '%s\n' "$DSH_FINAL"
     if [ -n "$DISPATCH_NOTE" ]; then
+      # The dispatch decision belongs in the job log too. Without it, a reader
+      # cannot tell whether this run summoned a remediation engineer, was
+      # throttled, or found nothing to do.
+      printf '[monitor] dispatch: %s\n' "$DISPATCH_NOTE"
       post_to_slack "$DSH_FINAL
 
     [$DISPATCH_NOTE]"
