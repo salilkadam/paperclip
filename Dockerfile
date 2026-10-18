@@ -247,7 +247,7 @@ CMD ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/di
 # actually auto-install belongs here — every entry adds its node_modules
 # to the image. Growing the list is a one-line workflow change.
 FROM build AS cloud-plugins
-ARG CLOUD_BUNDLED_PLUGINS="daytona"
+ARG CLOUD_BUNDLED_PLUGINS="daytona ssh-docker"
 RUN set -eu; \
   for name in $CLOUD_BUNDLED_PLUGINS; do \
     dir="packages/plugins/sandbox-providers/$name"; \

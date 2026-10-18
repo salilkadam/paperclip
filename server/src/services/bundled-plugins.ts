@@ -104,6 +104,11 @@ export const BUNDLED_PLUGIN_CATALOG: readonly BundledPluginCatalogEntry[] = [
     pluginKey: "paperclip.novita-sandbox-provider",
     relativePath: "sandbox-providers/novita",
   },
+  {
+    key: "ssh-docker",
+    pluginKey: "paperclip.ssh-docker-sandbox-provider",
+    relativePath: "sandbox-providers/ssh-docker",
+  },
 ];
 
 /**
