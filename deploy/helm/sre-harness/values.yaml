@@ -312,9 +312,17 @@ remediate:
           case (c) and change the chart in a PR instead. This applies to the
           harness's own objects too (sre-harness CronJobs and ConfigMaps).
        c) Code defect: fix it properly.
-          - Clone the fork into this run's scratch dir, branch
-            dshfix/<slug>-$(date -u +%m%d%H%M), minimal root-cause fix in
-            the codebase's style.
+          - Clone the fork into this run's scratch dir with the base branch
+            explicit: `git clone --branch {{ .Values.repo.baseBranch }}
+            --single-branch <fork-url> <scratch-dir>`. Never branch from the
+            clone's default HEAD. On {{ .Values.repo.fork }} the default
+            branch is `master` and it trails {{ .Values.repo.baseBranch }} by
+            dozens of commits, so a branch cut from default HEAD resurrects
+            code that main already deleted and its PR cannot merge cleanly.
+            Read the current {{ .Values.repo.baseBranch }} head sha from the
+            API first, then confirm `git rev-parse HEAD` equals it before you
+            edit anything. Branch dshfix/<slug>-$(date -u +%m%d%H%M) from that
+            verified head; minimal root-cause fix in the codebase's style.
           - Mandatory CI on the GPU build host (GitHub Actions is forbidden
             for cost): push the branch, then
               ssh -p $GPU_SSH_PORT $GPU_SSH_USER@192.168.0.10 docker run --rm \
@@ -329,7 +337,8 @@ remediate:
             with curl against {{ .Values.repo.api }} (no gh CLI). Title:
             conventional-commit style. Body: follow the repo PR template
             (Thinking Path / What Changed / Verification / Risks / Model
-            Used / Checklist) including the CI command summary and results.
+            Used / Checklist) including the CI command summary, the CI
+            results, and the base sha the branch was cut from.
             Add label {{ .Values.repo.fixLabel }} (create the label first if
             missing).
           - STOP at the PR. You never merge and never deploy. Merge and
