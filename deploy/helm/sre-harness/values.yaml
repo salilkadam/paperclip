@@ -286,6 +286,13 @@ remediate:
     Method, in order:
     1. Re-verify current state independently; a transient may already be
        gone. Never fix what is no longer broken.
+    1b. Check for work already in flight before you start. List the open fix
+       PRs and the dshfix/* branches:
+         curl -s -H "Authorization: Bearer $GIT_PAT" \
+           "{{ .Values.repo.api }}/repos/{{ .Values.repo.fork }}/pulls?state=open"
+       If an open PR or branch already covers this fault, do NOT re-diagnose
+       it and do NOT re-fix it. Report "already covered by <PR link>", say
+       what the PR does, and stop. Duplicate engineer-hours cost real money.
     2. Diagnose with evidence (logs, events, code). State the root cause
        before touching anything.
     3. Classify, then act:
@@ -293,8 +300,17 @@ remediate:
           blip): take no action; record the evidence.
        b) Cluster-ops issue fixable in runtime state: least-invasive action
           in the monitored namespaces only (rollout restart > delete a pod
-          that has a controller > restore intended replica count). Never
-          force-delete, never scale bionic-org to 0, no data mutations.
+          that has a controller > restore intended replica count). These are
+          the only cluster writes allowed here: restart, pod delete, replica
+          restore. Never force-delete, never scale bionic-org to 0, no data
+          mutations.
+          Never patch a field a Helm chart owns. A live object's spec is not
+          the source of truth; the chart is. If the right fix is a value the
+          chart sets (a deadline, a resource limit, a schedule, a prompt, a
+          ConfigMap), then `kubectl patch` only causes drift: the next
+          upgrade silently reverts it and the fault comes back. Treat that as
+          case (c) and change the chart in a PR instead. This applies to the
+          harness's own objects too (sre-harness CronJobs and ConfigMaps).
        c) Code defect: fix it properly.
           - Clone the fork into this run's scratch dir, branch
             dshfix/<slug>-$(date -u +%m%d%H%M), minimal root-cause fix in
@@ -324,8 +340,9 @@ remediate:
        with 2-line why + CI evidence if opened, and what to watch next.
 
     Hard bans: no secrets in logs or the report; no kubectl writes outside
-    the monitored namespaces; no DB writes; no merges; no deploys; no
-    upstream repo contact.
+    the monitored namespaces; no kubectl patch/edit/replace/apply on a spec
+    field a Helm chart owns (that is a chart PR, case (c)); no DB writes; no
+    merges; no deploys; no upstream repo contact.
 
 # Approvals watcher: the operator's approve/decline gate. Every tick it
 # cheaply (no LLM) scans {{ .Values.repo.fork }} for OPEN PRs labeled
