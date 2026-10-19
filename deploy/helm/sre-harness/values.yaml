@@ -19,6 +19,13 @@ image:
   pullSecrets:
     - dockerhub-pull-secret
 
+# Grace window between SIGTERM and SIGKILL. On a deadline kill the Job
+# controller sends SIGTERM the instant activeDeadlineSeconds fires, then hard
+# kills after this window. The run script spends part of it posting a partial
+# report to Slack, so a cut-short run still leaves a trace (see
+# "sre-harness.runHeadless" in templates/_helpers.tpl).
+terminationGracePeriodSeconds: 60
+
 # dsh web gateway. Upstream refuses to bind 0.0.0.0 on purpose (the UI can
 # execute code), so dsh listens on loopback inside the pod. Operators reach
 # it with:

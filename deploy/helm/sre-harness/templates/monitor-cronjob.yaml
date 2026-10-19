@@ -33,6 +33,7 @@ spec:
             app.kubernetes.io/component: monitor
         spec:
           restartPolicy: Never
+          terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
           # Same pre-provisioned RBAC SA as the interactive harness; the
           # sweep only needs get/list on bionicorg. Token projected
           # explicitly because the SA disables auto-mounting.

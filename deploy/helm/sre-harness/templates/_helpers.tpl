@@ -103,6 +103,54 @@ fi
 # logs` always shows how far the engineer actually got.
 DSH_LOG=/tmp/dsh-events.jsonl
 : > "$DSH_LOG"
+DSH_STARTED_AT="$(date +%s)"
+
+# Evidence must outlive the pod. On a deadline kill the Job controller deletes
+# the pod in the same second, so `kubectl logs` is unreadable afterwards and
+# the run reports nothing at all. The SIGTERM grace window is the last chance
+# to say anything, so report how far the session got before we exit.
+post_partial_evidence() {
+  DSH_PARTIAL="$(DSH_STARTED_AT="$DSH_STARTED_AT" node -e '
+    const fs = require("fs");
+    let raw = "";
+    try { raw = fs.readFileSync(process.argv[1], "utf8"); } catch {}
+    const events = raw.split("\n").filter((l) => l.trim());
+    const parts = [];
+    if (process.env.DSH_STARTED_AT) {
+      const mins = Math.round((Date.now() / 1000 - Number(process.env.DSH_STARTED_AT)) / 60);
+      parts.push("ran " + mins + " min");
+    }
+    parts.push(events.length + " events");
+    let tools = 0;
+    const errs = [];
+    const words = [];
+    let last = "";
+    for (const line of events) {
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (e.type === "tool_call") {
+        tools++;
+        last = String(e.tool || "?") + " " + String((e.input && e.input.description) || "");
+      } else if (e.type === "text" && e.text) {
+        words.push(String(e.text).replace(/\s+/g, " ").slice(0, 400));
+        if (words.length > 2) words.shift();
+      } else if (e.type === "error") {
+        errs.push(String(e.message || "unknown"));
+      }
+    }
+    parts.push(tools + " tool calls");
+    if (errs.length) parts.push("errors: " + errs.join("; "));
+    if (words.length) parts.push("last words: " + words.join(" // "));
+    if (last) parts.push("last activity: " + last);
+    process.stdout.write(parts.join(" | ").slice(0, 4000));
+  ' "$DSH_LOG" 2>/dev/null || true)"
+  post_to_slack "RUN TERMINATED BEFORE COMPLETION ($DSH_PROFILE, SIGTERM): ${DSH_PARTIAL:-no session events captured}"
+}
+
+# TERM arrives on a deadline kill or an eviction; INT on a manual stop. Report
+# and leave with 143, which says the run was cut short, not that it failed.
+trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" 2>/dev/null; post_partial_evidence; exit 143' TERM INT
+
 dsh --profile "$DSH_PROFILE" --from-default-profile headless \
     --patch /config/gpuai.patch.yml --json "$TASK" >"$DSH_LOG" 2>&1 &
 DSH_PID=$!
@@ -110,6 +158,9 @@ tail -f -n +1 "$DSH_LOG" 2>/dev/null &
 DSH_TAIL=$!
 wait "$DSH_PID"
 DSH_RC=$?
+# Session ended on its own terms: disarm, so the caller's own Slack post is
+# never doubled by a late signal.
+trap - TERM INT
 kill "$DSH_TAIL" 2>/dev/null
 wait "$DSH_TAIL" 2>/dev/null
 DSH_FINAL="$(node -e '
