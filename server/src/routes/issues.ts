@@ -8330,6 +8330,17 @@ export function issueRoutes(
 
   router.get("/issues/:id/runner-goal", async (req, res) => {
     const id = req.params.id as string;
+    // The agent filter is matched against a UUID column further down, so a
+    // malformed value must fail as 400 at the boundary instead of surfacing a
+    // database cast error as a 500. Empty/absent keeps the assignee fallback.
+    const requestedAgentIdParam = req.query.agentId;
+    if (
+      typeof requestedAgentIdParam === "string" &&
+      requestedAgentIdParam.trim() !== "" &&
+      !isUuidLike(requestedAgentIdParam)
+    ) {
+      throw badRequest("Invalid agent ID filter");
+    }
     const issue = await getAccessibleResource(
       req,
       res,

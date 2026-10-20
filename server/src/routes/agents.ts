@@ -6962,7 +6962,7 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     if (!(await assertRunTelemetryReadAllowed(req, res, companyId))) return;
-    const agentId = req.query.agentId as string | undefined;
+    const agentId = readAgentIdFilter(req);
     const limitParam = req.query.limit as string | undefined;
     const limit = limitParam ? Math.max(1, Math.min(1000, parseInt(limitParam, 10) || 200)) : undefined;
     const summary = req.query.summary === "true" || req.query.summary === "1";
@@ -7102,6 +7102,20 @@ export function agentRoutes(
       throw badRequest("Invalid heartbeat run ID");
     }
     return runId;
+  }
+
+  function readAgentIdFilter(req: Request): string | undefined {
+    const agentId = req.query.agentId;
+    if (agentId === undefined) return undefined;
+    // An empty filter means "all agents", matching the service's falsy check.
+    // Any other value goes straight into an equality against a PostgreSQL UUID
+    // column, so a malformed one must fail here as 400 — like the run-id route
+    // above — instead of surfacing a database cast error as a 500.
+    if (typeof agentId === "string" && agentId === "") return undefined;
+    if (typeof agentId === "string" && agentId === agentId.trim() && isUuidLike(agentId)) {
+      return agentId;
+    }
+    throw badRequest("Invalid agent ID filter");
   }
 
   router.get("/heartbeat-runs/:runId", async (req, res) => {

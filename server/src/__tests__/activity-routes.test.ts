@@ -310,4 +310,42 @@ describe.sequential("activity routes", () => {
     expect(mockHeartbeatService.getRun).not.toHaveBeenCalled();
     expect(mockActivityService.issuesForRun).not.toHaveBeenCalled();
   });
+
+  it("returns 400 for a malformed agentId filter instead of a database cast error", async () => {
+    // The reported failure: a truncated agent id reached the uuid column and
+    // surfaced as a 500. The filter must be rejected at the route boundary.
+    const app = await createApp();
+    const truncated = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/companies/company-1/activity?agentId=185455ec"),
+    );
+    expect(truncated.status).toBe(400);
+
+    const padded = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/companies/company-1/activity?agentId=%202f3a4b6c-7d8e-4a9b-8c1d-2e3f4a5b6c7d"),
+    );
+    expect(padded.status).toBe(400);
+
+    expect(mockActivityService.list).not.toHaveBeenCalled();
+  });
+
+  it("accepts a uuid agentId filter and treats an empty filter as all agents", async () => {
+    mockActivityService.list.mockResolvedValue({ items: [], nextCursor: null });
+
+    const app = await createApp();
+    const valid = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/companies/company-1/activity?agentId=2f3a4b6c-7d8e-4a9b-8c1d-2e3f4a5b6c7d"),
+    );
+    expect(valid.status).toBe(200);
+    expect(mockActivityService.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "2f3a4b6c-7d8e-4a9b-8c1d-2e3f4a5b6c7d" }),
+    );
+
+    const empty = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/companies/company-1/activity?agentId="),
+    );
+    expect(empty.status).toBe(200);
+    expect(mockActivityService.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: undefined }),
+    );
+  });
 });

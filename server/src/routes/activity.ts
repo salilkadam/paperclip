@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { normalizeIssueIdentifier } from "@paperclipai/shared";
+import { isUuidLike, normalizeIssueIdentifier } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { activityService, normalizeActivityLimit } from "../services/activity.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, getAccessibleResource, hasCompanyAccess } from "./authz.js";
@@ -224,9 +224,22 @@ export function activityRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     if (!(await assertCompanyScopeReadAllowed(req, res, companyId))) return;
 
+    // The agent filter reaches an equality against a PostgreSQL UUID column, so
+    // a malformed value must fail as 400 here instead of surfacing a database
+    // cast error as a 500. isUuidLike tolerates surrounding whitespace;
+    // PostgreSQL UUID inputs do not, and an empty filter means "all agents".
+    const rawAgentId = req.query.agentId;
+    if (rawAgentId !== undefined && typeof rawAgentId !== "string") {
+      throw badRequest("Invalid agent ID filter");
+    }
+    const agentId = rawAgentId === "" ? undefined : rawAgentId;
+    if (agentId !== undefined && (agentId !== agentId.trim() || !isUuidLike(agentId))) {
+      throw badRequest("Invalid agent ID filter");
+    }
+
     const filters = {
       companyId,
-      agentId: req.query.agentId as string | undefined,
+      agentId,
       entityType: req.query.entityType as string | undefined,
       entityId: req.query.entityId as string | undefined,
       limit: normalizeActivityLimit(Number(req.query.limit)),
