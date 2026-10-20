@@ -95,6 +95,11 @@ export const BUNDLED_PLUGIN_CATALOG: readonly BundledPluginCatalogEntry[] = [
     pathOverrideEnvVar: "PAPERCLIP_KUBERNETES_PLUGIN_PATH",
   },
   {
+    key: "loc-agentmail",
+    pluginKey: "paperclip.loc-agentmail",
+    relativePath: "plugin-loc-agentmail",
+  },
+  {
     key: "modal",
     pluginKey: "paperclip.modal-sandbox-provider",
     relativePath: "sandbox-providers/modal",

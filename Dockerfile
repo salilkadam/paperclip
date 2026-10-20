@@ -46,6 +46,7 @@ COPY --parents packages/plugins/sandbox-providers/./*/package.json packages/plug
 COPY packages/plugins/paperclip-plugin-fake-sandbox/package.json packages/plugins/paperclip-plugin-fake-sandbox/
 COPY packages/plugins/plugin-llm-wiki/package.json packages/plugins/plugin-llm-wiki/
 COPY packages/plugins/plugin-workspace-diff/package.json packages/plugins/plugin-workspace-diff/
+COPY packages/plugins/plugin-loc-agentmail/package.json packages/plugins/plugin-loc-agentmail/
 COPY patches/ patches/
 COPY scripts/link-plugin-dev-sdk.mjs scripts/
 
@@ -133,6 +134,11 @@ RUN find packages/paperclip-runner/runner packages/paperclip-runner/protocol -ty
 ARG PAPERCLIP_BUILD_COMMIT=""
 RUN pnpm --filter @paperclipai/ui build
 RUN pnpm --filter @paperclipai/plugin-sdk build
+# Bundled connectors that `BUNDLED_PLUGIN_CATALOG` may auto-install must ship
+# with `dist/` present, or provisioning skips them at boot. Unlike the
+# standalone sandbox providers, this connector is a workspace package, so it
+# builds with the repo right after the SDK it depends on.
+RUN pnpm --filter @paperclipai/plugin-loc-agentmail build
 # The server build runs scripts/write-build-stamp.mjs, which stamps the built
 # commit into dist/build-info.json. The build context has no .git, so the
 # script reads PAPERCLIP_BUILD_COMMIT instead. Docker exposes an ARG to the
