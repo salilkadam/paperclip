@@ -36,9 +36,17 @@ ui:
   host: "127.0.0.1"
   port: 3080
 
+rbac:
+  clusterNodeRead:
+    # Cluster-scoped READ of nodes, for the monitor only (see rbac.yaml). Set
+    # false to fall back to inference-from-taints behavior.
+    enabled: true
+
 serviceAccount:
   # Name of the pre-provisioned RBAC ServiceAccount (deploy/rbac/sre-harness.yaml).
-  # The chart does NOT create RBAC; it only consumes the existing SA.
+  # The namespaced Role and its RoleBindings are pre-provisioned too; the only
+  # RBAC this chart creates is the optional cluster node-read (rbac.yaml),
+  # gated by rbac.clusterNodeRead.enabled.
   name: sre-harness-sa
 
 # Vault-backed credentials for the harness, via External Secrets Operator.

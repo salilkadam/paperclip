@@ -1,0 +1,32 @@
+{{- if .Values.rbac.clusterNodeRead.enabled }}
+# Read-only node visibility for the monitor. Without it the monitor can only
+# INFER that a node is gone -- taint events and a 502 from the kubelet API
+# proxy -- and said so in its reports; it could never state which node and its
+# conditions were unreadable versus genuinely lost. get/list on nodes exposes
+# no secrets and no workload contents.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sre-harness.fullname" . }}-node-read
+  labels:
+    {{- include "sre-harness.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sre-harness.fullname" . }}-node-read
+  labels:
+    {{- include "sre-harness.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sre-harness.fullname" . }}-node-read
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name }}
+    namespace: {{ include "sre-harness.namespace" . }}
+{{- end }}
