@@ -156,7 +156,7 @@ post_partial_evidence() {
 
 # TERM arrives on a deadline kill or an eviction; INT on a manual stop. Report
 # and leave with 143, which says the run was cut short, not that it failed.
-trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" 2>/dev/null; post_partial_evidence; exit 143' TERM INT
+trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" 2>/dev/null; post_partial_evidence; record_run 1 "$DSH_PARTIAL"; exit 143' TERM INT
 
 dsh --profile "$DSH_PROFILE" --from-default-profile headless \
     --patch /config/gpuai.patch.yml --json "$TASK" >"$DSH_LOG" 2>&1 &
@@ -191,4 +191,101 @@ DSH_FINAL="$(node -e '
     || "dsh produced no final answer (" + tools + " tool calls, turn_end " + (turn || "never reached") + ")";
   process.stdout.write(String(out).slice(0, 20000));
 ' "$DSH_LOG")"
+
+# Durable run record. The Job controller deletes the pod on a deadline kill and
+# again at the backoff limit, so ttlSecondsAfterFinished preserves nothing and
+# post-incident forensics over cron logs dies with the pod. Append one compact
+# JSON line per run to the namespaced ConfigMap sre-harness-run-log through the
+# in-cluster API. That ConfigMap is created on first write and is deliberately
+# NOT chart-owned: a helm-managed ConfigMap would revert the operator's records
+# on every upgrade, the same drift class this harness already bans elsewhere.
+# Best-effort by design -- a failed record must never fail or delay a run, and
+# a run whose API call hangs must still finish inside its Slack grace window.
+record_run() {
+  # $1: 1 when the run was cut short, 0 on a normal end. $2: excerpt already
+  # deemed safe for the Slack report (this text is that same report's content).
+  RUN_LOG="$DSH_LOG" RUN_STARTED_AT="$DSH_STARTED_AT" RUN_RC="$DSH_RC" \
+    RUN_COMPONENT="$DSH_PROFILE" RUN_TERMINATED="$1" RUN_EXCERPT="$2" RUN_CM="sre-harness-run-log" node -e '
+    const fs = require("fs");
+    const https = require("https");
+    const SA = "/var/run/secrets/kubernetes.io/serviceaccount/";
+    const ns = fs.readFileSync(SA + "namespace", "utf8").trim();
+    const tok = fs.readFileSync(SA + "token", "utf8").trim();
+    const ca = fs.readFileSync(SA + "ca.crt");
+    const cm = process.env.RUN_CM;
+    let events = 0, tools = 0;
+    try {
+      for (const l of fs.readFileSync(process.env.RUN_LOG, "utf8").split("\n")) {
+        if (!l.trim()) continue;
+        events++;
+        try { if (JSON.parse(l).type === "tool_call") tools++; } catch (e) {}
+      }
+    } catch (e) {}
+    const rec = {
+      component: process.env.RUN_COMPONENT || "unknown",
+      startedAt: new Date(Number(process.env.RUN_STARTED_AT) * 1000).toISOString(),
+      finishedAt: new Date().toISOString(),
+      rc: Number(process.env.RUN_RC || 0),
+      terminated: process.env.RUN_TERMINATED === "1",
+      events: events,
+      toolCalls: tools,
+      excerpt: String(process.env.RUN_EXCERPT || "").replace(/\s+/g, " ").slice(0, 500),
+    };
+    const api = (method, path, body, ctype, done) => {
+      const r = https.request({
+        host: "kubernetes.default.svc",
+        path: "/api/v1/namespaces/" + ns + "/configmaps" + path,
+        method: method,
+        ca: ca,
+        headers: body !== undefined
+          ? { authorization: "Bearer " + tok, "content-type": ctype }
+          : { authorization: "Bearer " + tok },
+      }, res => {
+        let d = "";
+        res.on("data", c => { d += c; });
+        res.on("end", () => done(res.statusCode, d));
+      });
+      r.setTimeout(10000, () => r.destroy(new Error("api timeout")));
+      r.on("error", e => done(0, String(e && e.message)));
+      r.end(body === undefined ? undefined : body);
+    };
+    const json = o => JSON.stringify(o);
+    const patch = runs => api("PATCH", "/" + cm,
+      json({ data: { runs: runs } }), "application/merge-patch+json", code => {
+        console.log("[run-record] patch http " + code);
+      });
+    const line = json(rec);
+    api("GET", "/" + cm, undefined, undefined, (code, body) => {
+      if (code === 404) {
+        const cmBody = json({
+          apiVersion: "v1", kind: "ConfigMap",
+          metadata: {
+            name: cm, namespace: ns,
+            labels: { "app.kubernetes.io/managed-by": "sre-harness-runtime" },
+            annotations: {
+              "paperclip.t9/owner": "sre-harness",
+              "paperclip.t9/note": "operator run history, appended at runtime; do not make chart-owned",
+            },
+          },
+          data: { runs: line + "\n" },
+        });
+        api("POST", "", cmBody, "application/json", c2 => {
+          if (c2 === 409) patch(line + "\n");
+          else console.log("[run-record] create http " + c2);
+        });
+      } else if (code === 200) {
+        let prev = "";
+        try { prev = (JSON.parse(body).data || {}).runs || ""; } catch (e) {}
+        const runs = (prev + line + "\n").split("\n").filter(Boolean).slice(-20).join("\n") + "\n";
+        patch(runs);
+      } else {
+        console.log("[run-record] get http " + code + ", skipping");
+      }
+    });
+  ' 2>&1 | sed "s/^/[run-record] /" || true
+}
+
+# Normal end of session: record before the caller spends the remaining grace on
+# its Slack post. rc distinguishes a clean pass from a handled failure.
+record_run 0 "$DSH_FINAL"
 {{- end -}}
