@@ -77,6 +77,11 @@ spec:
                       key: SLACK_WEBHOOK_URL
                       optional: true
               envFrom:
+                # Operator-managed, never chart-owned: carries GPU_SSH_HOST,
+                # the build-host address that must not live in a public repo.
+                - configMapRef:
+                    name: {{ .Values.buildHost.hostConfigMap }}
+                    optional: true
                 # GIT_PAT (GitHub API + clone + merge) and GPU SSH identity.
                 - secretRef:
                     name: {{ include "sre-harness.fullname" . }}-config

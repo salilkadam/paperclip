@@ -176,9 +176,20 @@ repo:
   fixLabel: "dsh-fix"
 
 buildHost:
-  # GPU box; sshd on a nonstandard port (socket-activated). User/port come
-  # from Vault env (GPU_SSH_USER/GPU_SSH_PORT) — this host is the address.
-  host: "192.168.0.10"
+  # The GPU box address is deliberately NOT in this chart. The fork is
+  # public, and a private LAN address committed here publishes lab topology
+  # to anyone. The address arrives at runtime as GPU_SSH_HOST instead, from
+  # the operator-managed ConfigMap named below. Create it once per
+  # namespace, outside the chart:
+  #   kubectl -n <namespace> create configmap sre-harness-buildhost \
+  #     --from-literal=GPU_SSH_HOST=<address>
+  # Operator-owned on purpose: the chart must not own a value that cannot be
+  # public, and helm must never be able to revert it. User and port still
+  # come from Vault (GPU_SSH_USER/GPU_SSH_PORT).
+  hostConfigMap: "sre-harness-buildhost"
+  # Optional override for an operator who keeps a private values file; an env
+  # entry from here wins over the ConfigMap. Leave empty for a public install.
+  host: ""
   # Container image used for local CI runs on the build host.
   ciImage: "node:24-trixie-slim"
   # Named docker volume for the pnpm store, so CI runs reuse packages
@@ -278,9 +289,10 @@ remediate:
     - Git fork: salilkadam/paperclip on github.com; credential in $GIT_PAT;
       clone via https://x-access-token:${GIT_PAT}@github.com/salilkadam/paperclip.git
       NEVER open branches/PRs/comments against the upstream paperclipai/paperclip.
-    - GPU build host: ssh -p $GPU_SSH_PORT $GPU_SSH_USER@192.168.0.10
-      (key + pinned host keys already in ~/.ssh). Docker works there; it is
-      a build box - still clean up anything you create on it.
+    - GPU build host: ssh -p $GPU_SSH_PORT $GPU_SSH_USER@$GPU_SSH_HOST
+      (key + pinned host keys already in ~/.ssh, address in $GPU_SSH_HOST).
+      Docker works there. It is a build box: still clean up anything you
+      create on it.
     - Your final chat message is auto-posted to the operator's Slack.
 
     Method, in order:
@@ -325,7 +337,7 @@ remediate:
             verified head; minimal root-cause fix in the codebase's style.
           - Mandatory CI on the GPU build host (GitHub Actions is forbidden
             for cost): push the branch, then
-              ssh -p $GPU_SSH_PORT $GPU_SSH_USER@192.168.0.10 docker run --rm \
+              ssh -p $GPU_SSH_PORT $GPU_SSH_USER@$GPU_SSH_HOST docker run --rm \
                 -m {{ .Values.buildHost.ciMemory }} \
                 -v {{ .Values.buildHost.pnpmVolume }}:/pnpm -e HOME=/pnpm \
                 {{ .Values.buildHost.ciImage }} sh -c '<clone this branch,
@@ -396,7 +408,7 @@ approvals:
     3. Update the build clone on the GPU host to {{ .Values.repo.baseBranch }} head = the
        merge commit; deploy tag = `git rev-parse --short HEAD`.
     4. Build + push on the GPU build host (ssh -p $GPU_SSH_PORT
-       $GPU_SSH_USER@192.168.0.10): clone {{ .Values.repo.fork }} at that sha into a
+       $GPU_SSH_USER@$GPU_SSH_HOST): clone {{ .Values.repo.fork }} at that sha into a
        throwaway dir, run ./deploy/scripts/build-and-push.sh <tag> (it
        builds, pushes, and cleans the local image itself), then delete the
        clone dir. Do NOT touch the cluster from the build host.

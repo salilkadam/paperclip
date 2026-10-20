@@ -80,6 +80,11 @@ spec:
                       key: SLACK_WEBHOOK_URL
                       optional: true
               envFrom:
+                # Operator-managed, never chart-owned: carries GPU_SSH_HOST,
+                # the build-host address that must not live in a public repo.
+                - configMapRef:
+                    name: {{ .Values.buildHost.hostConfigMap }}
+                    optional: true
                 # GIT_PAT + GPU SSH identity arrive here (config secret is
                 # optional:true at the secretRef level so a missing Vault
                 # sync degrades to a clearly-failing session, not a

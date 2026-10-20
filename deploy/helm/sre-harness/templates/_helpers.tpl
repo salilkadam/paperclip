@@ -88,6 +88,13 @@ if [ -n "${GPU_SSH_KEY:-}" ]; then
   export GIT_SSH_COMMAND="ssh -o BatchMode=yes"
   export GPU_SSH_USER="${GPU_SSH_USER:-dshci}"
   export GPU_SSH_PORT="${GPU_SSH_PORT:-52225}"
+  # The address is runtime configuration, never chart content: the fork is
+  # public. Say it here, because an unset host otherwise surfaces much later
+  # as an unresolvable hostname inside a build the operator is waiting on.
+  if [ -z "${GPU_SSH_HOST:-}" ]; then
+    echo "[ssh] GPU_SSH_HOST is unset; GPU builds and deploys cannot run." >&2
+    echo "[ssh] Fix: kubectl -n <namespace> create configmap {{ .Values.buildHost.hostConfigMap }} --from-literal=GPU_SSH_HOST=<address>" >&2
+  fi
 fi
 {{- end -}}
 
