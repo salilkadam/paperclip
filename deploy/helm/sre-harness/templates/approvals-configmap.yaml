@@ -16,7 +16,9 @@ data:
     {{- include "sre-harness.gpuaiPatch" . | nindent 4 }}
   scan.js: |
     // Prints exactly one JSON object: either {"decision":null} or a
-    // decision {decision, number, head_sha, title, by}. No secrets, ever.
+    // decision {decision, number, head_sha, title, by, mergeable}. A decision
+    // the engineer already recorded an action for is treated as none. No
+    // secrets, ever.
     const base = process.env.GITHUB_API || "https://api.github.com";
     const repo = process.env.GH_REPO;
     const label = process.env.GH_LABEL;
@@ -58,13 +60,53 @@ data:
         const reviews = await gh("/repos/" + repo + "/pulls/" + it.number + "/reviews") || [];
         const comments = await gh("/repos/" + repo + "/issues/" + it.number + "/comments?per_page=100") || [];
         const isOp = (u) => u && approvers.includes(u.login);
-        const declined = comments.find((c) => isOp(c.user) && /^deploy:\s*decline\b/i.test(c.body.trim()));
-        const approved =
-          reviews.find((r) => r.state === "APPROVED" && isOp(r.user)) ||
-          comments.find((c) => isOp(c.user) && /^deploy:\s*approve\b/i.test(c.body.trim()));
-        // decline beats approve if both exist (changed mind wins).
-        if (declined) decisions.push({ decision: "decline", number: it.number, head_sha: pr.head.sha, title: pr.title, by: declined.user.login });
-        else if (approved) decisions.push({ decision: "approve", number: it.number, head_sha: pr.head.sha, title: pr.title, by: approved.user.login, mergeable: pr.mergeable });
+        // Collect every operator decision, then honour the newest one. GitHub
+        // timestamps are ISO-8601 UTC, so a string compare orders them.
+        const cands = [];
+        for (const r of reviews) {
+          if (r.state === "APPROVED" && isOp(r.user)) {
+            cands.push({ decision: "approve", at: r.submitted_at || r.created_at || "", by: r.user.login });
+          }
+        }
+        for (const c of comments) {
+          if (!isOp(c.user)) continue;
+          const body = (c.body || "").trim();
+          if (/^deploy:\s*approve\b/i.test(body)) {
+            cands.push({ decision: "approve", at: c.created_at, by: c.user.login });
+          } else if (/^deploy:\s*decline\b/i.test(body)) {
+            cands.push({ decision: "decline", at: c.created_at, by: c.user.login });
+          }
+        }
+        if (!cands.length) continue;
+        cands.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+        let latest = cands[cands.length - 1];
+        // Same second, opposite answers: keep the safer one. This preserves the
+        // old "decline wins" tie-break without letting an old decline veto a
+        // later approve forever.
+        const prev = cands[cands.length - 2];
+        if (prev && prev.at === latest.at && prev.decision === "decline" && latest.decision !== "decline") {
+          latest = prev;
+        }
+        // Idempotency gate. The deploy engineer records one "dsh-action:"
+        // comment as its last action. Without this gate, a decision on a PR
+        // that cannot be deployed (a conflict, a failed build) stayed open and
+        // matched again on the next tick, so the full merge-build-deploy
+        // attempt repeated every 15 minutes and re-posted to Slack each time.
+        // A new "deploy: approve" comment is later than the marker, so the
+        // operator retries deliberately, not the cron.
+        const actedAt = comments
+          .filter((c) => /^dsh-action:/i.test((c.body || "").trim()))
+          .map((c) => c.created_at)
+          .sort();
+        if (actedAt.length && actedAt[actedAt.length - 1] >= latest.at) continue;
+        decisions.push({
+          decision: latest.decision,
+          number: it.number,
+          head_sha: pr.head.sha,
+          title: pr.title,
+          by: latest.by,
+          mergeable: pr.mergeable,
+        });
       }
       if (decisions.length === 0) { console.log(JSON.stringify({ decision: null })); return; }
       // Oldest decided PR first (API returns newest-first); one action per tick.

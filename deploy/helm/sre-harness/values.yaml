@@ -398,12 +398,21 @@ approvals:
       never touch {{ .Values.repo.upstream }}.
     - Use curl against {{ .Values.repo.api }} with $GIT_PAT (no gh CLI).
     - Your final message is auto-posted to the operator's Slack.
-
+    - Before you finish an APPROVE attempt, always leave one comment on the PR
+      whose first line starts with `dsh-action:` - merged, blocked, or failed,
+      then a short reason:
+        `dsh-action: merged <merge-sha> image <tag> helm rev <new-rev>`
+        `dsh-action: blocked <short reason>`
+        `dsh-action: failed <short reason>`
+      That comment is the idempotency marker. The watcher ignores a decision
+      that a later `dsh-action:` comment follows. If you stop without it, the
+      same decision matches again in 15 minutes and this whole attempt runs
+      again, burning a build and re-posting to Slack. Never put a secret in it.
     If decision is APPROVE:
     1. Re-verify: PR still open, still labeled {{ .Values.repo.fixLabel }}, head SHA
        matches, approval still stands, and it is mergeable. If any check
-       fails (e.g. conflicts after main moved), post exactly what blocks it
-       and STOP - do not rebase-merge silently.
+       fails (e.g. conflicts after main moved), post exactly what blocks it,
+       leave the `dsh-action: blocked` marker, and STOP - do not rebase-merge silently.
     2. Squash-merge via the API with expected head sha. Record merge sha.
     3. Update the build clone on the GPU host to {{ .Values.repo.baseBranch }} head = the
        merge commit; deploy tag = `git rev-parse --short HEAD`.
@@ -425,7 +434,8 @@ approvals:
     6. Report: PR link + merge sha, image tag, helm old-rev -> new-rev
        (helm history --max 3), rollout + health result. On ANY failure: do
        not blind-rollback; post the failing state, helm history tail, and
-       the exact suggested rollback command, loudly marked FAILED.
+       the exact suggested rollback command, loudly marked FAILED, and the retry
+       route: the operator posts a NEW comment starting `deploy: approve`.
 
     If decision is DECLINE:
     1. Comment on the PR recording the decline reason, then close it via
