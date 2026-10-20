@@ -1578,13 +1578,20 @@ export function createDbSetupTokenCleanupStore(db: Db): SetupTokenCleanupStore {
       // A record is reapable when its session is terminal, its deadline is past,
       // or its claim is already consumed. The scan filters by the setup-token
       // adapter, so it never reaps a Codex device-login row on the shared table.
-      // The deadline index supports the scan.
+      // The scan also requires a lease reference. A local-subscription login
+      // attempt for the Anthropic provider shares this adapter type but never
+      // holds a sandbox lease, so its `provider_lease_id` stays null. Without a
+      // lease to release, the release throws on the empty lease id and the
+      // reaper would retry the row forever, so the local-login flow, which owns
+      // those rows, is left to expire them itself. The deadline index supports
+      // the scan.
       const rows = await db
         .select()
         .from(adapterAuthSessions)
         .where(
           and(
             eq(adapterAuthSessions.adapterType, SETUP_TOKEN_ADAPTER_TYPE),
+            isNotNull(adapterAuthSessions.providerLeaseId),
             or(
               inArray(adapterAuthSessions.status, [...SETUP_TOKEN_TERMINAL_STATES]),
               lte(adapterAuthSessions.expiresAt, new Date(now)),

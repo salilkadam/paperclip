@@ -1524,6 +1524,30 @@ describeEmbeddedPostgres("durable setup-token cleanup store (embedded postgres)"
     expect(ids.has(liveStored.sessionId)).toBe(false);
   });
 
+  it("ignores a lease-less claude_local row from the local-subscription login flow", async () => {
+    // A local-subscription login attempt for the Anthropic provider records on
+    // the shared table under the same `claude_local` adapter type as a
+    // setup-token row, but it never acquires a sandbox lease, so its
+    // `provider_lease_id` stays null. Once the attempt is terminal the
+    // setup-token reaper must leave the row alone: it owns no lease to
+    // release, releasing the empty lease id throws, and the row would be
+    // retried on every sweep forever. The local-login flow owns those rows.
+    const scope = await seedScope();
+    await db.insert(adapterAuthSessions).values({
+      companyId: scope.companyId,
+      environmentId: scope.environmentId,
+      adapterType: "claude_local",
+      connectionMethod: "local_subscription",
+      startedByUserId: scope.ownerUserId,
+      publicSessionId: scope.sessionId,
+      status: "timed_out",
+      expiresAt: null,
+    });
+
+    const reapable = await createDbSetupTokenCleanupStore(db).listReapable(Date.now());
+    expect(reapable.map((record) => record.sessionId)).not.toContain(scope.sessionId);
+  });
+
   it("returns no row when the claim row lock holds until after the deadline", async () => {
     // This test proves the consume uses `clock_timestamp()`, not
     // `transaction_timestamp()`. The row starts with a far-future deadline, so
