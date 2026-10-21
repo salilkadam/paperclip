@@ -171,10 +171,18 @@ export function buildHandlers(ctx: PluginContext) {
       if (typeof p.title !== "string" || !p.title.trim()) throw new ConfigError("`title` is required");
       const { site, config } = await siteFor(ctx, companyId);
       const fields = { ...postFields(p), status: "draft" };
-      const users = ((await call(site, "GET", "/users/", { query: { filter: `email:'${config.agentEmail}'`, fields: "id" } })).users as Record<string, unknown>[]) ?? [];
       const warnings: string[] = [];
+      let users: Record<string, unknown>[] = [];
+      try {
+        users = ((await call(site, "GET", "/users/", { query: { filter: `email:'${config.agentEmail}'`, fields: "id" } })).users as Record<string, unknown>[]) ?? [];
+      } catch (error) {
+        // A key that may not browse staff must not block drafting: credit the
+        // owner and say so, rather than failing the draft.
+        if (!(error instanceof GhostError) || (error.status !== 403 && error.status !== 401)) throw error;
+        warnings.push(`cannot look up staff users (${error.message}); credited to the site owner`);
+      }
       if (users[0]?.id) (fields as Record<string, unknown>).authors = [{ id: users[0].id }];
-      else warnings.push(`no staff user ${config.agentEmail} on this blog; credited to the site owner`);
+      else if (!warnings.length) warnings.push(`no staff user ${config.agentEmail} on this blog; credited to the site owner`);
       const res = await call(site, "POST", "/posts/", {
         query: { include: "tags,authors", ...(typeof p.html === "string" ? { source: "html" } : {}) },
         body: { posts: [fields] },

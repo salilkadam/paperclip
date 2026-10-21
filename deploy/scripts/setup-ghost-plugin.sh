@@ -135,29 +135,64 @@ for entry in "${SITES[@]}"; do
   api POST "/plugins/$pid/config" "$W/cfg.json" >/dev/null
   log "  config saved (siteUrl $site_url)"
 
-  # 3. Access: a profile with exactly the plugin's tools, bound to the company.
+  # 3. Access: a profile with exactly the plugin's tools, bound to the company
+  #    AND to each current agent. Paperclip applies only the NARROWEST bound
+  #    scope (agent beats project beats company), so an agent with its own
+  #    profile would otherwise lose a company-only grant. Agents added later
+  #    get the company binding; re-run this script to give them the agent one.
+  agents_json="$(api GET "/companies/$cid/agents" | list agents | jq -c '[.[] | select(.status as $s | ["active","idle","running","paused","error"] | index($s)) | .id]')"
+  [[ "$(jq length <<<"$agents_json")" -gt 0 ]] || die "no assignable agent in company $cid"
   prof="$(api GET "/companies/$cid/tools/profiles" | list profiles | jq -c --arg k "$PROFILE_KEY" '[.[] | select(.profileKey==$k)] | .[0] // empty')"
   if [[ -z "$prof" ]]; then
     jq -n --arg k "$PROFILE_KEY" --arg n "$PROFILE_NAME" --argjson t "$tools_json" \
       '{profileKey:$k, name:$n, description:"Ghost Blog plugin tools (drafts only) for this company'"'"'s own blog.",
         defaultAction:"deny", entries:[$t[] | {selectorType:"tool_name", effect:"include", toolName:.}]}' > "$W/prof.json"
     prof="$(api POST "/companies/$cid/tools/profiles" "$W/prof.json")"
-    jq -n --arg c "$cid" '{targetType:"company", targetId:$c}' > "$W/bind.json"
-    api POST "/companies/$cid/tools/profiles/$(jq -r '.id // .profile.id' <<<"$prof")/bind" "$W/bind.json" >/dev/null
-    log "  profile created and bound to the company"
+    log "  profile created"
   fi
+  prof_id="$(jq -r '.id // .profile.id' <<<"$prof")"
+  [[ "$(jq -r '.status // "active"' <<<"$prof")" == active ]] || die "$site: profile $PROFILE_KEY exists but is $(jq -r .status <<<"$prof"); reactivate or remove it"
+  bind() {  # bind <targetType> <targetId>; an existing identical binding is fine
+    local code
+    jq -n --arg t "$1" --arg i "$2" '{targetType:$t, targetId:$i}' > "$W/bind.json"
+    code="$(curl -sS -o "$W/resp" -w '%{http_code}' -X POST -H @"$W/auth" -H 'Content-Type: application/json' \
+      --data-binary @"$W/bind.json" --max-time 60 "$API/api/companies/$cid/tools/profiles/$prof_id/bind")" || die "bind $1 $2: transport error"
+    [[ "$code" =~ ^2 || "$code" == 409 ]] || die "bind $1 $2 -> HTTP $code: $(head -c 300 "$W/resp")"
+  }
+  bind company "$cid"
+  for a in $(jq -r '.[]' <<<"$agents_json"); do bind agent "$a"; done
+  log "  profile bound to the company and $(jq length <<<"$agents_json") agent(s)"
 
-  # 4. Verify with the policy engine (the decision path agents hit).
-  agent="$(api GET "/companies/$cid/agents" | list agents | jq -r '[.[] | select(.status as $s | ["active","idle","running","paused","error"] | index($s))][0].id // empty')"
-  [[ -n "$agent" ]] || die "no assignable agent in company $cid to verify with"
-  for t in "${TOOLS[@]}"; do
-    jq -n --arg c "$cid" --arg a "$agent" --arg t "$PLUGIN_KEY:$t" \
+  # A company policy is evaluated BEFORE profiles and can match on provider
+  # type or risk level, which policy/test cannot express. Refuse to report
+  # success if an enabled block/approval policy could catch these tools
+  # (an approved plugin action cannot run, so require_approval = never runs).
+  clash="$(api GET "/companies/$cid/tools/policies" | list policies | jq -r --argjson t "$tools_json" '
+    [.[] | select(.enabled != false and (.policyType == "block" or .policyType == "require_approval"))
+         | select(
+             (.selectors // {}) as $s
+             | ($s | length) == 0
+               or ([($s.providerType // empty), ($s.providerTypes // [])[]?] | any(. == "paperclip_plugin"))
+               or ([($s.riskLevel // empty), ($s.riskLevels // [])[]?] | any(. == "read" or . == "write"))
+               or ([($s.toolName // empty), ($s.toolNames // [])[]?] | any(. as $n | $t | index($n))))
+         | .name] | join(", ")')"
+  [[ -z "$clash" ]] || die "$site: company policies that would block or hold these plugin tools: $clash"
+
+  # 4. Verify every agent: the plugin tools are effectively allowed for it.
+  for a in $(jq -r '.[]' <<<"$agents_json"); do
+    eff="$(api GET "/companies/$cid/tools/profiles/effective/agents/$a")"
+    missing="$(jq -r --argjson t "$tools_json" '[$t[] as $n | select((.allowedToolNames // []) | index($n) | not) | $n] | join(", ")' <<<"$eff")"
+    [[ -z "$missing" ]] || die "$site: agent $a is not allowed: $missing (a narrower profile or binding may shadow the company grant)"
+    jq -n --arg c "$cid" --arg a "$a" --arg t "$PLUGIN_KEY:site_info" \
       '{companyId:$c, actor:{actorType:"agent", actorId:$a, agentId:$a}, request:{toolName:$t}}' > "$W/dec.json"
     d="$(api POST "/companies/$cid/tools/policy/test" "$W/dec.json" | jq -r '.decision.decision // .decision')"
-    [[ "$d" == allow* ]] || die "$site: $PLUGIN_KEY:$t decides '$d' for agent $agent, expected allow"
+    [[ "$d" == allow* ]] || die "$site: policy engine decides '$d' for agent $a"
   done
-  log "  access verified: ${TOOLS[*]} allowed"
+  agent="$(jq -r '.[0]' <<<"$agents_json")"
+  log "  access verified for every agent: ${TOOLS[*]}"
 
+  # The real call below uses the board path (plugin, config, secret, network);
+  # agent authorization is what the checks above verify.
   # Real call through the plugin when the company has a run to attach to.
   run="$(api GET "/companies/$cid/heartbeat-runs?limit=50" | list runs | jq -r --arg a "$agent" '[.[] | select(.agentId==$a)][0].id // empty')"
   project="$(api GET "/companies/$cid/projects" | list projects | jq -r '.[0].id // empty')"

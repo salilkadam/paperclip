@@ -139,9 +139,33 @@ describe("Ghost wire format", () => {
     await expect(buildHandlers(ctx)[TOOL_NAMES.siteInfo]({}, "company-b")).rejects.toThrow(/HTTP 401 UnauthorizedError: Invalid token/);
   });
 
-  it("refuses redirects instead of following them", async () => {
+  it("asks the transport not to follow redirects, and refuses a 3xx", async () => {
+    const seen: RequestInit[] = [];
     const { ctx } = stubCtx(() => ({ status: 301 }));
+    const realFetch = (ctx as unknown as { http: { fetch: (u: string, i?: RequestInit) => Promise<Response> } }).http.fetch;
+    (ctx as unknown as { http: { fetch: unknown } }).http.fetch = (u: string, i?: RequestInit) => { seen.push(i ?? {}); return realFetch(u, i); };
     await expect(buildHandlers(ctx)[TOOL_NAMES.siteInfo]({}, "company-b")).rejects.toThrow(/unexpected redirect/);
+    expect(seen[0]!.redirect).toBe("manual");
+  });
+
+  it("list_articles validates the tag and status before building the filter", async () => {
+    const { ctx, calls } = stubCtx(() => ({ status: 200, json: { posts: [], meta: {} } }));
+    const h = buildHandlers(ctx);
+    await expect(h[TOOL_NAMES.listArticles]({ tag: "x+status:published" }, "company-b")).rejects.toThrow(/slug/);
+    await expect(h[TOOL_NAMES.listArticles]({ status: "all" }, "company-b")).rejects.toThrow(/status must be/);
+    expect(calls).toHaveLength(0);
+    await h[TOOL_NAMES.listArticles]({ status: "draft", tag: "ai-news" }, "company-b");
+    expect(new URL(calls[0]!.url).searchParams.get("filter")).toBe("status:draft+tag:ai-news");
+  });
+
+  it("create_draft still drafts when the key may not browse staff (403): credits the owner, warns", async () => {
+    const { ctx, calls } = stubCtx((c) =>
+      c.url.includes("/users/") ? { status: 403, json: { errors: [{ message: "Permission error", type: "NoPermissionError" }] } } : { status: 201, json: { posts: [post()] } });
+    const res = await buildHandlers(ctx)[TOOL_NAMES.createDraft]({ title: "Hi", markdown: "x" }, "company-b");
+    expect((res.data as { warnings: string[] }).warnings[0]).toMatch(/cannot look up staff users/);
+    const sent = (calls.find((c) => c.method === "POST")!.body as { posts: Record<string, unknown>[] }).posts[0]!;
+    expect(sent.authors).toBeUndefined();
+    expect(sent.status).toBe("draft");
   });
 });
 

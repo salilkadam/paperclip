@@ -70,7 +70,6 @@ export async function ghostRequest(
   } catch (error) {
     throw new GhostError(null, `cannot reach the blog: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (res.status === 204) return {};
   if (res.status >= 300 && res.status < 400) {
     throw new GhostError(res.status, `unexpected redirect to ${res.headers.get("location") ?? "?"} (check siteUrl / forwardedProto)`);
   }
