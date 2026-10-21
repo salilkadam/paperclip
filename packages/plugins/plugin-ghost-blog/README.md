@@ -9,10 +9,15 @@ Agents write and manage articles on **their own company's** Ghost blog.
 - **Isolation is structural.** A tool call reads only the calling agent's company
   configuration. Site and key never come from tool arguments, so an agent cannot
   reach another company's blog.
-- **Ask first.** `publish_article`, `unpublish_article` and `delete_article` are
-  meant to sit behind a company `require_approval` policy.
-  `deploy/scripts/setup-ghost-plugin.sh` creates it and verifies the policy
-  decisions.
+- **Drafts only.** There are no publish, unpublish or delete tools, and
+  `update_article` refuses non-drafts. Paperclip core cannot execute an
+  approved ("ask first") plugin action after the fact, so an approval-gated
+  plugin publish could never run. Publishing happens in Ghost admin, or through
+  the per-company **Ghost blog** MCP connection, whose ask-first approvals do
+  run.
+- **Access.** `deploy/scripts/setup-ghost-plugin.sh` creates a company tool
+  profile that includes exactly these tools, binds it to the company, and
+  verifies the policy decisions plus one real call.
 
 | Tool | What it does |
 |---|---|
@@ -20,10 +25,7 @@ Agents write and manage articles on **their own company's** Ghost blog.
 | `list_articles` | Newest first; filter by `status`, `tag` |
 | `get_article` | One article with rendered HTML |
 | `create_draft` | Draft from `markdown` or `html`, credited to the Blog Agent staff user |
-| `update_article` | Change fields; the body and tags are replaced when passed |
-| `publish_article` | Publish now, or schedule with `publishAt`. Never sends a newsletter. |
-| `unpublish_article` | Back to draft |
-| `delete_article` | Permanent |
+| `update_article` | Change a **draft** (body and tags are replaced when passed) |
 | `list_tags` | Tags with post counts |
 
 ## Network

@@ -11,11 +11,16 @@
 #      company's Ghost Admin API key (Vault t6-apps/ghost/config:<site>_admin_api_key;
 #      write-only in Paperclip), and the plugin config for that company
 #      (siteUrl + a secret_ref to its own secret);
-#   3. per company: a require_approval policy, so publish_article,
-#      unpublish_article and delete_article are ASK FIRST;
-#   4. verify: the policy engine answers require_approval for those three and
-#      allows the reads; when the company has a recent run, a real site_info
-#      call returns that company's own blog.
+#   3. per company: a tool profile "Ghost blog (plugin)" that includes exactly
+#      the plugin's tools, bound to the company (all its agents);
+#   4. verify: the policy engine allows each tool for an agent of the company,
+#      and a real site_info call returns that company's own blog. If no run
+#      exists to make that call, the script exits 3 ("configured, not verified").
+#
+# DRAFTS ONLY: the plugin has no publish/unpublish/delete tools (Paperclip
+# cannot execute an approved plugin action after the fact). Publishing is
+# done in Ghost admin or through the per-company Ghost blog MCP connection,
+# whose ask-first approvals do run.
 #
 # Isolation is structural: each tool call reads only the calling company's
 # config, so a company's agents can reach only its own blog. Reaching the
@@ -32,9 +37,10 @@ API="${PAPERCLIP_API_BASE:-https://org.baisoln.com}"
 PLUGIN_KEY="paperclip.ghost-blog"
 PLUGIN_PATH="${GHOST_PLUGIN_PATH:-/app/packages/plugins/plugin-ghost-blog}"
 SECRET_KEY="ghost_admin_api_key"
-POLICY_NAME="Ghost blog plugin: ask first"
-ASK_FIRST=(publish_article unpublish_article delete_article)
-READS=(site_info list_articles get_article list_tags)
+PROFILE_KEY="ghost-blog-plugin"
+PROFILE_NAME="Ghost blog (plugin)"
+TOOLS=(site_info list_articles get_article create_draft update_article list_tags)
+UNVERIFIED=0
 # site|company-name prefix|siteUrl|publicUrl|siteName
 SITES=(
   "bionic|Bionic AI Solutions|http://ghost-bionic.blog.svc.cluster.local:2368|https://blog-bionic.baisoln.com|Bionic AI Solutions"
@@ -80,12 +86,13 @@ companies="$(api GET /companies | list companies | jq '[.[] | select((.status //
 log "board key sees $(jq length <<<"$companies") active companies"
 
 # 1. Install once.
-plugin="$(api GET /plugins | list plugins | jq -c --arg k "$PLUGIN_KEY" '[.[] | select(.pluginKey==$k)] | .[0] // empty')"
+find_plugin() { api GET /plugins | list plugins | jq -c --arg k "$PLUGIN_KEY" '[.[] | select(.pluginKey==$k and .status!="uninstalled")] | .[0] // empty'; }
+plugin="$(find_plugin)"
 if [[ -z "$plugin" ]]; then
   [[ $DRY -eq 1 ]] && { log "dry-run: would install $PLUGIN_KEY from $PLUGIN_PATH"; exit 0; }
   jq -n --arg p "$PLUGIN_PATH" '{packageName:$p, isLocalPath:true}' > "$W/install.json"
   api POST /plugins/install "$W/install.json" >/dev/null
-  plugin="$(api GET /plugins | list plugins | jq -c --arg k "$PLUGIN_KEY" '[.[] | select(.pluginKey==$k)] | .[0] // empty')"
+  plugin="$(find_plugin)"
   [[ -n "$plugin" ]] || die "plugin did not appear after install"
   log "installed $PLUGIN_KEY"
 fi
@@ -94,7 +101,7 @@ if [[ "$status" != "ready" && "$status" != "enabled" && "$status" != "active" ]]
   log "plugin status '$status'; enabling"
   api POST "/plugins/$pid/enable" >/dev/null
 fi
-tools_json="$(printf '%s\n' "${ASK_FIRST[@]}" | jq -R --arg k "$PLUGIN_KEY" '"\($k):\(.)"' | jq -s .)"
+tools_json="$(printf '%s\n' "${TOOLS[@]}" | jq -R --arg k "$PLUGIN_KEY" '"\($k):\(.)"' | jq -s .)"
 
 for entry in "${SITES[@]}"; do
   IFS='|' read -r site match site_url public_url site_name <<<"$entry"
@@ -105,7 +112,7 @@ for entry in "${SITES[@]}"; do
   [[ $DRY -eq 1 ]] && continue
 
   # 2a. The company's own secret.
-  sec="$(api GET "/companies/$cid/secrets" | list secrets | jq -c --arg k "$SECRET_KEY" '[.[] | select(.key==$k)] | .[0] // empty')"
+  sec="$(api GET "/companies/$cid/secrets" | list secrets | jq -c --arg k "$SECRET_KEY" '[.[] | select(.key==$k and ((.status // "active") | IN("active","enabled")))] | .[0] // empty')"
   if [[ -z "$sec" || $ROTATE -eq 1 ]]; then
     key="$(vault_get t6-apps/ghost/config "${site}_admin_api_key")"
     if [[ -z "$sec" ]]; then
@@ -128,31 +135,28 @@ for entry in "${SITES[@]}"; do
   api POST "/plugins/$pid/config" "$W/cfg.json" >/dev/null
   log "  config saved (siteUrl $site_url)"
 
-  # 3. Ask-first policy.
-  have="$(api GET "/companies/$cid/tools/policies" | list policies | jq -r --arg n "$POLICY_NAME" '[.[] | select(.name==$n)] | length')"
-  if [[ "$have" -eq 0 ]]; then
-    jq -n --arg n "$POLICY_NAME" --argjson t "$tools_json" \
-      '{name:$n, description:"Publishing, unpublishing and deleting blog articles need a board approval.",
-        policyType:"require_approval", priority:50, enabled:true, selectors:{toolNames:$t}}' > "$W/pol.json"
-    api POST "/companies/$cid/tools/policies" "$W/pol.json" >/dev/null
-    log "  ask-first policy created"
+  # 3. Access: a profile with exactly the plugin's tools, bound to the company.
+  prof="$(api GET "/companies/$cid/tools/profiles" | list profiles | jq -c --arg k "$PROFILE_KEY" '[.[] | select(.profileKey==$k)] | .[0] // empty')"
+  if [[ -z "$prof" ]]; then
+    jq -n --arg k "$PROFILE_KEY" --arg n "$PROFILE_NAME" --argjson t "$tools_json" \
+      '{profileKey:$k, name:$n, description:"Ghost Blog plugin tools (drafts only) for this company'"'"'s own blog.",
+        defaultAction:"deny", entries:[$t[] | {selectorType:"tool_name", effect:"include", toolName:.}]}' > "$W/prof.json"
+    prof="$(api POST "/companies/$cid/tools/profiles" "$W/prof.json")"
+    jq -n --arg c "$cid" '{targetType:"company", targetId:$c}' > "$W/bind.json"
+    api POST "/companies/$cid/tools/profiles/$(jq -r '.id // .profile.id' <<<"$prof")/bind" "$W/bind.json" >/dev/null
+    log "  profile created and bound to the company"
   fi
 
-  # 4. Verify with the policy engine (same decision path agents hit).
+  # 4. Verify with the policy engine (the decision path agents hit).
   agent="$(api GET "/companies/$cid/agents" | list agents | jq -r '[.[] | select(.status as $s | ["active","idle","running","paused","error"] | index($s))][0].id // empty')"
   [[ -n "$agent" ]] || die "no assignable agent in company $cid to verify with"
-  decide() {
-    jq -n --arg c "$cid" --arg a "$agent" --arg t "$PLUGIN_KEY:$1" \
-      '{companyId:$c, actor:{actorType:"agent", actorId:$a, agentId:$a}, request:{toolName:$t, sideEffecting:true}}' > "$W/dec.json"
-    api POST "/companies/$cid/tools/policy/test" "$W/dec.json" | jq -r '.decision.decision // .decision'
-  }
-  for t in "${ASK_FIRST[@]}"; do
-    d="$(decide "$t")"; [[ "$d" == require_approval ]] || die "$site: $t decides '$d', expected require_approval"
+  for t in "${TOOLS[@]}"; do
+    jq -n --arg c "$cid" --arg a "$agent" --arg t "$PLUGIN_KEY:$t" \
+      '{companyId:$c, actor:{actorType:"agent", actorId:$a, agentId:$a}, request:{toolName:$t}}' > "$W/dec.json"
+    d="$(api POST "/companies/$cid/tools/policy/test" "$W/dec.json" | jq -r '.decision.decision // .decision')"
+    [[ "$d" == allow* ]] || die "$site: $PLUGIN_KEY:$t decides '$d' for agent $agent, expected allow"
   done
-  for t in "${READS[@]}"; do
-    d="$(decide "$t")"; [[ "$d" == allow* ]] || die "$site: $t decides '$d', expected allow"
-  done
-  log "  policy verified: ${ASK_FIRST[*]} ask first; reads allowed"
+  log "  access verified: ${TOOLS[*]} allowed"
 
   # Real call through the plugin when the company has a run to attach to.
   run="$(api GET "/companies/$cid/heartbeat-runs?limit=50" | list runs | jq -r --arg a "$agent" '[.[] | select(.agentId==$a)][0].id // empty')"
@@ -165,7 +169,12 @@ for entry in "${SITES[@]}"; do
     [[ "$url" == "$public_url/" || "$url" == "$public_url" ]] || die "$site: site_info returned '${url:-?}', expected $public_url: $(head -c 300 <<<"$out")"
     log "  verified: a real site_info call returns $url"
   else
-    log "  (no run/project in this company yet: real call skipped; policy verified)"
+    log "  NOT VERIFIED: no run/project in this company yet, so no real call was made"
+    UNVERIFIED=1
   fi
 done
+if [[ $UNVERIFIED -eq 1 ]]; then
+  log "done: configured, but at least one company could not be verified with a real call (exit 3)"
+  exit 3
+fi
 log "done"

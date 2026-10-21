@@ -17,18 +17,19 @@ export const TOOL_NAMES = {
   getArticle: "get_article",
   createDraft: "create_draft",
   updateArticle: "update_article",
-  publishArticle: "publish_article",
-  unpublishArticle: "unpublish_article",
-  deleteArticle: "delete_article",
   listTags: "list_tags",
 } as const;
 
-/** Tools that should be "ask first" (approval before they run). */
-export const ASK_FIRST_TOOLS = [
-  TOOL_NAMES.publishArticle,
-  TOOL_NAMES.unpublishArticle,
-  TOOL_NAMES.deleteArticle,
-] as const;
+/**
+ * DRAFTS ONLY. The plugin deliberately has no publish, unpublish or delete
+ * tools: Paperclip core cannot execute an approved ("ask first") plugin
+ * action outside its originating run, so a plugin publish could never be
+ * approved-then-run. Publishing stays with a human (Ghost admin) or the
+ * per-company Ghost blog MCP connection, whose ask-first approvals do run.
+ * update_article likewise refuses anything that is not a draft, so live
+ * content never changes without that approval.
+ */
+export const ALL_TOOLS = Object.values(TOOL_NAMES);
 
 const id = { type: "string", pattern: "^[0-9a-f]{24}$", description: "Ghost post id (24 hex characters)." };
 const body = {
@@ -53,7 +54,7 @@ const manifest: PaperclipPluginManifestV1 = {
   version: "0.1.0",
   displayName: "Ghost Blog",
   description:
-    "Write and manage articles on your company's Ghost blog. Each company uses its own site and key; agents only ever reach their own company's blog.",
+    "Draft articles on your company's Ghost blog. Each company uses its own site and key; agents only ever reach their own company's blog. Drafts only: publishing needs a human or the approval-gated Ghost blog connection.",
   author: "Bionic AI Solutions",
   categories: ["connector"],
   capabilities: [
@@ -74,15 +75,15 @@ const manifest: PaperclipPluginManifestV1 = {
       publicUrl: { type: "string", format: "uri", description: "Public URL of the blog, used in links returned to agents." },
       siteName: { type: "string", description: "Display name, e.g. `Bionic AI Solutions`." },
       adminApiKey: {
-        type: ["string", "object"],
+        type: "object",
         format: "secret-ref",
-        maxLength: 8192,
         description:
-          "Admin API key of a Ghost custom integration (`id:secret`). Pick a saved Paperclip secret; only the reference is stored.",
+          "Admin API key of a Ghost custom integration (`id:secret`), as a saved Paperclip secret. Only the reference is stored; a pasted plaintext key is not accepted.",
       },
       agentEmail: {
         type: "string",
         format: "email",
+        pattern: "^[^'\\\\\\s]+$",
         default: "blog-agent@baisoln.com",
         description: "Ghost staff user credited as the author of agent-written articles.",
       },
@@ -124,32 +125,14 @@ const manifest: PaperclipPluginManifestV1 = {
     {
       name: TOOL_NAMES.createDraft,
       displayName: "Blog: create draft",
-      description: "Create a DRAFT article on your company's blog, credited to the Blog Agent. Use publish_article to make it live.",
+      description: "Create a DRAFT article on your company's blog, credited to the Blog Agent. Publishing is done by a human or the Ghost blog connection (with approval).",
       parametersSchema: obj({ title: { type: "string", minLength: 1 }, ...body }, ["title"]),
     },
     {
       name: TOOL_NAMES.updateArticle,
       displayName: "Blog: update article",
-      description: "Change fields of an article. Passing markdown/html replaces the body; passing tags replaces the tags.",
+      description: "Change fields of a DRAFT article (published articles are refused). Passing markdown/html replaces the body; passing tags replaces the tags.",
       parametersSchema: obj({ id, title: { type: "string", minLength: 1 }, ...body }, ["id"]),
-    },
-    {
-      name: TOOL_NAMES.publishArticle,
-      displayName: "Blog: publish article",
-      description: "Publish an article now, or schedule it with a future publishAt (ISO-8601 with timezone). Never sends a newsletter.",
-      parametersSchema: obj({ id, publishAt: { type: "string", description: "e.g. 2026-11-01T09:00:00Z" } }, ["id"]),
-    },
-    {
-      name: TOOL_NAMES.unpublishArticle,
-      displayName: "Blog: unpublish article",
-      description: "Take a published or scheduled article back to draft.",
-      parametersSchema: obj({ id }, ["id"]),
-    },
-    {
-      name: TOOL_NAMES.deleteArticle,
-      displayName: "Blog: delete article",
-      description: "Permanently delete an article. Prefer unpublish_article.",
-      parametersSchema: obj({ id }, ["id"]),
     },
     {
       name: TOOL_NAMES.listTags,

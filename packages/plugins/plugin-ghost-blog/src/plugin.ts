@@ -27,6 +27,13 @@ export interface GhostBlogConfig {
   forwardedProto: "https" | "none";
 }
 
+function agentEmailOf(value: unknown): string {
+  const email = typeof value === "string" && value.trim() ? value.trim() : "blog-agent@baisoln.com";
+  // Interpolated into Ghost's NQL filter email:'...': refuse anything that could break out.
+  if (!/^[^\s'"\\@]+@[^\s'"\\@]+$/.test(email)) throw new ConfigError(`agentEmail is not a plain email address: ${email}`);
+  return email;
+}
+
 export function parseConfig(raw: unknown): GhostBlogConfig {
   if (!isRecord(raw) || typeof raw.siteUrl !== "string" || !raw.siteUrl.trim()) {
     throw new ConfigError(
@@ -48,7 +55,7 @@ export function parseConfig(raw: unknown): GhostBlogConfig {
     publicUrl: typeof raw.publicUrl === "string" ? raw.publicUrl : null,
     siteName: typeof raw.siteName === "string" ? raw.siteName : null,
     adminApiKey: raw.adminApiKey,
-    agentEmail: typeof raw.agentEmail === "string" && raw.agentEmail ? raw.agentEmail : "blog-agent@baisoln.com",
+    agentEmail: agentEmailOf(raw.agentEmail),
     forwardedProto: raw.forwardedProto === "none" ? "none" : "https",
   };
 }
@@ -72,13 +79,11 @@ export async function resolveAdminKey(ctx: PluginContext, value: unknown, compan
     if (!resolved) throw new ConfigError("adminApiKey resolved to an empty value");
     return resolved;
   }
-  if (typeof value === "string") {
-    if (UUID_RE.test(value.trim())) {
-      throw new ConfigError("adminApiKey holds a bare secret id; pick the saved secret so it is stored as a secret_ref binding");
-    }
-    return value.trim();
-  }
-  throw new ConfigError("adminApiKey has an unsupported form");
+  throw new ConfigError(
+    typeof value === "string" && UUID_RE.test(value.trim())
+      ? "adminApiKey holds a bare secret id; pick the saved secret so it is stored as a secret_ref binding"
+      : "adminApiKey must be a saved Paperclip secret (secret_ref); plaintext keys are not accepted",
+  );
 }
 
 async function siteFor(ctx: PluginContext, companyId: string): Promise<{ site: GhostSite; config: GhostBlogConfig }> {
@@ -183,31 +188,17 @@ export function buildHandlers(ctx: PluginContext) {
       if (Object.keys(fields).length === 0) throw new ConfigError("nothing to update: pass at least one field");
       const { site } = await siteFor(ctx, companyId);
       const prev = await current(site, id);
+      if (prev.status !== "draft") {
+        throw new ConfigError(
+          `article ${id} is '${String(prev.status)}', not a draft. Live content changes need approval: use the Ghost blog connection or Ghost admin.`,
+        );
+      }
       const res = await call(site, "PUT", `/posts/${id}/`, {
         query: { include: "tags,authors", ...(typeof p.html === "string" ? { source: "html" } : {}) },
         body: { posts: [{ ...fields, updated_at: prev.updated_at }] },
       });
       const post = summarize((res.posts as Record<string, unknown>[])[0]!);
       return ok(`Updated "${post.title}"`, { article: post });
-    },
-    [TOOL_NAMES.publishArticle]: async (p: Record<string, unknown>, companyId: string) => {
-      const id = requireId(p);
-      let status = "published";
-      let publishedAt: string | undefined;
-      if (p.publishAt !== undefined) {
-        const s = String(p.publishAt);
-        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s) || Number.isNaN(Date.parse(s))) throw new ConfigError("publishAt must be ISO-8601 with a timezone");
-        publishedAt = new Date(s).toISOString();
-        if (Date.parse(s) > Date.now()) status = "scheduled";
-      }
-      return setStatus(id, companyId, status, publishedAt);
-    },
-    [TOOL_NAMES.unpublishArticle]: async (p: Record<string, unknown>, companyId: string) => setStatus(requireId(p), companyId, "draft"),
-    [TOOL_NAMES.deleteArticle]: async (p: Record<string, unknown>, companyId: string) => {
-      const id = requireId(p);
-      const { site } = await siteFor(ctx, companyId);
-      await call(site, "DELETE", `/posts/${id}/`);
-      return ok(`Deleted ${id}`, { deleted: id });
     },
     [TOOL_NAMES.listTags]: async (_p: Record<string, unknown>, companyId: string) => {
       const { site } = await siteFor(ctx, companyId);
@@ -218,18 +209,6 @@ export function buildHandlers(ctx: PluginContext) {
     },
   };
 
-  async function setStatus(id: string, companyId: string, status: string, publishedAt?: string): Promise<ToolResult> {
-    const { site } = await siteFor(ctx, companyId);
-    const prev = await current(site, id);
-    // No ?newsletter= parameter: publishing never emails members.
-    const res = await call(site, "PUT", `/posts/${id}/`, {
-      query: { include: "tags,authors" },
-      body: { posts: [{ status, updated_at: prev.updated_at, ...(publishedAt ? { published_at: publishedAt } : {}) }] },
-    });
-    const post = summarize((res.posts as Record<string, unknown>[])[0]!);
-    if (post.status !== status) return { error: `Ghost left the article '${post.status}', expected '${status}'`, data: { article: post } };
-    return ok(`"${post.title}" is now ${post.status}`, { article: post });
-  }
 }
 
 const plugin = definePlugin({

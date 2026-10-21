@@ -141,8 +141,21 @@ function isNeverAllowedIP(ip: string): boolean {
   const lower = ip.toLowerCase();
   const v4Mapped = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
   if (v4Mapped && v4Mapped[1]) return isNeverAllowedIP(v4Mapped[1]);
-  return ip.startsWith("127.") || ip.startsWith("169.254.") || ip === "0.0.0.0"
-    || lower === "::1" || lower === "::" || lower.startsWith("fe80");
+  return ip.startsWith("127.") || ip.startsWith("169.254.") || ip.startsWith("0.")
+    || lower === "::1" || lower === "::" || lower.startsWith("fe80")
+    // IPv4-compatible / NAT64 embeddings of anything, and AWS's IPv6 metadata
+    // address (which sits inside the ULA range).
+    || lower.startsWith("::") || lower.startsWith("64:ff9b:") || lower === "fd00:ec2::254";
+}
+
+/**
+ * Positive check for allowlisted hosts: the address must be in a private
+ * range (RFC 1918 / ULA, per isPrivateIP) AND not in a never-allowed range.
+ * Public addresses are refused too — an allowlisted name is expected to be an
+ * in-cluster/LAN service, so resolving anywhere else signals tampering.
+ */
+function isAllowlistedPrivateTarget(ip: string): boolean {
+  return isPrivateIP(ip) && !isNeverAllowedIP(ip);
 }
 
 /**
@@ -171,6 +184,15 @@ export function privateHostAllowlistFor(
     }
   }
   return allowed;
+}
+
+/** The fetch handler's resolution step, scoped to the calling plugin's allowlist. */
+export function resolvePluginFetchTarget(
+  pluginKey: string,
+  url: string,
+  env: string | undefined = process.env.PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS,
+): Promise<ValidatedFetchTarget> {
+  return validateAndResolveFetchUrl(url, privateHostAllowlistFor(pluginKey, env));
 }
 
 /**
@@ -240,9 +262,16 @@ export async function validateAndResolveFetchUrl(
     // when some IPs are private. This handles multi-homed hosts that resolve
     // to both private and public addresses.
     const privateAllowed = allowedPrivateHosts.has(originalHostname.toLowerCase().replace(/\.$/, ""));
+    if (privateAllowed && results.some((entry) => !isAllowlistedPrivateTarget(entry.address))) {
+      // Every answer must be a permitted private address; one stray answer
+      // (loopback, metadata, public, CGNAT…) fails the whole request.
+      throw new Error(
+        `All resolved IPs for ${originalHostname} are in private/reserved ranges or outside the allowlisted private ranges`,
+      );
+    }
     const safeResults = results.filter((entry) =>
       privateAllowed
-        ? !isNeverAllowedIP(entry.address)
+        ? isAllowlistedPrivateTarget(entry.address)
         : !isPrivateIP(entry.address));
     if (safeResults.length === 0) {
       throw new Error(
@@ -1628,7 +1657,7 @@ export function buildHostServices(
       async fetch(params) {
         // SSRF protection: validate protocol whitelist + block private IPs.
         // Resolve once, then connect directly to that IP to prevent DNS rebinding.
-        const target = await validateAndResolveFetchUrl(params.url, privateHostAllowlistFor(pluginKey));
+        const target = await resolvePluginFetchTarget(pluginKey, params.url);
 
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), PLUGIN_FETCH_TIMEOUT_MS);
