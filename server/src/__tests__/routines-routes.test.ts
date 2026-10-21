@@ -471,6 +471,28 @@ describe("routine routes", () => {
     expect(mockRoutineService.updateTrigger).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed routine and trigger ids with 400 before touching the service", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      source: "session",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    // A client-supplied id like "<uuid>-recheck" used to reach the uuid column
+    // and surface a database cast error as a 500.
+    const detail = await request(app).get("/api/routines/ca5a9a27-recheck");
+    expect(detail.status).toBe(400);
+    expect(mockRoutineService.getDetail).not.toHaveBeenCalled();
+
+    const triggerPatch = await request(app)
+      .patch("/api/routine-triggers/not-a-uuid")
+      .send({ enabled: true });
+    expect(triggerPatch.status).toBe(400);
+    expect(mockRoutineService.updateTrigger).not.toHaveBeenCalled();
+  });
+
   it("requires an assigned agent for routine revision history access", async () => {
     const app = await createApp({
       type: "agent",
