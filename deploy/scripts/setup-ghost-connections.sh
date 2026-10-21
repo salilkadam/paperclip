@@ -37,6 +37,10 @@ API="${PAPERCLIP_API_BASE:-https://org.baisoln.com}"
 MCP_URL="${GHOST_MCP_URL:-https://mcp.baisoln.com/ghost/mcp}"
 CONN_NAME="Ghost blog"
 ASK_FIRST=(gh_publish_post gh_unpublish_post gh_delete_post)
+# The exact tool set this script may approve. A tool the server adds later is
+# NOT auto-approved: the run stops and names it, so a human reviews it first.
+KNOWN_TOOLS=(gh_list_sites gh_site_info gh_list_posts gh_get_post gh_create_post gh_update_post
+             gh_publish_post gh_unpublish_post gh_delete_post gh_list_tags gh_create_tag gh_upload_image)
 # site:company-name-match (case-insensitive prefix; must match exactly one company)
 SITES=("bionic:Bionic AI Solutions" "reliora:Reliora")
 ROTATE=0; DRY=0
@@ -99,16 +103,17 @@ for entry in "${SITES[@]}"; do
   if [[ -z "$conn_id" || $ROTATE -eq 1 ]]; then
     [[ $DRY -eq 1 ]] && { log "  dry-run: would ${conn_id:+re}connect"; continue; }
     key="$(vault_get t6-apps/mcp/config "apikey_ghost_${site}_key")"
-    jq -n --arg link "$MCP_URL" --arg name "$CONN_NAME" --arg key "$key" --arg re "$conn_id" '
+    # The key reaches jq through its environment (env.*), never through argv.
+    GHOST_GATEWAY_KEY="$key" jq -n --arg link "$MCP_URL" --arg name "$CONN_NAME" --arg re "$conn_id" '
       {link:$link, name:$name, authMode:"custom_headers", grantKind:"organization",
-       credentialValues:{"headers.X-API-Key":$key}}
+       credentialValues:{"headers.X-API-Key":env.GHOST_GATEWAY_KEY}}
       + (if $re != "" then {reconnectConnectionId:$re} else {} end)' > "$WORK/connect.json"
     unset key
     out="$(api POST "/companies/$cid/tools/apps/connect" "$WORK/connect.json")"
     rm -f "$WORK/connect.json"
     conn_id="$(jq -r '.connectionId' <<<"$out")"
     [[ -n "$conn_id" && "$conn_id" != null ]] || die "connect returned no connectionId"
-    log "  connection $conn_id (${ROTATE:+key pushed})"
+    log "  connection $conn_id ($([[ $ROTATE -eq 1 ]] && echo 'current Vault key pushed' || echo created))"
   else
     log "  connection $conn_id exists; re-applying access"
     [[ $DRY -eq 1 ]] && continue
@@ -116,8 +121,11 @@ for entry in "${SITES[@]}"; do
 
   api POST "/tool-connections/$conn_id/catalog/refresh" >/dev/null
   catalog="$(api GET "/tool-connections/$conn_id/catalog" | jq -c '.entries // .catalog // .')"
-  n="$(jq '[.[]|select(.toolName|startswith("gh_"))]|length' <<<"$catalog")"
-  [[ "$n" -eq 12 ]] || die "$cname: expected 12 gh_* tools in the catalog, found $n"
+  known_json="$(printf '%s\n' "${KNOWN_TOOLS[@]}" | jq -R . | jq -s .)"
+  unknown="$(jq -r --argjson k "$known_json" '[.[].toolName | select(. as $t | $k | index($t) | not)] | join(", ")' <<<"$catalog")"
+  [[ -z "$unknown" ]] || die "$cname: catalog has tools this script does not know: $unknown — review them in Paperclip (Apps) or add them to KNOWN_TOOLS"
+  missing="$(jq -r --argjson k "$known_json" '[$k[] as $t | select([.[].toolName] | index($t) | not) | $t] | join(", ")' <<<"$catalog")"
+  [[ -z "$missing" ]] || die "$cname: catalog lacks expected tools: $missing"
   ask_json="$(printf '%s\n' "${ASK_FIRST[@]}" | jq -R . | jq -s .)"
   jq -n --argjson c "$catalog" --argjson ask "$ask_json" '{
       access: "all_agents",
