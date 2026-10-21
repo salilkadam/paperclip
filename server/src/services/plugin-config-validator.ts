@@ -34,6 +34,14 @@ export function validateInstanceConfig(
   // ajv-formats v3 default export is a FormatsPlugin object; call it as a plugin.
   const applyFormats = (addFormats as any).default ?? addFormats;
   applyFormats(ajv);
+  // JsonSchemaForm (ui/src/components/JsonSchemaForm.tsx) supports these
+  // Paperclip vendor-extension annotation keywords in plugin config schemas
+  // (grouping / advanced-field hints for the settings UI). Ajv strict mode
+  // throws on unknown keywords at compile time, so register them here as
+  // annotation-only keywords. New UI keywords must be registered in both
+  // places (contract sync, AGENTS.md §5.2).
+  ajv.addKeyword({ keyword: "x-paperclip-advanced" });
+  ajv.addKeyword({ keyword: "x-paperclip-group" });
   // Register the secret-ref format used by plugin manifests to mark fields that
   // hold a Paperclip secret UUID rather than a raw value. The format is a UI
   // hint only — UUID validation happens in the secrets handler at resolve time.
