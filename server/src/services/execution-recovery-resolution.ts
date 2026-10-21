@@ -316,6 +316,15 @@ export async function settleUnrecoverableExecutions(
   // Keep their evidence and record the policy change in the task's activity log.
   const obsoleteConversationHold = and(
     conversationRecoveryActionPredicate(),
+    // REL-44 change 2: only fold holds whose run actually carries the stamped
+    // continuation policy. Without this gate the fold cancels-and-resurrects
+    // reconciliation holds for policy-less runs every sweep.
+    sql`exists (
+      select 1 from ${heartbeatRuns}
+      where ${heartbeatRuns.companyId} = ${issueRecoveryActions.companyId}
+        and ${heartbeatRuns.id}::text = ${issueRecoveryActions.evidence}->>'runId'
+        and ${heartbeatRuns.resultJson}->>'conversationContinuation' = 'continue_conversation_v1'
+    )`,
     or(
       inArray(issueRecoveryActions.status, ["active", "escalated"]),
       sql`${issueRecoveryActions.evidence}->'automaticRecovery'->>'replay' = 'blocked'`,

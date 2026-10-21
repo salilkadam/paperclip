@@ -1,4 +1,5 @@
 import { isAiAuthenticationBlocked } from "../ai-auth-failure.js";
+import { CONVERSATION_CONTINUATION_POLICY, claimedAdapterType, isConversationAdapter } from "../conversation-continuation.js";
 import { isNativeWorkspaceExportRepairCause } from "@paperclipai/shared";
 import { settleSlackConversation } from "../slack-conversation-lifecycle.js";
 import { externalConversationStateSql } from "../slack-conversation-state.js";
@@ -5935,6 +5936,13 @@ export function recoveryService(
 
     await deps.beforeOrphanedRunTerminalWrite?.(run.id);
     const now = new Date();
+    // REL-44 change 1: a process-gone reap of a legacy conversation run must
+    // carry the same continuation policy the reaper path stamps, so the run is
+    // retry-eligible and no longer re-stamped into reconciliation every sweep.
+    const stampConversationContinuation =
+      authority === "process_gone" &&
+      run.runtimeMode === "legacy" &&
+      isConversationAdapter(claimedAdapterType(run) ?? "");
     const updated = await db
       .update(heartbeatRuns)
       .set({
@@ -5944,6 +5952,14 @@ export function recoveryService(
         errorCode:
           run.errorCode ??
           (terminalStatus === "interrupted" ? errorCode : null),
+        ...(stampConversationContinuation
+          ? {
+              resultJson: {
+                ...(run.resultJson ?? {}),
+                conversationContinuation: CONVERSATION_CONTINUATION_POLICY,
+              },
+            }
+          : {}),
         updatedAt: now,
       })
       .where(
