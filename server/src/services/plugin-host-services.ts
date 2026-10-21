@@ -134,6 +134,46 @@ function isPrivateIP(ip: string): boolean {
 }
 
 /**
+ * Addresses no plugin may ever reach, even through the operator allowlist:
+ * loopback, link-local (incl. the cloud metadata endpoint) and unspecified.
+ */
+function isNeverAllowedIP(ip: string): boolean {
+  const lower = ip.toLowerCase();
+  const v4Mapped = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (v4Mapped && v4Mapped[1]) return isNeverAllowedIP(v4Mapped[1]);
+  return ip.startsWith("127.") || ip.startsWith("169.254.") || ip === "0.0.0.0"
+    || lower === "::1" || lower === "::" || lower.startsWith("fe80");
+}
+
+/**
+ * Operator allowlist of private hostnames, per plugin:
+ *
+ *   PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS=
+ *     "paperclip.ghost-blog=ghost-bionic.blog.svc.cluster.local,ghost-reliora.blog.svc.cluster.local"
+ *
+ * Entries are `<pluginKey>=<host>[,<host>...]`, separated by `;`. Hosts are
+ * exact DNS names (case-insensitive) — no wildcards, no IP literals — so the
+ * exception is as narrow as the operator wrote it. Only the named plugin gets
+ * it; every other plugin keeps the full private-network block.
+ */
+export function privateHostAllowlistFor(
+  pluginKey: string,
+  raw: string | undefined = process.env.PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS,
+): Set<string> {
+  const allowed = new Set<string>();
+  for (const entry of (raw ?? "").split(";")) {
+    const eq = entry.indexOf("=");
+    if (eq <= 0 || entry.slice(0, eq).trim() !== pluginKey) continue;
+    for (const host of entry.slice(eq + 1).split(",")) {
+      const h = host.trim().toLowerCase().replace(/\.$/, "");
+      if (!h || h.includes("*") || isIP(h) !== 0 || !/^[a-z0-9.-]+$/.test(h)) continue;
+      allowed.add(h);
+    }
+  }
+  return allowed;
+}
+
+/**
  * Validate a URL for plugin fetch: protocol whitelist + private IP blocking.
  *
  * SSRF Prevention Strategy:
@@ -157,7 +197,10 @@ interface ValidatedFetchTarget {
   useTls: boolean;
 }
 
-async function validateAndResolveFetchUrl(urlString: string): Promise<ValidatedFetchTarget> {
+export async function validateAndResolveFetchUrl(
+  urlString: string,
+  allowedPrivateHosts: ReadonlySet<string> = new Set(),
+): Promise<ValidatedFetchTarget> {
   let parsed: URL;
   try {
     parsed = new URL(urlString);
@@ -196,7 +239,11 @@ async function validateAndResolveFetchUrl(urlString: string): Promise<ValidatedF
     // Filter to only non-private IPs instead of rejecting the entire request
     // when some IPs are private. This handles multi-homed hosts that resolve
     // to both private and public addresses.
-    const safeResults = results.filter((entry) => !isPrivateIP(entry.address));
+    const privateAllowed = allowedPrivateHosts.has(originalHostname.toLowerCase().replace(/\.$/, ""));
+    const safeResults = results.filter((entry) =>
+      privateAllowed
+        ? !isNeverAllowedIP(entry.address)
+        : !isPrivateIP(entry.address));
     if (safeResults.length === 0) {
       throw new Error(
         `All resolved IPs for ${originalHostname} are in private/reserved ranges`,
@@ -1581,7 +1628,7 @@ export function buildHostServices(
       async fetch(params) {
         // SSRF protection: validate protocol whitelist + block private IPs.
         // Resolve once, then connect directly to that IP to prevent DNS rebinding.
-        const target = await validateAndResolveFetchUrl(params.url);
+        const target = await validateAndResolveFetchUrl(params.url, privateHostAllowlistFor(pluginKey));
 
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), PLUGIN_FETCH_TIMEOUT_MS);

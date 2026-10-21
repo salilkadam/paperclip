@@ -47,6 +47,7 @@ COPY packages/plugins/paperclip-plugin-fake-sandbox/package.json packages/plugin
 COPY packages/plugins/plugin-llm-wiki/package.json packages/plugins/plugin-llm-wiki/
 COPY packages/plugins/plugin-workspace-diff/package.json packages/plugins/plugin-workspace-diff/
 COPY packages/plugins/plugin-loc-agentmail/package.json packages/plugins/plugin-loc-agentmail/
+COPY packages/plugins/plugin-ghost-blog/package.json packages/plugins/plugin-ghost-blog/
 COPY patches/ patches/
 COPY scripts/link-plugin-dev-sdk.mjs scripts/
 
@@ -139,6 +140,7 @@ RUN pnpm --filter @paperclipai/plugin-sdk build
 # standalone sandbox providers, this connector is a workspace package, so it
 # builds with the repo right after the SDK it depends on.
 RUN pnpm --filter @paperclipai/plugin-loc-agentmail build
+RUN pnpm --filter @paperclipai/plugin-ghost-blog build
 # The server build runs scripts/write-build-stamp.mjs, which stamps the built
 # commit into dist/build-info.json. The build context has no .git, so the
 # script reads PAPERCLIP_BUILD_COMMIT instead. Docker exposes an ARG to the
