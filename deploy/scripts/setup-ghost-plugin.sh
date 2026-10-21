@@ -67,7 +67,7 @@ printf 'Authorization: Bearer %s\n' "$(tr -d '\r\n' < "$PAPERCLIP_BOARD_KEY_FILE
 api() {  # api METHOD PATH [json-file] -> body; non-2xx fatal
   local code
   code="$(curl -sS -o "$W/resp" -w '%{http_code}' -X "$1" -H @"$W/auth" -H 'Content-Type: application/json' \
-    -H 'User-Agent: paperclip-ghost-plugin-setup/1' ${3:+--data-binary @"$3"} --max-time 120 "$API/api$2")" \
+    -H 'User-Agent: paperclip-ghost-plugin-setup/1' ${3:+--data-binary @"$3"} --max-time "${API_MAX_TIME:-120}" "$API/api$2")" \
     || die "$1 $2: transport error"
   [[ "$code" =~ ^2 ]] || die "$1 $2 -> HTTP $code: $(head -c 400 "$W/resp")"
   cat "$W/resp"
@@ -180,7 +180,8 @@ for entry in "${SITES[@]}"; do
 
   # 4. Verify every agent: the plugin tools are effectively allowed for it.
   for a in $(jq -r '.[]' <<<"$agents_json"); do
-    eff="$(api GET "/companies/$cid/tools/profiles/effective/agents/$a")"
+    # Large companies return a big effective view; it has taken >120s once.
+    eff="$(API_MAX_TIME=300 api GET "/companies/$cid/tools/profiles/effective/agents/$a")"
     missing="$(jq -r --argjson t "$tools_json" '[$t[] as $n | select((.allowedToolNames // []) | index($n) | not) | $n] | join(", ")' <<<"$eff")"
     [[ -z "$missing" ]] || die "$site: agent $a is not allowed: $missing (a narrower profile or binding may shadow the company grant)"
     jq -n --arg c "$cid" --arg a "$a" --arg t "$PLUGIN_KEY:site_info" \
@@ -194,7 +195,10 @@ for entry in "${SITES[@]}"; do
   # The real call below uses the board path (plugin, config, secret, network);
   # agent authorization is what the checks above verify.
   # Real call through the plugin when the company has a run to attach to.
-  run="$(api GET "/companies/$cid/heartbeat-runs?limit=50" | list runs | jq -r --arg a "$agent" '[.[] | select(.agentId==$a)][0].id // empty')"
+  # Any recent run of any of this company's agents will do (the first agent
+  # may never have run); the call is made as that run's agent.
+  run_pair="$(api GET "/companies/$cid/heartbeat-runs?limit=50" | list runs | jq -r --argjson ids "$agents_json" '[.[] | select(.agentId as $x | $ids | index($x))][0] | if . then "\(.id) \(.agentId)" else "" end')"
+  run="${run_pair%% *}"; [[ -n "$run_pair" ]] && agent="${run_pair##* }"
   project="$(api GET "/companies/$cid/projects" | list projects | jq -r '.[0].id // empty')"
   if [[ -n "$run" && -n "$project" ]]; then
     jq -n --arg t "$PLUGIN_KEY:site_info" --arg a "$agent" --arg r "$run" --arg c "$cid" --arg p "$project" \
