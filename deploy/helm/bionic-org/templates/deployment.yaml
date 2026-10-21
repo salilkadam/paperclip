@@ -237,6 +237,15 @@ spec:
                   key: storage_s3_endpoint
                   name: {{ include "bionic-org.name" . }}-secrets
           {{- end }}
+          {{- if .Values.extraTrustedCa.enabled }}
+            # Adds (does not replace) root CAs for every Node process in this
+            # container, plugin workers included (plugin-loader forwards the
+            # var across its scrubbed worker env). Without it the mail
+            # connector's IMAPS/SMTP dial through the in-cluster agentmail-gw
+            # tunnel fails TLS verification against the AgentMail internal CA.
+            - name: NODE_EXTRA_CA_CERTS
+              value: {{ printf "%s/%s" (trimSuffix "/" .Values.extraTrustedCa.mountDir) .Values.extraTrustedCa.key | quote }}
+          {{- end }}
           {{- with .Values.probes.startup }}
           startupProbe:
             httpGet:
@@ -264,14 +273,34 @@ spec:
             failureThreshold: {{ .Values.probes.readiness.failureThreshold | default 3 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if .Values.persistence.enabled }}
+          {{- if or .Values.persistence.enabled .Values.extraTrustedCa.enabled }}
           volumeMounts:
+            {{- if .Values.persistence.enabled }}
             - name: paperclip-data
               mountPath: {{ .Values.persistence.mountPath }}
+            {{- end }}
+            {{- if .Values.extraTrustedCa.enabled }}
+            # Whole-ConfigMap directory mount (no subPath): if the bundle is
+            # absent the dir is simply empty and Node starts without it.
+            - name: extra-trusted-ca
+              mountPath: {{ .Values.extraTrustedCa.mountDir }}
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.persistence.enabled }}
+      {{- if or .Values.persistence.enabled .Values.extraTrustedCa.enabled }}
       volumes:
+        {{- if .Values.persistence.enabled }}
         - name: paperclip-data
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.name }}
+        {{- end }}
+        {{- if .Values.extraTrustedCa.enabled }}
+        - name: extra-trusted-ca
+          configMap:
+            # Published out-of-band with the AgentMail mail plane (the
+            # agentmail-gw tunnel mounts the same bundle); optional so the
+            # pod still starts where no mail plane exists.
+            name: {{ .Values.extraTrustedCa.configMap }}
+            optional: true
+        {{- end }}
       {{- end }}

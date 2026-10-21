@@ -165,6 +165,20 @@ export function buildPluginWorkerEnv(input: {
     PAPERCLIP_DEPLOYMENT_MODE: input.instanceInfo.deploymentMode ?? "",
     PAPERCLIP_DEPLOYMENT_EXPOSURE: input.instanceInfo.deploymentExposure ?? "",
   };
+  // TLS trust material, not a credential: NODE_EXTRA_CA_CERTS *adds* root CAs
+  // to Node's trust store (it never replaces the bundled roots) and is read at
+  // process startup by every Node process that performs TLS. The worker spawn
+  // scrubs the environment by allowlist, so a deployment-level CA bundle —
+  // e.g. the AgentMail internal CA the mail connector dials over IMAPS —
+  // never reaches the workers that actually open the TLS connections, and
+  // every connection fails with "unable to verify the first certificate".
+  // Forwarded unconditionally (not gated on environment-driver registration,
+  // which credentials are): the value is a file path, discloses no secret,
+  // and only widens trust the operator already configured for the server.
+  const extraCaCerts = processEnv.NODE_EXTRA_CA_CERTS;
+  if (extraCaCerts && extraCaCerts.trim().length > 0) {
+    env.NODE_EXTRA_CA_CERTS = extraCaCerts;
+  }
   const canRegisterEnvironmentDrivers = Array.isArray(input.manifest.capabilities)
     && input.manifest.capabilities.includes("environment.drivers.register");
   if (!canRegisterEnvironmentDrivers) return env;

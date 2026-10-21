@@ -156,6 +156,23 @@ persistence:
   fsGroup: 1000
 
 # ---------------------------------------------------------------------------
+# Extra trusted root CAs
+# ---------------------------------------------------------------------------
+# The AgentMail mail plane serves TLS (IMAPS/SMTP/JMAP through the in-cluster
+# agentmail-gw tunnel, dialed by the Loc-AgentMail connector) with a chain
+# rooted at the "Paperclip AgentMail Internal CA", which is not a public root.
+# Its PEM bundle ships as a ConfigMap in this namespace (applied out-of-band
+# with the mail plane; the agentmail-gw tunnel pod mounts the same bundle).
+# Node *adds* to — never replaces — its bundled roots via NODE_EXTRA_CA_CERTS,
+# and the server forwards the variable to its scrubbed plugin-worker env
+# (server/src/services/plugin-loader.ts, buildPluginWorkerEnv).
+extraTrustedCa:
+  enabled: true
+  configMap: agentmail-ca
+  key: agentmail-ca.crt
+  mountDir: /ca
+
+# ---------------------------------------------------------------------------
 # Vault / ExternalSecrets
 # ---------------------------------------------------------------------------
 vault:
