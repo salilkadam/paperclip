@@ -121,6 +121,8 @@ for entry in "${SITES[@]}"; do
 
   api POST "/tool-connections/$conn_id/catalog/refresh" >/dev/null
   catalog="$(api GET "/tool-connections/$conn_id/catalog" | jq -c '.entries // .catalog // .')"
+  jq -e 'type=="array" and length>0 and all(.[]; (.toolName|type)=="string" and (.id|type)=="string")' <<<"$catalog" >/dev/null \
+    || die "$cname: catalog entries must all carry string toolName and id"
   known_json="$(printf '%s\n' "${KNOWN_TOOLS[@]}" | jq -R . | jq -s .)"
   unknown="$(jq -r --argjson k "$known_json" '[.[].toolName | select(. as $t | $k | index($t) | not)] | join(", ")' <<<"$catalog")"
   [[ -z "$unknown" ]] || die "$cname: catalog has tools this script does not know: $unknown — review them in Paperclip (Apps) or add them to KNOWN_TOOLS"
