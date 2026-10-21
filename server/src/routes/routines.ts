@@ -10,6 +10,7 @@ import {
   updateDocumentAnnotationThreadSchema,
   updateRoutineSchema,
   updateRoutineTriggerSchema,
+  isUuidLike,
 } from "@paperclipai/shared";
 import { trackRoutineCreated } from "@paperclipai/shared/telemetry";
 import { validate, validateIssueMutationBody } from "../middleware/validate.js";
@@ -145,6 +146,17 @@ export function routineRoutes(
       },
     });
   }
+
+  // Routine and routine-trigger ids are matched against uuid columns, so a
+  // malformed value must fail as 400 at the boundary instead of surfacing a
+  // database cast error as a 500.
+  router.param("id", (_req, _res, next, rawId) => {
+    if (!isUuidLike(String(rawId))) {
+      next(badRequest("Invalid ID"));
+      return;
+    }
+    next();
+  });
 
   router.get("/companies/:companyId/routines", async (req, res) => {
     const companyId = req.params.companyId as string;
