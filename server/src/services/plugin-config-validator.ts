@@ -18,15 +18,6 @@ export interface ConfigValidationResult {
 }
 
 /**
- * Paperclip manifest-schema annotation keywords (see the `JsonSchema` type in
- * @paperclipai/shared). The config UI consumes them for grouping and the
- * "Advanced options" disclosure; per JSON Schema semantics they are otherwise
- * ignored by validators. Ajv's strict mode throws on unknown keywords at
- * compile time, so they are declared as no-op vocabulary below.
- */
-const PAPERCLIP_ANNOTATION_KEYWORDS = ["x-paperclip-group", "x-paperclip-advanced"];
-
-/**
  * Validate a config object against a JSON Schema.
  *
  * @param configJson - The configuration values to validate.
@@ -55,10 +46,6 @@ export function validateInstanceConfig(
   // hold a Paperclip secret UUID rather than a raw value. The format is a UI
   // hint only — UUID validation happens in the secrets handler at resolve time.
   ajv.addFormat("secret-ref", { validate: () => true });
-  // Declare the Paperclip annotation keywords so strict-mode Ajv compiles
-  // schemas that carry them (loc-agentmail, exe-dev, ssh-docker) instead of
-  // throwing "unknown keyword" at config save/test time.
-  ajv.addVocabulary(PAPERCLIP_ANNOTATION_KEYWORDS);
   const validate = ajv.compile(schema);
   const valid = validate(configJson);
 
