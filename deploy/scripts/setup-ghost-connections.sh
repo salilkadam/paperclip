@@ -86,6 +86,11 @@ vault_get() {  # value on stdout; absent or unreadable is fatal
 
 companies="$(api GET /companies)"
 jq -e 'type=="array"' <<<"$companies" >/dev/null || companies="$(jq '.companies // .items' <<<"$companies")"
+# Archived companies keep their names; never match them.
+companies="$(jq '[.[] | select((.status // "active") != "archived")]' <<<"$companies")"
+# A key that is not an instance admin sees a FILTERED company list, which
+# would look like "company not found". Make that visible.
+log "board key sees $(jq length <<<"$companies") active companies"
 
 for entry in "${SITES[@]}"; do
   site="${entry%%:*}"; match="${entry#*:}"
@@ -99,6 +104,11 @@ for entry in "${SITES[@]}"; do
     '[(if type=="array" then . else .connections end)[] | select(.name==$n and .status!="archived")]')"
   [[ "$(jq length <<<"$existing")" -le 1 ]] || die "$cname has more than one '$CONN_NAME' connection; archive the extras"
   conn_id="$(jq -r '.[0].id // empty' <<<"$existing")"
+  if [[ -n "$conn_id" ]]; then
+    # Only adopt an existing connection that points at the ghost MCP server.
+    url="$(jq -r '.[0] | (.config // .transportConfig // {}) | (.url // .endpoint // .remoteUrl // empty)' <<<"$existing")"
+    [[ "$url" == "$MCP_URL" ]] || die "$cname: existing '$CONN_NAME' points at '${url:-?}', not $MCP_URL; rename or archive it first"
+  fi
 
   if [[ -z "$conn_id" || $ROTATE -eq 1 ]]; then
     [[ $DRY -eq 1 ]] && { log "  dry-run: would ${conn_id:+re}connect"; continue; }
@@ -139,8 +149,11 @@ for entry in "${SITES[@]}"; do
   log "  access: all agents; ask first: ${ASK_FIRST[*]}"
 
   # Proof through the real path, as one of the company's agents.
-  agent="$(api GET "/companies/$cid/agents" | jq -r '[(if type=="array" then . else .agents end)[] | select(.status!="terminated")][0].id // empty')"
-  [[ -n "$agent" ]] || die "$cname has no agent to test with"
+  # The test call needs an agent assignable to work (Paperclip's
+  # isAgentStatusAssignableToWork).
+  agent="$(api GET "/companies/$cid/agents" | jq -r '[(if type=="array" then . else .agents end)[]
+            | select(.status as $s | ["active","idle","running","paused","error"] | index($s))][0].id // empty')"
+  [[ -n "$agent" ]] || die "$cname has no assignable agent to test with"
   jq -n --arg a "$agent" '{agentId:$a, toolName:"gh_list_sites", parameters:{}}' > "$WORK/test.json"
   res="$(api POST "/tool-connections/$conn_id/test-calls" "$WORK/test.json")"
   sites="$(jq -c '[.. | objects | select(has("sites")) | .sites[]?.tenant_id] | unique' <<<"$res" 2>/dev/null || echo '[]')"

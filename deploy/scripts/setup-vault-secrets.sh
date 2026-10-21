@@ -72,7 +72,20 @@ fi
 # Master key: read existing first. Preserve unless explicitly rotating.
 # ---------------------------------------------------------------------------
 EXISTING_MASTER_KEY=""
-if EXISTING_JSON=$(vault kv get -mount="${VAULT_MOUNT}" -format=json "${VAULT_PATH}" 2>/dev/null); then
+# A failed READ must never look like "no existing key": that would generate a
+# new master key and patch it over the real one (every encrypted secret lost).
+# Only Vault's explicit "No value found" means the path is new.
+if ! EXISTING_JSON=$(vault kv get -mount="${VAULT_MOUNT}" -format=json "${VAULT_PATH}" 2>"${TMPDIR:-/tmp}/vault-read.err"); then
+  if grep -q "No value found" "${TMPDIR:-/tmp}/vault-read.err"; then
+    EXISTING_JSON=""
+  else
+    echo "ERROR: cannot read ${VAULT_MOUNT}/${VAULT_PATH}: $(tail -1 "${TMPDIR:-/tmp}/vault-read.err")" >&2
+    echo "Refusing to continue: a failed read would regenerate the master key." >&2
+    exit 1
+  fi
+fi
+rm -f "${TMPDIR:-/tmp}/vault-read.err"
+if [[ -n "${EXISTING_JSON}" ]]; then
   EXISTING_MASTER_KEY=$(printf '%s' "${EXISTING_JSON}" \
     | jq -r --arg k "${MASTER_KEY_KEY}" '.data.data[$k] // empty')
 fi
