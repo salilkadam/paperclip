@@ -96,7 +96,7 @@ for entry in "${SITES[@]}"; do
   log "$site -> company '$cname' ($cid)"
 
   existing="$(api GET "/companies/$cid/tools/connections" | jq -c --arg n "$CONN_NAME" \
-    '[(.connections // .)[] | select(.name==$n and .status!="archived")]')"
+    '[(if type=="array" then . else .connections end)[] | select(.name==$n and .status!="archived")]')"
   [[ "$(jq length <<<"$existing")" -le 1 ]] || die "$cname has more than one '$CONN_NAME' connection; archive the extras"
   conn_id="$(jq -r '.[0].id // empty' <<<"$existing")"
 
@@ -139,7 +139,7 @@ for entry in "${SITES[@]}"; do
   log "  access: all agents; ask first: ${ASK_FIRST[*]}"
 
   # Proof through the real path, as one of the company's agents.
-  agent="$(api GET "/companies/$cid/agents" | jq -r '[(.agents // .)[] | select(.status!="terminated")][0].id // empty')"
+  agent="$(api GET "/companies/$cid/agents" | jq -r '[(if type=="array" then . else .agents end)[] | select(.status!="terminated")][0].id // empty')"
   [[ -n "$agent" ]] || die "$cname has no agent to test with"
   jq -n --arg a "$agent" '{agentId:$a, toolName:"gh_list_sites", parameters:{}}' > "$WORK/test.json"
   res="$(api POST "/tool-connections/$conn_id/test-calls" "$WORK/test.json")"

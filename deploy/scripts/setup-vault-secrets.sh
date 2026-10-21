@@ -95,7 +95,25 @@ fi
 # ---------------------------------------------------------------------------
 # Build the patch payload (only provided keys are written; others untouched).
 # ---------------------------------------------------------------------------
-PATCH_JSON=$(jq -n --arg mk "${MASTER_KEY}" --arg k "${MASTER_KEY_KEY}" '{ ($k): $mk }')
+# Tool-action signing secret (signs "ask first" approval cards for Apps v2
+# connections, e.g. the Ghost blogs). Generated once and preserved: rotating it
+# invalidates approvals that are still pending.
+SIGNING_KEY_KEY="tool_action_signing_secret"
+EXISTING_SIGNING=""
+if [[ -n "${EXISTING_JSON:-}" ]]; then
+  EXISTING_SIGNING=$(printf '%s' "${EXISTING_JSON}" | jq -r --arg k "${SIGNING_KEY_KEY}" '.data.data[$k] // empty')
+fi
+if [[ -n "${EXISTING_SIGNING}" ]]; then
+  SIGNING_SECRET="${EXISTING_SIGNING}"
+  echo "  Tool-action signing secret: preserved existing value."
+else
+  SIGNING_SECRET=$(openssl rand -hex 32)
+  echo "  Tool-action signing secret: generated."
+fi
+
+# Secrets reach jq via its environment (env.*), never argv.
+PATCH_JSON=$(MK="${MASTER_KEY}" SK="${SIGNING_SECRET}" jq -n --arg k "${MASTER_KEY_KEY}" \
+  --arg sn "${SIGNING_KEY_KEY}" '{ ($k): env.MK, ($sn): env.SK }')
 
 for pair in \
   "database_url:${DATABASE_URL:-}" \

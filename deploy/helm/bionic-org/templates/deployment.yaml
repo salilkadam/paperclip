@@ -191,6 +191,16 @@ spec:
                 secretKeyRef:
                   key: session_secret
                   name: {{ include "bionic-org.name" . }}-secrets
+            # Signs "ask first" tool-action approvals (Apps v2 connections such
+            # as the per-company Ghost blogs). Without it, every ask-first tool
+            # call fails with signing_secret_unconfigured instead of asking.
+            # Optional so a Vault path without the key still starts (fail closed).
+            - name: PAPERCLIP_TOOL_ACTION_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  key: tool_action_signing_secret
+                  name: {{ include "bionic-org.name" . }}-secrets
+                  optional: true
             - name: KEYCLOAK_CLIENT_ID
               valueFrom:
                 secretKeyRef:
