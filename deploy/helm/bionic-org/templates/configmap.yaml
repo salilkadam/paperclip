@@ -25,6 +25,12 @@ data:
   MINIO_USE_SSL: {{ tpl .Values.env.MINIO_USE_SSL . | quote }}
   MAIL_FROM: {{ .Values.env.MAIL_FROM | quote }}
   BIONIC_INTERNAL_BASE_URL: {{ .Values.env.BIONIC_INTERNAL_BASE_URL | quote }}
+  {{- with .Values.env.PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS }}
+  # Per-plugin exact-hostname exceptions to the plugin HTTP private-network
+  # block (server/src/services/plugin-host-services.ts). Loopback, link-local
+  # and metadata addresses stay blocked regardless.
+  PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS: {{ . | quote }}
+  {{- end }}
   {{- if .Values.modelAccess.enabled }}
   # Central model access (values.yaml modelAccess). Read by the server process:
   # the OpenCode adapter falls back to these when an agent sets none.

@@ -95,6 +95,11 @@ export const BUNDLED_PLUGIN_CATALOG: readonly BundledPluginCatalogEntry[] = [
     pathOverrideEnvVar: "PAPERCLIP_KUBERNETES_PLUGIN_PATH",
   },
   {
+    key: "ghost-blog",
+    pluginKey: "paperclip.ghost-blog",
+    relativePath: "plugin-ghost-blog",
+  },
+  {
     key: "loc-agentmail",
     pluginKey: "paperclip.loc-agentmail",
     relativePath: "plugin-loc-agentmail",

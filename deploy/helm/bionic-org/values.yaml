@@ -280,6 +280,9 @@ vaultAuth:
 # Environment (non-secret, goes in ConfigMap)
 # ---------------------------------------------------------------------------
 env:
+  # Ghost Blog plugin (paperclip.ghost-blog) reaches the company blogs in-cluster.
+  # Format: "<pluginKey>=<host>[,<host>...]" entries separated by ";".
+  PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS: "paperclip.ghost-blog=ghost-bionic.blog.svc.cluster.local,ghost-reliora.blog.svc.cluster.local"
   # Server V8 heap ceiling. The container limit is 16Gi but the Dockerfile CMD
   # passes no --max-old-space-size, so V8 defaults to ~2.2GB and the server
   # (which legitimately runs ~1.3-2GB heap under live load) OOM-aborts on
