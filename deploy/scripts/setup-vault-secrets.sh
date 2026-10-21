@@ -72,7 +72,20 @@ fi
 # Master key: read existing first. Preserve unless explicitly rotating.
 # ---------------------------------------------------------------------------
 EXISTING_MASTER_KEY=""
-if EXISTING_JSON=$(vault kv get -mount="${VAULT_MOUNT}" -format=json "${VAULT_PATH}" 2>/dev/null); then
+# A failed READ must never look like "no existing key": that would generate a
+# new master key and patch it over the real one (every encrypted secret lost).
+# Only Vault's explicit "No value found" means the path is new.
+if ! EXISTING_JSON=$(vault kv get -mount="${VAULT_MOUNT}" -format=json "${VAULT_PATH}" 2>"${TMPDIR:-/tmp}/vault-read.err"); then
+  if grep -q "No value found" "${TMPDIR:-/tmp}/vault-read.err"; then
+    EXISTING_JSON=""
+  else
+    echo "ERROR: cannot read ${VAULT_MOUNT}/${VAULT_PATH}: $(tail -1 "${TMPDIR:-/tmp}/vault-read.err")" >&2
+    echo "Refusing to continue: a failed read would regenerate the master key." >&2
+    exit 1
+  fi
+fi
+rm -f "${TMPDIR:-/tmp}/vault-read.err"
+if [[ -n "${EXISTING_JSON}" ]]; then
   EXISTING_MASTER_KEY=$(printf '%s' "${EXISTING_JSON}" \
     | jq -r --arg k "${MASTER_KEY_KEY}" '.data.data[$k] // empty')
 fi
@@ -95,7 +108,25 @@ fi
 # ---------------------------------------------------------------------------
 # Build the patch payload (only provided keys are written; others untouched).
 # ---------------------------------------------------------------------------
-PATCH_JSON=$(jq -n --arg mk "${MASTER_KEY}" --arg k "${MASTER_KEY_KEY}" '{ ($k): $mk }')
+# Tool-action signing secret (signs "ask first" approval cards for Apps v2
+# connections, e.g. the Ghost blogs). Generated once and preserved: rotating it
+# invalidates approvals that are still pending.
+SIGNING_KEY_KEY="tool_action_signing_secret"
+EXISTING_SIGNING=""
+if [[ -n "${EXISTING_JSON:-}" ]]; then
+  EXISTING_SIGNING=$(printf '%s' "${EXISTING_JSON}" | jq -r --arg k "${SIGNING_KEY_KEY}" '.data.data[$k] // empty')
+fi
+if [[ -n "${EXISTING_SIGNING}" ]]; then
+  SIGNING_SECRET="${EXISTING_SIGNING}"
+  echo "  Tool-action signing secret: preserved existing value."
+else
+  SIGNING_SECRET=$(openssl rand -hex 32)
+  echo "  Tool-action signing secret: generated."
+fi
+
+# Secrets reach jq via its environment (env.*), never argv.
+PATCH_JSON=$(MK="${MASTER_KEY}" SK="${SIGNING_SECRET}" jq -n --arg k "${MASTER_KEY_KEY}" \
+  --arg sn "${SIGNING_KEY_KEY}" '{ ($k): env.MK, ($sn): env.SK }')
 
 for pair in \
   "database_url:${DATABASE_URL:-}" \
