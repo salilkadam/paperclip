@@ -105,6 +105,11 @@ export const BUNDLED_PLUGIN_CATALOG: readonly BundledPluginCatalogEntry[] = [
     relativePath: "plugin-loc-agentmail",
   },
   {
+    key: "loc-letta",
+    pluginKey: "paperclip.loc-letta",
+    relativePath: "plugin-loc-letta",
+  },
+  {
     key: "modal",
     pluginKey: "paperclip.modal-sandbox-provider",
     relativePath: "sandbox-providers/modal",
