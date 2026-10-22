@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { imapQuote, parseCapability, parseFetchEntries, parseSearchUids, toUidSet } from "./imap.js";
+import { imapQuote, parseCapability, parseFetchEntries, parseSearchUids, redactCommand, toUidSet } from "./imap.js";
 
 describe("parseSearchUids", () => {
   it("reads, dedupes and sorts uids from SEARCH responses", () => {
@@ -94,5 +94,16 @@ describe("imapQuote", () => {
     expect(imapQuote('say "hi"')).toBe('"say \\"hi\\""');
     expect(imapQuote("back\\slash")).toBe('"back\\\\slash"');
     expect(imapQuote("pässwörd")).toBe('"pässwörd"');
+  });
+});
+
+describe("redactCommand", () => {
+  it("keeps the first quoted argument and hides later ones", () => {
+    expect(redactCommand('LOGIN "user@example.com" "s3cret"')).toBe('LOGIN "user@example.com" "***"');
+  });
+
+  it("leaves commands with zero or one quoted argument untouched", () => {
+    expect(redactCommand("UID SEARCH ALL")).toBe("UID SEARCH ALL");
+    expect(redactCommand('SELECT "INBOX"')).toBe('SELECT "INBOX"');
   });
 });

@@ -68,6 +68,18 @@ export class ImapError extends Error {
   }
 }
 
+/**
+ * Redact credentials before a command string reaches an error message.
+ *
+ * Keeps the first quoted argument (the user, mailbox, or set name, which is
+ * useful in logs) and replaces every later quoted argument, which is the
+ * password in `LOGIN "user" "password"`.
+ */
+export function redactCommand(command: string): string {
+  let quoted = 0;
+  return command.replace(/"[^"]*"/g, (match) => (quoted++ === 0 ? match : '"***"'));
+}
+
 /** Quote an IMAP string literal (8-bit text is sent as-quoted). */
 export function imapQuote(value: string): string {
   return `"${value.replace(/["\\]/g, (ch) => `\\${ch}`)}"`;
@@ -316,7 +328,7 @@ export class ImapClient {
   private async checked(command: string): Promise<TaggedResponse> {
     const response = await this.command(command);
     if (response.status !== "OK") {
-      throw new ImapError(`imap command failed (${response.status}): ${command} -> ${response.text}`);
+      throw new ImapError(`imap command failed (${response.status}): ${redactCommand(command)} -> ${response.text}`);
     }
     return response;
   }
