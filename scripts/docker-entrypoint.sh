@@ -79,12 +79,41 @@ fi
 # non-zero, and under `set -e` that aborted the boot (exit 1, one restart per
 # deploy). A vanished entry needs no repair, so never fail startup here.
 home_dir="${PAPERCLIP_HOME:-/paperclip}"
-if [ -d "$home_dir" ] && [ -n "$(find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)" ]; then
-    if ! find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -exec chown -h node:node {} + 2>/dev/null; then
-        echo "docker-entrypoint.sh: ownership repair skipped entries that changed during the scan (continuing)" >&2
+#
+# Wall-clock budget for the probe/repair walks so slow storage delays but
+# never owns the boot. IMPORTANT: timeout cannot rescue a process stuck in
+# D-state on an NFS hard mount -- the kill is only delivered once the hung
+# RPC returns -- so on storage that can HANG outright the escape hatch is
+# PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1, which skips the probe entirely and
+# trusts the volume's ownership. (2026-10-23 incident: a Synology export
+# degraded so far that the probe's first lstat sat in D for >8 minutes, the
+# server never started, and liveness restart-looped the pod seven times.)
+# PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS widens the budget for legitimately
+# large-but-healthy homes.
+scan_budget="${PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS:-120}"
+if [ "${PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN:-0}" = "1" ]; then
+    echo "docker-entrypoint.sh: app-home ownership scan skipped (PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1)" >&2
+elif [ -d "$home_dir" ]; then
+    # Bound the walks when coreutils timeout exists; degrade to the bare
+    # pre-timeout behaviour when it does not.
+    if command -v timeout >/dev/null 2>&1; then
+        scan_wrapper="timeout $scan_budget"
+    else
+        scan_wrapper=""
     fi
-    if [ -d "$home_dir/instances" ]; then
-        chown -h node:node "$home_dir/instances" || true
+    set +e
+    mismatch=$($scan_wrapper find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)
+    probe_rc=$?
+    set -e
+    if [ "$probe_rc" -eq 124 ] && [ -z "$mismatch" ]; then
+        echo "docker-entrypoint.sh: WARNING ownership probe timed out after ${scan_budget}s; skipping ownership repair and booting anyway (slow storage behind $home_dir; set PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1 to skip the probe outright, or PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS to widen the budget)" >&2
+    elif [ -n "$mismatch" ]; then
+        if ! $scan_wrapper find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -exec chown -h node:node {} + 2>/dev/null; then
+            echo "docker-entrypoint.sh: ownership repair skipped entries that changed during the scan (continuing)" >&2
+        fi
+        if [ -d "$home_dir/instances" ]; then
+            chown -h node:node "$home_dir/instances" || true
+        fi
     fi
 fi
 

@@ -18,8 +18,10 @@ const execFileAsync = promisify(execFile);
  *    container starts non-root, where neither the remap nor gosu can work,
  *    so the command must be exec'd directly (with a warning on mismatch).
  *
- * The system commands (id, usermod, groupmod, chown, gosu) are stubbed via
- * PATH so the branching logic runs unmodified on any host.
+ * The system commands (id, usermod, groupmod, chown, gosu, timeout) are
+ * stubbed via PATH so the branching logic runs unmodified on any host. The
+ * timeout stub is a pass-through that logs its budget, making the bounded
+ * scan deterministic on hosts without coreutils timeout (e.g. macOS).
  */
 
 const ENTRYPOINT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "scripts", "docker-entrypoint.sh");
@@ -72,6 +74,9 @@ function installStubs(ids: { uid: number; gid: number; nodeUid?: number; nodeGid
   ].join("\n");
   writeStub("find", findBody);
   writeStub("gosu", `echo "gosu $*" >> "${logFile}"\nshift\nexec "$@"`);
+  // Pass-through timeout: logs the requested budget then runs the wrapped
+  // command, so the entrypoint always takes the timeout-wrapped path.
+  writeStub("timeout", `echo "timeout $1" >> "${logFile}"\nshift\nexec "$@"`);
 }
 
 async function runEntrypoint(env: Record<string, string> = {}) {
@@ -186,6 +191,59 @@ describe("docker-entrypoint.sh", () => {
 
     expect(calls).toContain(`find ${stubDir} -path ${stubDir}/instances -prune`);
     expect(calls).toContain(`chown -h node:node ${stubDir}/mismatched-entry`);
+  });
+
+  it("skips the ownership probe and repair entirely when PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1", async () => {
+    // Escape hatch for hang-prone storage (NFS hard mounts stuck in D-state
+    // cannot be interrupted by timeout). Even with a would-repair mismatch,
+    // no find/chown may run and the boot must proceed.
+    installStubs({ uid: 0, gid: 0, homeMismatch: true });
+
+    const { stdout, stderr, calls } = await runEntrypoint({
+      PAPERCLIP_HOME: stubDir,
+      PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN: "1",
+    });
+
+    expect(stderr).toContain("ownership scan skipped (PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1)");
+    expect(calls).not.toContain("find");
+    expect(calls).not.toContain("timeout");
+    expect(calls).not.toMatch(/^chown/m);
+    expect(stdout).toContain("ENTRYPOINT-CMD-RAN");
+    expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
+  });
+
+  it("bounds the ownership walks with the default 120s timeout budget", async () => {
+    installStubs({ uid: 0, gid: 0 });
+
+    const { calls } = await runEntrypoint({ PAPERCLIP_HOME: stubDir });
+
+    expect(calls).toContain("timeout 120");
+    expect(calls).toContain(`find ${stubDir} -path ${stubDir}/instances -prune`);
+  });
+
+  it("honours PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS for the ownership walks", async () => {
+    installStubs({ uid: 0, gid: 0 });
+
+    const { calls } = await runEntrypoint({
+      PAPERCLIP_HOME: stubDir,
+      PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS: "5",
+    });
+
+    expect(calls).toContain("timeout 5");
+  });
+
+  it("boots anyway when the ownership probe times out (rc=124, no mismatch reported)", async () => {
+    // Slow-but-not-hung storage: the probe hits its budget before reporting
+    // a mismatch. Boot must continue with a loud warning, no repair.
+    installStubs({ uid: 0, gid: 0, homeMismatch: false });
+    writeStub("timeout", `echo "timeout $1" >> "${logFile}"\nexit 124`);
+
+    const { stdout, stderr, calls } = await runEntrypoint({ PAPERCLIP_HOME: stubDir });
+
+    expect(stderr).toContain("ownership probe timed out after 120s");
+    expect(calls).not.toMatch(/^chown/m);
+    expect(stdout).toContain("ENTRYPOINT-CMD-RAN");
+    expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
   });
 
   it("execs directly and silently when already running as the requested user (restricted PodSecurity)", async () => {
