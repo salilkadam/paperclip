@@ -13,6 +13,7 @@ data:
   PAPERCLIP_PUBLIC_URL: {{ tpl .Values.env.PAPERCLIP_PUBLIC_URL . | quote }}
   PAPERCLIP_ALLOWED_HOSTNAMES: {{ tpl .Values.env.PAPERCLIP_ALLOWED_HOSTNAMES . | quote }}
   PAPERCLIP_STORAGE_PROVIDER: {{ .Values.env.PAPERCLIP_STORAGE_PROVIDER | quote }}
+  PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN: {{ .Values.env.PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN | default "0" | quote }}
   PORT: {{ .Values.env.PORT | quote }}
   SERVE_UI: {{ .Values.env.SERVE_UI | quote }}
   KEYCLOAK_REALM: {{ .Values.env.KEYCLOAK_REALM | quote }}

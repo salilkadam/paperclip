@@ -295,6 +295,11 @@ env:
   PAPERCLIP_PUBLIC_URL: "https://{{ .Values.domain }}"
   PAPERCLIP_ALLOWED_HOSTNAMES: "{{ .Values.domain }}"
   PAPERCLIP_STORAGE_PROVIDER: local_disk  # or s3; set S3 env vars if s3
+  # Escape hatch for hang-prone app-home storage (e.g. degraded NFS hard
+  # mount): "1" skips the boot-time ownership probe/repair entirely.
+  # PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS stays at the entrypoint's shell
+  # default (120) unless set explicitly here.
+  PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN: "0"
   PORT: "3100"
   SERVE_UI: "true"
   KEYCLOAK_REALM: "Bionic"
