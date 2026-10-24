@@ -27,7 +27,7 @@
 # private in-cluster hosts needs PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS
 # (bionic-org chart value `plugins.ghostBlog.allowedPrivateHosts`).
 #
-# Requires: curl jq kubectl; env VAULT_TOKEN; PAPERCLIP_BOARD_KEY_FILE (0600,
+# Requires: curl jq kubectl; kubeconfig (Vault access via lib/vault-ops.sh, no static token); PAPERCLIP_BOARD_KEY_FILE (0600,
 # instance-admin board key). No secret ever appears on a command line.
 #
 # Usage: deploy/scripts/setup-ghost-plugin.sh [--rotate] [--dry-run]
@@ -58,10 +58,12 @@ done
 die() { echo "ERROR: $*" >&2; exit 1; }
 log() { echo "[ghost-plugin] $*"; }
 for b in curl jq kubectl; do command -v "$b" >/dev/null || die "$b is required"; done
-[[ -n "${VAULT_TOKEN:-}" ]] || die "VAULT_TOKEN is not set"
+# shellcheck source=lib/vault-ops.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/vault-ops.sh"
+vault_ops_login   # short-lived Vault token via the bionic-org-ops ServiceAccount
 [[ -r "${PAPERCLIP_BOARD_KEY_FILE:-}" ]] || die "PAPERCLIP_BOARD_KEY_FILE must point to a readable file"
 [[ "$(stat -c %a "$PAPERCLIP_BOARD_KEY_FILE")" == 600 ]] || die "$PAPERCLIP_BOARD_KEY_FILE must be mode 0600"
-W="$(mktemp -d)"; chmod 700 "$W"; trap 'rm -rf "$W"' EXIT
+W="$(mktemp -d)"; chmod 700 "$W"; trap 'rm -rf "$W"; vault_ops_logout' EXIT
 printf 'Authorization: Bearer %s\n' "$(tr -d '\r\n' < "$PAPERCLIP_BOARD_KEY_FILE")" > "$W/auth"
 
 api() {  # api METHOD PATH [json-file] -> body; non-2xx fatal
@@ -73,14 +75,7 @@ api() {  # api METHOD PATH [json-file] -> body; non-2xx fatal
   cat "$W/resp"
 }
 list() { jq -c "if type==\"array\" then . else (.$1 // .items // []) end"; }
-vault_get() {
-  local v
-  v="$(printf '%s\n' "$VAULT_TOKEN" | timeout 60 kubectl exec -i -n vault vault-0 -- sh -c \
-    'read -r VAULT_TOKEN; export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200; vault kv get -field="$2" "secret/$1"' _ "$1" "$2")" \
-    || die "cannot read Vault $1:$2"
-  [[ -n "$v" ]] || die "Vault $1:$2 is empty"
-  printf '%s' "$v"
-}
+vault_get() { vault_ops_get "$@"; }  # absent, unreadable or empty is fatal
 
 companies="$(api GET /companies | list companies | jq '[.[] | select((.status // "active") != "archived")]')"
 log "board key sees $(jq length <<<"$companies") active companies"

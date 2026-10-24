@@ -34,7 +34,10 @@ POD=$(kubectl -n "$NS" get pods --no-headers | awk '/^bionic-org-/ && $3=="Runni
 [ -n "$POD" ] || { echo "no running bionic-org pod" >&2; exit 1; }
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; kubectl -n vault exec vault-0 -- rm -f /tmp/.va >/dev/null 2>&1 || true' EXIT
+# shellcheck source=lib/vault-ops.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/vault-ops.sh"
+vault_ops_login   # short-lived Vault token via the bionic-org-ops ServiceAccount
+trap 'rm -rf "$TMP"; vault_ops_logout' EXIT
 
 cat > "$TMP/rotate.mjs" <<'JS'
 import { createHash, randomBytes } from "node:crypto";
@@ -78,16 +81,14 @@ try {
 JS
 kubectl -n "$NS" cp "$TMP/rotate.mjs" "$POD:/tmp/sync-brev-sandbox-key.mjs" >/dev/null
 
-kubectl -n "$NS" get secret bionic-org-secrets -o jsonpath='{.data.vault_token}' | base64 -d > "$TMP/va"
-kubectl -n vault cp "$TMP/va" vault-0:/tmp/.va >/dev/null
-rm -f "$TMP/va"
-
 # Vault -> pipe -> Paperclip. The key exists only in this pipe.
 set +e
-kubectl -n vault exec vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=\$(cat /tmp/.va) vault kv get -field=brev_ssh_private_key $VAULT_PATH; rm -f /tmp/.va" 2>/dev/null \
+vault_ops_sh 'vault kv get -field=brev_ssh_private_key "$1"' "$VAULT_PATH" \
   | kubectl -n "$NS" exec -i "$POD" -- env SECRET_ID="$SECRET_ID" ENV_ID="$ENV_ID" BOARD_USER_ID="${BOARD_USER_ID:-mO44P6K9aWIwqI1BGM9v3XOvkpDwWTXy}" \
       node /tmp/sync-brev-sandbox-key.mjs
-status=$?
+pipe=("${PIPESTATUS[@]}")   # capture both ends before any other command resets it
+vault_status=${pipe[0]}; status=${pipe[1]}
 set -e
+[ "$vault_status" -eq 0 ] || { echo "Vault read of $VAULT_PATH failed (exit $vault_status)" >&2; status=1; }
 kubectl -n "$NS" exec "$POD" -- rm -f /tmp/sync-brev-sandbox-key.mjs
 exit $status

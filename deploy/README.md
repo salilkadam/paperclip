@@ -100,7 +100,6 @@ Two Vault paths feed this deployment via ESO (both synced every 5 min — never 
 | `session_secret` | Session encryption secret (random) |
 | `keycloak_client_id` | Keycloak client ID |
 | `keycloak_client_secret` | Keycloak client secret |
-| `vault_token` | Scoped Vault ops token (policy `bionic-org-app`; see Rotation note below — NOT root since 2026-10-07) |
 | `minio_root_user` | MinIO access key |
 | `minio_root_password` | MinIO secret key |
 | `paperclip_secrets_master_key` | **AES-256-GCM master key** (`local_encrypted` provider). base64 of a 32-byte key. Generated once by `setup-vault-secrets.sh`; NEVER regenerate while encrypted secret versions exist in the DB — all managed secrets (agent API keys, OAuth tokens, provider keys) become permanently undecryptable. Backed up off-cluster. |
@@ -380,30 +379,41 @@ enabled Drive/Gmail/Calendar/People there; E2E proof then passed green:
 `deploy/scripts/run-gws-drive-list-probe.sh` to probe upstream directly
 (`gw_list_files` args are only `tenant_id`/`account`/`query`/`max_results`).
 
-Security note found during this work: Vault `t6-apps/bionic-org/config` stores
-a **root** Vault token as `vault_token`, which ESO mirrors into the
-`bionic-org-secrets` k8s Secret. That is an operator follow-up to scope down.
+### Ops access to Vault (since 2026-10-24: no static token)
 
-**Rotation completed 2026-10-07.** The stored token is now an **orphan,
-periodic (720h) service token** under policy `bionic-org-app`, which grants
-exactly `secret/{data,metadata}/t6-apps/bionic-org/config` and
-`secret/{data,metadata}/t6-apps/mcp/config` (read/update/patch). No root token
-is stored anywhere anymore. Facts an operator needs:
-- ESO never used `vault_token` (it authenticates via Vault JWT with role
-  `eso-reader`); the app container mounts `VAULT_TOKEN` but no code reads it.
-  Consumers are the ops scripts (`switch-tenant-client-*`,
-  `probe-bionic-vault-token.sh`), which now self-renew the token on every use
-  so the 720h period never lapses. A token unused for 30 days dies — rerun any
-  script with the break-glass flow below, then re-point the config field.
-- **Never revoke the token's parent to retire it in the same breath as
-  creating a replacement**: revoking a parent cascades to children (this bit
-  us during the rotation and required root regeneration).
-- Break-glass when no token works: `bash deploy/scripts/vault-regenerate-root.sh`
-  (regenerates root from the two shares in `vault/vault-unseal-keys`, t=2/3;
-  pitfalls documented in the script header). Regenerated root cannot be
-  revoked; durable mitigation for share leakage is `vault operator rotate`.
-- `capabilities-self` needs sudo and fails on the scoped token; use
-  `probe-bionic-vault-token.sh`, which proves capabilities functionally.
+History: `t6-apps/bionic-org/config` used to hold a `vault_token`. It was root until
+2026-10-07, then the periodic `bionic-org-app` token. ESO mirrored it into
+`bionic-org-secrets`, and the app pod mounted it as `VAULT_TOKEN`. No app code
+read it, but every local agent inherited it. Agents run as the server's uid and
+can read `/proc/<server-pid>/environ`, so the token was effectively agent-readable.
+
+Now **no ops Vault token is stored anywhere** (not in Vault config, not in the
+pod, not in `/workspace/.env`):
+
+- `deploy/scripts/lib/vault-ops.sh` mints a 10-minute JWT for the
+  identity-only ServiceAccount `bionicorg/bionic-org-ops` (Helm
+  `opsServiceAccount`, never mounted by a pod) with `kubectl create token`. It
+  exchanges the JWT at Vault Kubernetes auth role `bionic-org-ops` (TTL 15m,
+  max 1h) and revokes the token when the script exits. The bootstrap credential
+  is the operator's kubeconfig.
+- Policy `bionic-org-ops` (source of truth: `setup-vault-ops-role.sh`, print it
+  with `--print-policy`): read `bionic-org/config`, `bionic-org/sandbox` and
+  `ghost/config`; read, update and patch `mcp/config`. Nothing else.
+- Users: `probe-bionic-vault-token.sh` (proves allowed **and** denied
+  capabilities; exit 1 on any mismatch), `switch-tenant-client-*`,
+  `sync-brev-sandbox-key.sh`, `setup-ghost-connections.sh`,
+  `setup-ghost-plugin.sh`, `test-ghost-connections-local.sh`.
+- Admin-level scripts (`setup-vault-ops-role.sh`, `setup-vault-jwt.sh`,
+  `setup-vault-secrets.sh`) take an operator admin token from `VAULT_TOKEN_FILE`
+  (0600), a prompt, or the operator's own `vault login`. They never read
+  `/workspace/.env`.
+- `secret/t6-apps/vault/admin_token` is **not** used. As of 2026-10-24 that token
+  had expired. The path is also readable by the instance-wide `eso-reader` role,
+  so a live admin token stored there could be pulled by any namespace that can
+  create an ExternalSecret.
+- Break-glass when no admin token works: `bash deploy/scripts/vault-regenerate-root.sh`
+  (regenerates root from the shares in `vault/vault-unseal-keys`; pitfalls are in
+  the script header). Durable mitigation for share leakage is `vault operator rotate`.
 
 ### Layout (one folder per org role = the owner)
 

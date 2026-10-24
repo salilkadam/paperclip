@@ -4,21 +4,20 @@
 # and verify. Prints hashes only.
 set -euo pipefail
 
-# a) push token + payload into vault-0
-kubectl -n bionicorg get secret bionic-org-secrets -o jsonpath='{.data.vault_token}' | base64 -d > /tmp/va.txt
-chmod 600 /tmp/va.txt
-kubectl -n vault cp /tmp/va.txt vault-0:/tmp/va.txt
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/vault-ops.sh
+source "$HERE/lib/vault-ops.sh"
+vault_ops_login
+trap vault_ops_logout EXIT
+
+# a) push the payload into vault-0 (the token travels on stdin per call)
 kubectl -n vault cp /tmp/nt.txt vault-0:/tmp/nt.txt
-rm -f /tmp/va.txt
 
 echo "== patch Vault =="
-kubectl -n vault exec vault-0 -- sh -c '
-export VAULT_ADDR=http://127.0.0.1:8200
-export VAULT_TOKEN=$(cat /tmp/va.txt)
-vault token renew >/dev/null 2>&1 || true  # keep the periodic scoped token alive
+vault_ops_sh '
 printf "gworkspace_tenants_json=%s" "$(cat /tmp/nt.txt)" | vault kv patch -stdin secret/t6-apps/mcp/config >/dev/null && echo "patched ok"
 vault kv get -format=json secret/t6-apps/mcp/config > /tmp/mcp-cfg2.json
-rm -f /tmp/va.txt /tmp/nt.txt /tmp/mcp-cfg2.json.check 2>/dev/null || true
+rm -f /tmp/nt.txt /tmp/mcp-cfg2.json.check 2>/dev/null || true
 '
 kubectl -n vault cp vault-0:/tmp/mcp-cfg2.json /tmp/mcp-cfg2.json
 chmod 600 /tmp/mcp-cfg2.json

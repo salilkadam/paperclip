@@ -5,20 +5,19 @@ set -euo pipefail
 
 python3 deploy/scripts/switch-tenant-client-2b-payload.py
 
-kubectl -n bionicorg get secret bionic-org-secrets -o jsonpath='{.data.vault_token}' | base64 -d > /tmp/va.txt
-chmod 600 /tmp/va.txt
-kubectl -n vault cp /tmp/va.txt vault-0:/tmp/va.txt
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/vault-ops.sh
+source "$HERE/lib/vault-ops.sh"
+vault_ops_login
+trap vault_ops_logout EXIT
 kubectl -n vault cp /tmp/payload.json vault-0:/tmp/payload.json
-rm -f /tmp/va.txt /tmp/payload.json
+rm -f /tmp/payload.json
 
 echo "== kv put =="
-kubectl -n vault exec vault-0 -- sh -c '
-export VAULT_ADDR=http://127.0.0.1:8200
-export VAULT_TOKEN=$(cat /tmp/va.txt)
-vault token renew >/dev/null 2>&1 || true  # keep the periodic scoped token alive
+vault_ops_sh '
 vault kv put secret/t6-apps/mcp/config @/tmp/payload.json >/dev/null && echo "put ok"
 vault kv get -format=json secret/t6-apps/mcp/config > /tmp/mcp-cfg2.json
-rm -f /tmp/va.txt /tmp/payload.json
+rm -f /tmp/payload.json
 '
 kubectl -n vault cp vault-0:/tmp/mcp-cfg2.json /tmp/mcp-cfg2.json
 chmod 600 /tmp/mcp-cfg2.json

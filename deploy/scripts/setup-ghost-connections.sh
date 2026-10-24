@@ -24,7 +24,7 @@
 # Re-running: an existing active "Ghost blog" connection is left as it is
 # (access is re-applied). Pass --rotate to push the current Vault key again.
 #
-# Requires: curl jq kubectl; env VAULT_TOKEN (from /workspace/.env) and
+# Requires: curl jq kubectl; kubeconfig (Vault access via lib/vault-ops.sh, no static token) and
 # PAPERCLIP_BOARD_KEY_FILE — a 0600 file holding a board API key of an instance
 # admin (create one: Paperclip UI → Settings → API keys, or
 # `paperclipai token board create --name ghost-setup --ttl-days 1`).
@@ -56,11 +56,13 @@ done
 die() { echo "ERROR: $*" >&2; exit 1; }
 log() { echo "[ghost-connections] $*"; }
 for b in curl jq kubectl; do command -v "$b" >/dev/null || die "$b is required"; done
-[[ -n "${VAULT_TOKEN:-}" ]] || die "VAULT_TOKEN is not set"
+# shellcheck source=lib/vault-ops.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/vault-ops.sh"
+vault_ops_login   # short-lived Vault token via the bionic-org-ops ServiceAccount
 [[ -r "${PAPERCLIP_BOARD_KEY_FILE:-}" ]] || die "PAPERCLIP_BOARD_KEY_FILE must point to a readable file"
 [[ "$(stat -c %a "$PAPERCLIP_BOARD_KEY_FILE")" == 600 ]] || die "$PAPERCLIP_BOARD_KEY_FILE must be mode 0600"
 
-WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf "$WORK"; vault_ops_logout' EXIT
 # curl reads the Authorization header from a file (-H @file): the key never
 # reaches argv.
 printf 'Authorization: Bearer %s\n' "$(tr -d '\r\n' < "$PAPERCLIP_BOARD_KEY_FILE")" > "$WORK/auth"
@@ -75,14 +77,7 @@ api() {
   cat "$WORK/resp"
 }
 
-vault_get() {  # value on stdout; absent or unreadable is fatal
-  local v
-  v="$(printf '%s\n' "$VAULT_TOKEN" | timeout 60 kubectl exec -i -n vault vault-0 -- sh -c \
-    'read -r VAULT_TOKEN; export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200; vault kv get -field="$2" "secret/$1"' \
-    _ "$1" "$2")" || die "cannot read Vault $1:$2"
-  [[ -n "$v" ]] || die "Vault $1:$2 is empty"
-  printf '%s' "$v"
-}
+vault_get() { vault_ops_get "$@"; }  # value on stdout; absent, unreadable or empty is fatal
 
 companies="$(api GET /companies)"
 jq -e 'type=="array"' <<<"$companies" >/dev/null || companies="$(jq '.companies // .items' <<<"$companies")"

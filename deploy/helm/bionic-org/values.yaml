@@ -270,11 +270,16 @@ minio:
   rootPasswordSecret: ""   # synced from existing minio credentials
 
 # ---------------------------------------------------------------------------
-# Vault K8s Auth (for API token signing, etc.)
+# Ops identity for Vault (deploy/scripts/lib/vault-ops.sh)
 # ---------------------------------------------------------------------------
-vaultAuth:
-  role: bionic-org
-  address: http://vault-internal.vault.svc.cluster.local:8200
+# An identity-only ServiceAccount: no pod mounts it. Ops scripts mint a
+# 10-minute token for it with `kubectl create token` and exchange it at Vault's
+# Kubernetes auth method (role/policy bionic-org-ops, created by
+# deploy/scripts/setup-vault-ops-role.sh). Replaces the static vault_token
+# that used to be mounted into the app pod, where every local agent could read it.
+opsServiceAccount:
+  enabled: true
+  name: bionic-org-ops
 
 # ---------------------------------------------------------------------------
 # Environment (non-secret, goes in ConfigMap)
@@ -306,8 +311,6 @@ env:
   KEYCLOAK_URL: "{{ .Values.keycloak.url }}"
   KEYCLOAK_INTERNAL_URL: "{{ .Values.keycloak.internalUrl }}"
   KEYCLOAK_REDIRECT_URI: "{{ .Values.keycloak.redirectUri }}"
-  VAULT_ADDR: "{{ .Values.vaultAuth.address }}"
-  VAULT_K8S_ROLE: "{{ .Values.vaultAuth.role }}"
   MINIO_ENDPOINT: "{{ .Values.minio.endpoint }}"
   MINIO_USE_SSL: "{{ .Values.minio.useSSL }}"
   MAIL_FROM: info@bionicaisolutions.com

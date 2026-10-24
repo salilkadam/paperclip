@@ -10,7 +10,7 @@
 #   - gh_publish_post is held for approval (decision "ask_first"), not run
 #   - the gateway key is stored as a company secret and never returned
 #
-# Requires: docker curl jq kubectl openssl; env VAULT_TOKEN. Creates and removes
+# Requires: docker curl jq kubectl openssl; kubeconfig able to create tokens for bionicorg/bionic-org-ops (Vault access via lib/vault-ops.sh). Creates and removes
 # a container `pcghost-test` on network 172.29.73.0/24. No production writes:
 # the MCP calls are reads plus ask-first holds (nothing is published).
 #
@@ -20,7 +20,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${1:-docker4zerocool/bionic:$(kubectl get deploy bionic-org -n bionicorg -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/.*://')}"
 NAME=pcghost-test NET=pcghost-net IP=172.29.73.10 U="http://172.29.73.10:3100"
 for b in docker curl jq kubectl openssl; do command -v "$b" >/dev/null || { echo "missing $b" >&2; exit 69; }; done
-[[ -n "${VAULT_TOKEN:-}" ]] || { echo "VAULT_TOKEN not set" >&2; exit 1; }
 W="$(mktemp -d)"; chmod 700 "$W"
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; rm -rf "$W"; }
 trap cleanup EXIT; cleanup; W="$(mktemp -d)"; chmod 700 "$W"

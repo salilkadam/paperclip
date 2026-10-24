@@ -20,8 +20,6 @@ data:
   KEYCLOAK_URL: {{ tpl .Values.env.KEYCLOAK_URL . | quote }}
   KEYCLOAK_INTERNAL_URL: {{ tpl .Values.env.KEYCLOAK_INTERNAL_URL . | quote }}
   KEYCLOAK_REDIRECT_URI: {{ tpl .Values.env.KEYCLOAK_REDIRECT_URI . | quote }}
-  VAULT_ADDR: {{ tpl .Values.env.VAULT_ADDR . | quote }}
-  VAULT_K8S_ROLE: {{ tpl .Values.env.VAULT_K8S_ROLE . | quote }}
   MINIO_ENDPOINT: {{ tpl .Values.env.MINIO_ENDPOINT . | quote }}
   MINIO_USE_SSL: {{ tpl .Values.env.MINIO_USE_SSL . | quote }}
   MAIL_FROM: {{ .Values.env.MAIL_FROM | quote }}

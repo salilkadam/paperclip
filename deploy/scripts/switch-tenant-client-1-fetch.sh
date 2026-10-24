@@ -2,17 +2,13 @@
 # Step 1 of tenant-client switch: fetch current mcp config data into a local
 # 0600 file for transformation. Never prints values.
 set -euo pipefail
-UMASK=$(umask)
-kubectl -n bionicorg get secret bionic-org-secrets -o jsonpath='{.data.vault_token}' | base64 -d > /tmp/va.txt
-chmod 600 /tmp/va.txt
-kubectl -n vault cp /tmp/va.txt vault-0:/tmp/va.txt
-rm -f /tmp/va.txt
-kubectl -n vault exec vault-0 -- sh -c '
-export VAULT_ADDR=http://127.0.0.1:8200
-export VAULT_TOKEN=$(cat /tmp/va.txt)
-vault token renew >/dev/null 2>&1 || true  # keep the periodic scoped token alive
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/vault-ops.sh
+source "$HERE/lib/vault-ops.sh"
+vault_ops_login
+trap vault_ops_logout EXIT
+vault_ops_sh '
 vault kv get -format=json secret/t6-apps/mcp/config > /tmp/mcp-cfg.json
-rm -f /tmp/va.txt
 echo "data keys:"; grep -o "\"[a-z_]*\":" /tmp/mcp-cfg.json | tr -d "\":
 " | sort -u | head -12
 '

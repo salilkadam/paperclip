@@ -396,10 +396,15 @@ no SDK.
     there could be pulled by any namespace that can create an ExternalSecret.
     Short-lived Kubernetes-auth tokens remove the need for a stored token.
     Recommendation to the owner: stop storing admin tokens at that path.
-- **Adapter env hygiene.** The 10 files that spread `{...process.env}` switch to
-  `sanitizeInheritedPaperclipEnv`: 8 adapters' `execute.ts`, plus `opencode-local`
-  and `pi-local` `models.ts`. A repo check fails if `...process.env` reappears under
-  `packages/adapters/*/src/server`. This is hygiene only, not isolation (§6).
+- **Adapter env hygiene: dropped (2026-10-24).** Verified on the production pod:
+  a process running as uid 1000 (the server's uid, which every local agent shares)
+  can read the server's full environment at `/proc/<server-pid>/environ`. `/proc`
+  is not mounted with `hidepid`. Such a process can also read the SA token file.
+  Stripping keys from child envs therefore removes nothing an agent cannot already
+  read. A sweep over `{...process.env}` would also be incomplete: `quota.ts`
+  passes `env: process.env`, and the ACP adapters merge the host env. A repo check
+  over spread syntax would give false assurance. The real fix is the
+  agent-isolation epic (§6).
 - `PAPERCLIP_SECRETS_PROVIDER` stays `local_encrypted` as the deployment fallback.
   Vault is chosen per company through `default_secret_provider_config_id`.
 
@@ -410,7 +415,7 @@ clean `main` and tagged with the SHA. `predeploy-check.sh` runs before every dep
 
 | Phase | Unit | Contents | Gate |
 |---|---|---|---|
-| 0 | ops + PR-0 | 0.1 Vault backup **and restore drill**. 0.2 Per-secret inventory (key, scope, binding types, version selectors, rotation rate), run by the operator. 0.3 PR-0: retire the ops token from the pod and Vault (§3.6), and adapter env hygiene. 0.4 Owner decisions §7. | Restore drill reads back a KV entry written before the snapshot. After the ESO refresh, `bionic-org-secrets` has no `vault_token`. `vault token lookup -accessor <old>` fails. The adapter repo check fails on a planted `...process.env`. |
+| 0 | ops + PR-0 | 0.1 Vault backup **and restore drill**. 0.2 Per-secret inventory (key, scope, binding types, version selectors, rotation rate), run by the operator. 0.3 PR-0: retire the ops token from the pod and Vault, and move ops scripts to short-lived Kubernetes-auth tokens (§3.6). Order: helm upgrade (the pod stops referencing `vault_token`) → run the ops-role setup → probe → delete the Vault key → ESO refresh → revoke the old token. 0.4 Owner decisions §7. | Restore drill reads back a KV entry written before the snapshot. `probe-bionic-vault-token.sh` exits 0, and exits 1 against a planted over-broad policy. After the ESO refresh, `bionic-org-secrets` has no `vault_token`. `vault token lookup -accessor <old>` fails. |
 | 1 | PR-A | Vault provider module. Unit tests (fake gateway). **Integration tests against a real `vault server -dev`**: cas conflict, prefix escape, read of a soft-deleted or pruned version, JWT re-read, metadata-first create. Unlock `vault` in shared, server and UI (reject `address`). `doc/SECRETS-VAULT-PROVIDER.md`. | Safety-tier code review round 1. Each integration test fails on a planted defect. |
 | 2 | PR-B | Company default provider (schema, routes, UI). `resolveWriteTarget` at every §2 site. Per-version provider + backfill + per-provider delete fan-out. Claude OAuth compatibility (decision 7.5). | Existing secrets suite green. A pinned old version resolves after a provider change. **Real UI on a staging instance with a vault company default**: the plain Create Secret dialog, a connection credential, an AI connection, a chat channel, a routine webhook and a user secret each land on `provider=vault`. A Claude-login hire still works. |
 | 3 | PR-C | `migrateProvider` (in-server, CAS, agreement, reverse) + admin route + CLI. | local→vault→local round trip with agreement. Test: a concurrent `rotate` during migration gives 409, not a revert. |
@@ -512,7 +517,7 @@ Fable 5.1; the author is Claude Opus 5.5).
 
 | ID | Sev | Finding | Disposition |
 |---|---|---|---|
-| A1 | major | Adapter preflight/install subprocesses get the unstripped `process.env` (claude-local:309; same pattern in 8 adapters). Env stripping is not isolation. | **Fixed:** PR-0 hygiene (§3.6); §6 rewritten. |
+| A1 | major | Adapter preflight/install subprocesses get the unstripped `process.env` (claude-local:309; same pattern in 8 adapters). Env stripping is not isolation. | §6 rewritten. Hygiene part **rejected 2026-10-24** with evidence: uid 1000 can read `/proc/<server-pid>/environ` on the production pod, so stripping protects nothing (§3.6). |
 | A2 | major | No per-secret lock; OAuth refresh rotates without CAS; a CLI process does not share the FS lock. | **Fixed:** migration in-server, `expectedLatestVersion` CAS, 409-on-race test (§3.5.5, PR-C gate). |
 | A3 | major | Metadata `update` lets Paperclip erase versions via `max_versions`. | **Accepted, owner decision 7.3:** documented in §3.3; dedicated mount offered. |
 | A4 | minor | Hard-coded site list incomplete. | **Fixed:** §2 list extended (proposals:586, script, CLI, route defaults). |
@@ -559,7 +564,7 @@ as round 1).
 | R2-5 | minor | Two per-version readers must change. | **Fixed:** §3.5.4. |
 | R2-6 | major | Cache placement and eviction could serve revoked versions. | **Fixed:** cache after status checks, revoke/disable eviction, `stale_served` outcome, test (§3.5.7). |
 | R2-7 | major | Token retirement misses `setup-vault-secrets.sh:137`, the `dataFrom.extract` semantics, the orphaned policy, and docs. | **Fixed:** §3.6 and the PR-0 gate. The Ghost scripts use the operator's root token and are unaffected. |
-| R2-8 | minor | 10 files, not 8. | **Fixed:** §3.6 + repo check. |
+| R2-8 | minor | 10 files, not 8. | **Moot:** hygiene dropped (see A1). |
 | R2-9 | minor | `vault` with no config id reaches the provider with null config. | **Fixed:** covered by the §3.5.1 rule (422). The provider also rejects a null config. |
 | R2-10 | minor | `value_sha256` for vault managed material unspecified. | **Fixed:** §3.4. |
 | R2-11 | minor | Kubernetes-auth tokens *are* revocable. | **Fixed:** `revoke-self` on SIGTERM (§3.2). |

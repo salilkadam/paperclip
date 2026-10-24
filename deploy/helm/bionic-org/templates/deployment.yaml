@@ -211,11 +211,6 @@ spec:
                 secretKeyRef:
                   key: keycloak_client_secret
                   name: {{ include "bionic-org.name" . }}-secrets
-            - name: VAULT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  key: vault_token
-                  name: {{ include "bionic-org.name" . }}-secrets
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:
