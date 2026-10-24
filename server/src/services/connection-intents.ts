@@ -38,6 +38,7 @@ import {
   connectionIntentPayloadSchema,
   getAvailableConnectionMethods,
   isToolConnectionAttentionHealth,
+  isToolConnectionBlockingHealth,
   type ConnectionSearchResultItem,
   type AggregatorServiceDefinition,
   getAppStoreDefinition,
@@ -293,11 +294,14 @@ export function connectionIntentService(db: Db) {
     const effective = await access.getEffectiveToolAssignmentsForAgent(input.companyId, input.agentId);
     const installedIds = new Set(effective.installedConnections.map((connection) => connection.id));
     const permittedIds = new Set(effective.allowedTools.map((tool) => tool.connectionId));
+    // `degraded` connections stay usable (one upstream account failing a deep
+    // health probe must not hide the tools for the others); only failed/error/
+    // missing_secret block. The same rule as the gateway and run preparation.
     const usable = (connection: ToolConnection | undefined) => connection
       && installedIds.has(connection.id) && permittedIds.has(connection.id)
       && connection.status === "active" && connection.enabled
       && ["mcp_remote", "local_stdio"].includes(connection.transport)
-      && !isToolConnectionAttentionHealth(connection.healthStatus) ? connection : null;
+      && !isToolConnectionBlockingHealth(connection.healthStatus) ? connection : null;
     if (input.serviceSlug === "github") {
       const selection = await resolveManagedGitHubIdentitySelection(db, input.companyId, {
         agentId: input.agentId, responsibleUserId: input.responsibleUserId,
@@ -743,7 +747,7 @@ export function connectionIntentService(db: Db) {
         sourceSlugForConnection(connection, inventory.applicationsById) === app.slug
         && (!options.connectionId || connection.id === options.connectionId)
         && connection.connectionPurpose !== "ai" && connection.status === "active" && connection.enabled
-        && !isToolConnectionAttentionHealth(connection.healthStatus));
+        && !isToolConnectionBlockingHealth(connection.healthStatus));
       const eligible = (await Promise.all(matching.map(async connection => {
         const { grants } = await access.listConnectionGrants(connection.id, context.run.companyId);
         return grants.some(grant => grant.status === "active" && (
@@ -1024,7 +1028,7 @@ export function connectionIntentService(db: Db) {
       ) !== payload.serviceSlug) {
         throw notFound("Connection does not match this intent");
       }
-      if (selectedConnection.status !== "active" || !selectedConnection.enabled || isToolConnectionAttentionHealth(selectedConnection.healthStatus)) {
+      if (selectedConnection.status !== "active" || !selectedConnection.enabled || isToolConnectionBlockingHealth(selectedConnection.healthStatus)) {
         throw conflict("Finish and test this connection before using it for the task");
       }
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
@@ -64,6 +64,28 @@ function createApp(db: Db, actor: Express.Request["actor"]) {
   app.use("/api", agentRoutes(db));
   app.use(errorHandler);
   return app;
+}
+
+
+// Production disables the native Paperclip Runner adapter
+// (/paperclip/adapter-settings.json: disabledTypes ["paperclip_runner"]), so a
+// new opencode_local hire stays on the legacy runner where the fork's
+// central-model-access features apply. Mirror that deployment setting for the
+// suites that exercise those features.
+function useDeploymentAdapterSettings(settings: { disabledTypes: string[] }) {
+  let previousHome: string | undefined;
+  let settingsHome: string;
+  beforeAll(() => {
+    previousHome = process.env.PAPERCLIP_HOME;
+    settingsHome = mkdtempSync(path.join(os.tmpdir(), "paperclip-adapter-settings-"));
+    writeFileSync(path.join(settingsHome, "adapter-settings.json"), JSON.stringify(settings));
+    process.env.PAPERCLIP_HOME = settingsHome;
+  });
+  afterAll(() => {
+    if (previousHome === undefined) delete process.env.PAPERCLIP_HOME;
+    else process.env.PAPERCLIP_HOME = previousHome;
+    rmSync(settingsHome, { recursive: true, force: true });
+  });
 }
 
 describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
@@ -573,6 +595,7 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
   });
 
   describe("opencode_local hires are equipped by the hiring manager", () => {
+    useDeploymentAdapterSettings({ disabledTypes: ["paperclip_runner"] });
     const GATEWAY_PROVIDERS = JSON.stringify({
       gpuai: {
         npm: "@ai-sdk/openai-compatible",
@@ -645,19 +668,20 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
       expect(childEnv.GPUAI_API_KEY).toMatchObject({ type: "user_secret_ref", key: "GPUAI_API_KEY" });
     });
 
-    it("keeps request-supplied settings and skips equipment for a different model provider", async () => {
+    it("refuses agent-supplied env and skips equipment for a different model provider", async () => {
       const companyId = await seedCompany();
       const parent = await seedOpenCodeManager(companyId);
 
+      // Upstream policy: an agent key may not configure env for a host-executed
+      // local adapter. Manager equipment is server-applied after that check, so
+      // it must not become a way around it.
       const own = await hire(agentActor(companyId, parent.id), companyId, {
         name: "Own Small Model",
         role: "general",
         adapterType: "opencode_local",
         adapterConfig: { env: { PAPERCLIP_OPENCODE_SMALL_MODEL: { type: "plain", value: "gpuai/other" } } },
       });
-      expect(own.status, JSON.stringify(own.body)).toBe(201);
-      expect(childEnvOf(own).PAPERCLIP_OPENCODE_SMALL_MODEL).toMatchObject({ value: "gpuai/other" });
-      expect(childEnvOf(own).PAPERCLIP_OPENCODE_PROVIDERS).toBeDefined();
+      expect(own.status, JSON.stringify(own.body)).toBe(403);
 
       const other = await hire(agentActor(companyId, parent.id), companyId, {
         name: "Other Provider",
@@ -694,6 +718,7 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
   });
 
   describe("deployment-declared opencode_local models are mandatory for new agents", () => {
+    useDeploymentAdapterSettings({ disabledTypes: ["paperclip_runner"] });
     const previousDeclared = process.env.PAPERCLIP_ADAPTER_MODELS;
     afterEach(() => {
       if (previousDeclared === undefined) delete process.env.PAPERCLIP_ADAPTER_MODELS;

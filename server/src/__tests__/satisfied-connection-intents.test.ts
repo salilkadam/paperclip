@@ -436,6 +436,16 @@ describePostgres("already available connection requests", () => {
     expect(await db.select().from(connectionIntentDeliveries)).toHaveLength(0);
   });
 
+  it("still satisfies the intent with a degraded connection (degraded stays usable)", async () => {
+    // `degraded` = partly working (e.g. one upstream account failed a deep
+    // health probe). Its tools stay usable, so the intent is satisfied; only
+    // failed/error/missing_secret block (covered by "unhealthy" above).
+    const f = await seed();
+    await db.update(toolConnections).set({ healthStatus: "degraded" });
+    const task = (await db.select().from(issues))[0]; const intent = (await db.select().from(issueThreadInteractions))[0];
+    expect(await findSatisfiedToolConnection(db, task, intent)).toMatchObject({ id: f.connection.id });
+  });
+
   it("keeps a real question blocking even when a sibling connection is available", async () => {
     const f = await seed(); const run = await retry(f);
     await db.insert(issueThreadInteractions).values({ companyId: f.companyId, issueId: f.issueId, kind: "ask_user_questions", status: "pending", payload: { version: 1, questions: [] } });
