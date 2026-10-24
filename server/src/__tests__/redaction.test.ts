@@ -287,9 +287,12 @@ describe("redaction", () => {
     expect(result.authUrl).toBe(consentUrl);
     expect(result.nested).toEqual({ auth_url: consentUrl });
     expect(result.auth_token).toBe(REDACTED_EVENT_VALUE);
-    expect(result.refresh_auth_url).toBe(REDACTED_EVENT_VALUE);
-    expect(result.smuggling).toEqual({ auth_url: REDACTED_EVENT_VALUE });
-    expect(result.insecure).toEqual({ auth_url: REDACTED_EVENT_VALUE });
+    // Owner decision F3 (c): URL-valued keys are judged by the URL's content.
+    // A credential-free consent URL survives under any key; userinfo is
+    // redacted inside the URL; secret-named keys stay fully redacted.
+    expect(result.refresh_auth_url).toBe(consentUrl);
+    expect(result.smuggling).toEqual({ auth_url: `https://${REDACTED_EVENT_VALUE}@relay.example/x` });
+    expect(result.insecure).toEqual({ auth_url: "http://accounts.google.com/o/oauth2/v2/auth?state=x" });
   });
 
   it("preserves raw and escaped consent URLs in diagnostic text", () => {
@@ -309,10 +312,52 @@ describe("redaction", () => {
     expect(escapedOut).toContain(String.raw`\"auth_url\":\"${consentUrl}\"`);
     expect(escapedOut).not.toContain("leak-value");
 
-    // Near-miss keys and non-browser values keep redacting.
-    expect(redactSensitiveText(`{"refresh_auth_url":"${consentUrl}"}`)).toContain(REDACTED_EVENT_VALUE);
-    expect(redactSensitiveText(`{"auth_url":"http://accounts.google.com/x"}`)).toContain(REDACTED_EVENT_VALUE);
+    // Credentials inside a URL are redacted by value, whatever the key.
     expect(redactSensitiveText(`{"auth_url":"https://user:pass@relay.example/x"}`)).toContain(REDACTED_EVENT_VALUE);
+    expect(redactSensitiveText(`{"auth_url":"https://user:pass@relay.example/x"}`)).not.toContain("pass@");
+    expect(redactSensitiveText(`{"refresh_auth_url":"${consentUrl}&code=4/0Abc-oauth-code"}`)).not.toContain("4/0Abc-oauth-code");
+  });
+
+  describe("value-level URL credential guard", () => {
+    const consentUrl =
+      "https://accounts.google.com/o/oauth2/v2/auth?client_id=382016492812-abcdef&state=eyJ0IjoiYmFzZSJ9&scope=openid&prompt=consent";
+
+    it("keeps credential-free URLs intact under any key", () => {
+      for (const key of ["auth_url", "token_url", "refresh_auth_url", "callback", "message"]) {
+        expect(sanitizeRecord({ [key]: consentUrl })[key]).toBe(consentUrl);
+      }
+      expect(sanitizeRecord({ docs: "https://docs.example.com/a/b?page=2#top" }).docs).toBe("https://docs.example.com/a/b?page=2#top");
+    });
+
+    it("redacts userinfo, including a bare token used as the username", () => {
+      expect(sanitizeRecord({ token_url: "https://user:hunter2@relay.example/x" }).token_url)
+        .toBe(`https://${REDACTED_EVENT_VALUE}@relay.example/x`);
+      expect(sanitizeRecord({ remote: "https://ghp_abcdefghijklmnopqrstu@github.com/o/r.git" }).remote)
+        .toBe(`https://${REDACTED_EVENT_VALUE}@github.com/o/r.git`);
+    });
+
+    it("redacts only the secret-looking query parameter values", () => {
+      // Once a secret parameter is present, the text scanner may also blank the
+      // rest of the string; what matters is that the secret is gone.
+      const reset = String(sanitizeRecord({ password_reset_link: "https://app.example/reset?token=s3cr3t&lang=en" }).password_reset_link);
+      expect(reset).toMatch(/^https:\/\/app\.example\/reset\?token=\*\*\*REDACTED\*\*\*/);
+      expect(reset).not.toContain("s3cr3t");
+      expect(sanitizeRecord({ redirect: "https://app.example/cb?code=4%2F0Abc&state=xyz" }).redirect)
+        .toBe(`https://app.example/cb?code=${REDACTED_EVENT_VALUE}&state=xyz`);
+      const download = String(sanitizeRecord({ download: "https://bucket.s3.amazonaws.com/f?X-Amz-Credential=AKIA1&X-Amz-Signature=abc123sig&X-Amz-Expires=60" }).download);
+      expect(download).toMatch(/^https:\/\/bucket\.s3\.amazonaws\.com\/f\?X-Amz-Credential=\*\*\*REDACTED\*\*\*/);
+      expect(download).not.toContain("AKIA1");
+      expect(download).not.toContain("abc123sig");
+    });
+
+    it("redacts URL credentials inside free text that has no other secret hint", () => {
+      const out = redactSensitiveText("retrying https://hooks.example/run?sig=deadbeef01 now");
+      expect(out).toBe(`retrying https://hooks.example/run?sig=${REDACTED_EVENT_VALUE} now`);
+    });
+
+    it("still keeps a clean consent URL under auth_url", () => {
+      expect(sanitizeRecord({ auth_url: consentUrl }).auth_url).toBe(consentUrl);
+    });
   });
 
   it("redacts jwt-looking values even when key name is not sensitive", () => {

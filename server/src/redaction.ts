@@ -402,6 +402,43 @@ function isPublicConsentUrl(value: unknown): value is string {
   }
 }
 
+/**
+ * Value-level credential guard for URLs (owner decision F3, 2026-10-24).
+ *
+ * Upstream anchored SECRET_PAYLOAD_KEY_RE so keys that merely contain a
+ * secret word (`author`, `token_count`, `secret_name`) are no longer blanked.
+ * That fixed real over-redaction, but URL-valued keys (`auth_url`, `token_url`,
+ * `password_reset_link`, ...) then passed through even when the URL itself
+ * carried a credential. This guard looks at the value instead of the key: it
+ * redacts URL userinfo (`user:pass@`, or a bare token used as the username)
+ * and the values of secret-looking query parameters, wherever the URL
+ * appears. Scheme, host, path and harmless parameters stay readable, so an
+ * OAuth consent URL (client_id, state, scope, ...) is unchanged.
+ */
+const URL_IN_TEXT_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`\\]+/gi;
+const URL_USERINFO_RE = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#@\s]+)@/i;
+const URL_QUERY_PARAM_RE = /([?&;])([^=&#;]+)=([^&#;]*)/g;
+const SECRET_URL_PARAM_RE =
+  /^(?:code|token|access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|key|sig|signature|password|passwd|pwd|secret|client[-_]?secret|session[-_]?id|sessionid|x-amz-(?:signature|credential|security-token)|x-goog-(?:signature|credential))$/i;
+
+function redactCredentialUrl(url: string): string {
+  const withoutUserinfo = url.replace(URL_USERINFO_RE, (_match, scheme: string) => `${scheme}${REDACTED_EVENT_VALUE}@`);
+  const queryStart = withoutUserinfo.indexOf("?");
+  if (queryStart === -1) return withoutUserinfo;
+  const head = withoutUserinfo.slice(0, queryStart);
+  const tail = withoutUserinfo.slice(queryStart).replace(
+    URL_QUERY_PARAM_RE,
+    (match, sep: string, name: string, value: string) =>
+      value && SECRET_URL_PARAM_RE.test(name) ? `${sep}${name}=${REDACTED_EVENT_VALUE}` : match,
+  );
+  return head + tail;
+}
+
+export function redactCredentialUrls(input: string): string {
+  if (!input.includes("://")) return input;
+  return input.replace(URL_IN_TEXT_RE, redactCredentialUrl);
+}
+
 function redactJsonSecretTextMatch(
   match: string,
   keyPrefix: string,
@@ -410,7 +447,7 @@ function redactJsonSecretTextMatch(
   consentKeyRe: RegExp,
 ): string {
   if (consentKeyRe.test(keyPrefix) && isPublicConsentUrl(value)) {
-    return `${keyPrefix}${value}${valueSuffix}`;
+    return `${keyPrefix}${redactCredentialUrls(value)}${valueSuffix}`;
   }
   return `${keyPrefix}${REDACTED_EVENT_VALUE}${valueSuffix}`;
 }
@@ -949,7 +986,7 @@ export function sanitizeRecord(
       continue;
     }
     if (CONSENT_URL_PAYLOAD_KEY_RE.test(key) && isPublicConsentUrl(value)) {
-      redacted[key] = value;
+      redacted[key] = redactCredentialUrls(value);
       continue;
     }
     if (
@@ -1050,7 +1087,10 @@ export function redactAgentAdapterConfig(
   return { ...(redactEventPayload(rest) ?? {}), env: redactedEnv };
 }
 
-export function redactSensitiveText(input: string): string {
+export function redactSensitiveText(raw: string): string {
+  // URL credentials first: `?code=...` or `user:pass@` need not contain any of
+  // the cheap secret-text hints below.
+  const input = redactCredentialUrls(raw);
   if (!maybeContainsSecretText(input)) return input;
   return redactCommandText(
     redactStandaloneBearerCredentials(redactAuthorizationCredentials(input))
