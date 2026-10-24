@@ -431,16 +431,18 @@ renewal is how `t6-apps/vault/admin_token` died.
          jq -r --arg a "$a" '.data | "\($a) \(.display_name) orphan=\(.orphan) policies=\(.policies|join(","))"'
      done
      ```
-  2. Revoke only an exact match, sparing any children. Expect
-     `token-bionic-org-app` with `policies=bionic-org-app,default`, and `root` with
-     `policies=root` but **not** your own token's accessor
-     (`vault token lookup -format=json | jq -r .data.accessor`):
-     `vault token revoke -mode=orphan -accessor <accessor>`.
+  2. Revoke only an exact match. Revoking by accessor **always cascades** to the
+     token's children: Vault has no orphan-revoke by accessor (that needs the token
+     value, which nobody holds). First confirm your own token is an orphan
+     (`vault token lookup -format=json | jq .data.orphan` must print `true`), so
+     the cascade cannot reach it. Expect `token-bionic-org-app` with
+     `policies=bionic-org-app,default`, and `root` with `policies=root`. Then
+     `vault token revoke -accessor <accessor>`.
   3. `vault policy delete bionic-org-app`. A source grep found nothing bound to it;
      the ops scripts use `bionic-org-ops`.
 - **Rule:** before revoking any Vault token, look up its policies and check whether
-  anything you need is its child. Abort on any mismatch with what the docs claim.
-  Mint admin tokens with `-orphan`.
+  anything you need is its child; revoke-by-accessor always cascades. Abort on any
+  mismatch with what the docs claim. Mint admin tokens with `-orphan`.
 
 - `deploy/scripts/lib/vault-ops.sh` mints a 10-minute JWT (audience `vault`)
   for the identity-only ServiceAccount `vault/bionic-org-ops` with
@@ -496,8 +498,8 @@ renewal is how `t6-apps/vault/admin_token` died.
      the old Deployment spec requires that key.
   5. **Done 2026-10-24, and the cause of the incident above.** Rule for any rerun:
      look up the token first (`vault token lookup -format=json -accessor <a>`),
-     abort unless `policies` is exactly what you expect, and revoke with
-     `-mode=orphan`.
+     abort unless `policies` is exactly what you expect, and remember that
+     revoking by accessor cascades to every child token.
   6. `kubectl -n vault exec vault-0 -- rm -f /tmp/va.txt /tmp/.va /tmp/vt.txt`
      (leftovers of the old scripts).
 
