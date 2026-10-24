@@ -191,10 +191,16 @@ WORKDIR /app
 # the app copy changes on every commit — ordered the other way around, this
 # (the single most expensive layer: four CLI toolchains + apt, per arch) can
 # never hit the layer cache and rebuilds on every build.
+# postgresql-client ships pg_dump/psql, which the default ("auto") scheduled
+# database backup and the restore path shell out to (packages/db/src/
+# backup-lib.ts). Without pg_dump the backup silently falls back to the
+# JavaScript dumper, which streams the whole database through the server
+# process — hourly multi-minute event-loop starvation, /health probe
+# timeouts, and liveness restarts of an otherwise healthy pod.
 RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest \
   && apt-get update \
-  && apt-get install -y --no-install-recommends openssh-client jq unzip \
+  && apt-get install -y --no-install-recommends openssh-client jq unzip postgresql-client \
   && rm -rf /var/lib/apt/lists/* \
   && curl -fsSL https://composio.dev/install | sh \
   && mkdir -p /opt/composio \
