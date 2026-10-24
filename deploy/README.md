@@ -381,16 +381,48 @@ enabled Drive/Gmail/Calendar/People there; E2E proof then passed green:
 
 ### Ops access to Vault (since 2026-10-24: no static token)
 
-History: `t6-apps/bionic-org/config` used to hold a `vault_token`. It was root until
-2026-10-07, then the periodic `bionic-org-app` token. ESO mirrored it into
-`bionic-org-secrets`, and the app pod mounted it as `VAULT_TOKEN`. No app code
+History: `t6-apps/bionic-org/config` used to hold a `vault_token`. ESO mirrored it
+into `bionic-org-secrets`, and the app pod mounted it as `VAULT_TOKEN`. No app code
 read it, but every local agent inherited it. Agents run as the server's uid and
 can read `/proc/<server-pid>/environ`, so the token was effectively agent-readable.
 
-Now **no deploy script or pod uses a stored Vault token**. A root-policy token
-still sits in `/workspace/.env` and in five other workspace `.env` files.
-Nothing here reads it, but retiring it is an owner decision, because other
-repos may use it:
+**Correction (2026-10-24):** earlier versions of this README said the stored token
+was scoped down to the `bionic-org-app` policy on 2026-10-07 and that no root token
+was stored anywhere. That was false. The scoped `token-bionic-org-app` was minted
+but never stored, and the config still held a **root** token. See the incident
+record below.
+
+Now **no deploy script or pod uses a stored Vault token**. The operator admin token
+in `/workspace/.env` (the project `.env` files are symlinks to it) is an **orphan**
+token named `token-workspace-admin-2026-10-24`, with the `admin` policy (everything
+except seal/rekey/rotate/raw) and a 768h period. **Renew it at least every 32 days**
+with `vault token renew`, or it expires the way `t6-apps/vault/admin_token` did.
+
+#### Incident 2026-10-24: revoking the stored token cascaded
+
+- **What happened.** Cut-over step 5 revoked the token from `bionic-org/config`,
+  trusting this README's claim that it was scoped. A lookup printed
+  `policies=["root"]`, but the step continued. The `/workspace/.env` admin token was
+  that root token's **child**, so it was revoked in the cascade.
+- **Recovery.** Root was regenerated with `vault-regenerate-root.sh`.
+  - The script's first run lost the generated token: the container is non-root, so
+    the write to `/root` failed, and the inner script kept going without `set -e`.
+    The script is now fixed.
+  - A new orphan admin token was minted and written to `/workspace/.env`.
+  - The break-glass root token was revoked.
+- **Not affected:** ESO (JWT and Kubernetes auth), auto-unseal, bionic-platform
+  (Kubernetes auth), production Paperclip.
+- **At risk:** OpenMontage loads keys from Vault with a static `VAULT_TOKEN` at
+  startup, and a failure there is only a warning. No live token matches it, so its
+  next restart will log a Vault 403. Move it to Kubernetes auth.
+- **Pending (run with the new admin token):**
+  - `vault policy delete bionic-org-app`
+  - revoke the unused orphan `token-bionic-org-app` (look it up by display name)
+  - revoke the one remaining `root`-named token, generated during the failed first
+    break-glass run; nobody holds its value
+- **Rule:** before revoking any Vault token, look up its policies and check whether
+  anything you need is its child. Abort on any mismatch with what the docs claim.
+  Mint admin tokens with `-orphan`.
 
 - `deploy/scripts/lib/vault-ops.sh` mints a 10-minute JWT (audience `vault`)
   for the identity-only ServiceAccount `vault/bionic-org-ops` with
