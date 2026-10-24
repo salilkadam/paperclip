@@ -14,8 +14,13 @@
 # - An attempt started before a process restart survives in memory; deleting
 #   the vault-0 pod clears it (the vault-auto-unseal cronjob re-unseals it
 #   within a minute using the same k8s secret).
-# - The regenerated root token CANNOT be revoked; the durable mitigation
-#   against share leakage is rotating unseal keys (`vault operator rotate`).
+# - The vault container runs as a non-root user: the token goes to
+#   /tmp/.vault-root-token (mode 600), not /root. The inner script stops on
+#   the first error so a failed write can never be followed by deleting the
+#   encoded token (2026-10-24: that lost one generated root token).
+# - Revoke the regenerated root token (`vault token revoke -self`) once an
+#   orphan admin token exists; the durable mitigation against share leakage
+#   is rotating unseal keys (`vault operator rotate`).
 set -euo pipefail
 NS=${NS:-vault}
 POD=${POD:-vault-0}
@@ -28,6 +33,8 @@ kubectl -n "$NS" cp /tmp/.us1 "$POD:/tmp/.us1"
 kubectl -n "$NS" cp /tmp/.us2 "$POD:/tmp/.us2"
 
 kubectl -n "$NS" exec "$POD" -- sh -c '
+set -e
+umask 077
 export VAULT_ADDR=http://127.0.0.1:8200
 chmod 600 /tmp/.us1 /tmp/.us2
 OTP=$(vault operator generate-root -generate-otp | tr -d "[:space:]")
@@ -43,9 +50,9 @@ printf "%s" "$(cat /tmp/.us1)" | vault operator generate-root -otp="$OTP" -nonce
 printf "%s" "$(cat /tmp/.us2)" | vault operator generate-root -otp="$OTP" -nonce="$NONCE" - >/tmp/.gr
 ENC=$(awk "/Encoded Token/{print \$3; exit}" /tmp/.gr)
 [ -n "$ENC" ] || { echo "no encoded token; shares did not reach threshold"; tail -2 /tmp/.gr; exit 3; }
-vault operator generate-root -decode="$ENC" -otp="$OTP" > /root/.vault-root-token
-chmod 600 /root/.vault-root-token
+vault operator generate-root -decode="$ENC" -otp="$OTP" > /tmp/.vault-root-token
+chmod 600 /tmp/.vault-root-token
 rm -f /tmp/.us1 /tmp/.us2 /tmp/.gr
-echo "root token written to ${POD}:/root/.vault-root-token (sha8: $(sha256sum /root/.vault-root-token | cut -c1-8))"
+echo "root token written to ${POD}:/tmp/.vault-root-token (sha8: $(sha256sum /tmp/.vault-root-token | cut -c1-8))"
 echo "Copy it out (kubectl cp), store it in the operator password manager, then remove it from the pod."
 '
