@@ -1,6 +1,6 @@
 # HashiCorp Vault Secret Provider — Plan
 
-Status: **revision 3 — adversarial review rounds 1 and 2 folded in (§10); owner decisions pending (§7)** · 2026-10-24 · branch `docs/hashicorp-vault-provider-plan`
+Status: **revision 4 — owner decisions recorded 2026-10-24 (§7); decision 7.1 needs one clarification** · reviews §10 · 2026-10-24 · branch `docs/hashicorp-vault-provider-plan`
 
 ## 1. Goal
 
@@ -149,11 +149,11 @@ secret/t6-apps/bionic-org/
   sandbox                     existing — operator-owned Brev key material. Paperclip: read-only (external ref).
   logins                      existing — not touched, not readable by Paperclip.
   external/                   NEW, operator-owned — values operators place for Paperclip to link. Paperclip: read-only.
-    ghost                       apikey_<site> fields, copied from t6-apps/mcp/config (decision 7.4)
   paperclip/                  NEW — Paperclip-managed namespace (the "deployment prefix")
     companies/<companyId>/
       company/<secretId>        scope=company
       users/<ownerUserId>/<secretId>   scope=user (opaque auth id)
+secret/t6-apps/mcp/config       existing — MCP config incl. apikey_ghost_<site>_key. Paperclip: read-only (decision 7.4).
 ```
 
 - **The path follows the ownership scope, not the bindings.** A company secret bound
@@ -215,8 +215,10 @@ role or policy:
   - `secret/metadata/t6-apps/bionic-org/paperclip/*`: read, update. Only to set
     `max_versions` (decision 7.3).
   - `secret/delete/t6-apps/bionic-org/paperclip/*`: update (soft delete)
-  - `secret/data/t6-apps/bionic-org/sandbox` and
-    `secret/data/t6-apps/bionic-org/external/*`: read
+  - `secret/data/t6-apps/bionic-org/sandbox`,
+    `secret/data/t6-apps/bionic-org/external/*` and `secret/data/t6-apps/mcp/config`:
+    read. Paperclip reads the whole of `mcp/config`, which also holds the gworkspace
+    tenant OAuth JSON (owner decision 7.4, accepted risk in §6).
   - `secret/metadata/t6-apps/bionic-org/external/*`: read, list. Only for remote
     import preview.
   - **No** `patch`, `undelete`, `destroy`, metadata `delete`, or `list` on
@@ -227,7 +229,8 @@ role or policy:
   anything outside it. The alternative is a dedicated mount (decision 7.3).
 - **Probe script.** It must show:
   - in-scope create/read succeed
-  - writes to `config`, `t6-apps/mcp/config` and `logins` are denied
+  - writes to `config`, `t6-apps/mcp/config` and `logins` are denied, while a read of
+    `t6-apps/mcp/config` succeeds
   - `destroy` is denied
   - reads of `logins` are denied
 
@@ -245,7 +248,7 @@ no SDK.
 | `validateConfig` / `healthCheck` | Login. Create a canary at `<prefix>/_health/<instance>` the same way as a real secret (metadata first), then read back both its data and its `max_versions`. Check the mount is KV v2. `ok`/`warn` with missing-env guidance. |
 | `createSecret` | **Metadata first** (`max_versions`, proposed 100), then data with `cas=0`. If the second call fails, the entry exists with no versions, and the retry is idempotent. `valueSha256 = sha256(plaintext)` for managed material, as AWS managed does (aws:1126,1143), so the agreement check works in both directions. |
 | `createVersion` | Data write with `cas=<kvVersion from latest version's material>`. On a cas 400, read metadata `current_version` and fail as `conflict` (the caller retries via `rotate`). Drift check: the material path must equal the derived path. |
-| `linkExternalSecret` | Ref `<path>#<field>` under `sandbox` or `external/`. Rejected inside the managed prefix. Metadata only. |
+| `linkExternalSecret` | Ref `<path>#<field>` under `sandbox`, `external/` or `t6-apps/mcp/config`. Rejected inside the managed prefix. Metadata only. |
 | `updateExternalSecretValue` | Not supported (the descriptor says so). |
 | `listRemoteSecrets` | KV `LIST` under `external/` (+ `sandbox`). Names only; values are never read. |
 | `discoverProviderConfigs` | Not implemented (no AWS-style discovery is needed: there is one deployment prefix). |
@@ -368,12 +371,31 @@ no SDK.
   - Stop `setup-vault-secrets.sh:137` from writing `vault_token` back.
   - Revoke the token by accessor, and delete or annotate the orphaned
     `bionic-org-app` policy.
-  - Move the five scripts that read `bionic-org-secrets.vault_token` to the
-    operator's own token: `probe-bionic-vault-token`, `switch-tenant-client-1`,
-    `-3`, `-3b`, and `sync-brev-sandbox-key` (until it is retired).
   - Update `deploy/README.md` and `deploy/CHECKLIST.md`.
-  - The three Ghost scripts read `VAULT_TOKEN` from the operator's environment, not
-    from the pod, and are unaffected.
+- **Ops scripts stop using any static token, including `/workspace/.env`** (owner,
+  2026-10-24). New helper `deploy/scripts/lib/vault-ops-login.sh`:
+  - Mints a 10-minute ServiceAccount JWT with `kubectl -n bionicorg create token
+    bionic-org-ops --duration=10m`. The SA is an identity only; no pod mounts it.
+  - Exchanges the JWT for a Vault token through the new Kubernetes-auth role
+    `bionic-org-ops`: TTL 15 m, max 1 h. Its policy `bionic-org-ops` grants the old
+    `bionic-org-app` scope plus read on `sandbox`.
+  - Pipes the token into `vault-0` on stdin. It is never written to disk or to argv,
+    and it is revoked with `revoke-self` when the script exits.
+  - The bootstrap credential is the operator's kubeconfig, which these scripts
+    already require. Eight scripts move to the helper: `probe-bionic-vault-token`,
+    `switch-tenant-client-1`, `-3`, `-3b`, `sync-brev-sandbox-key`,
+    `setup-ghost-connections`, `setup-ghost-plugin`, `test-ghost-connections-local`.
+    `setup-vault-secrets.sh` and `setup-vault-jwt.sh` change Vault auth and
+    policies, so they stay on an operator-supplied admin token. They read it from
+    stdin or `VAULT_TOKEN_FILE`, never from `/workspace/.env`.
+  - **Why not `secret/t6-apps/vault/admin_token`** (the owner's offered fallback):
+    on 2026-10-24 that token was **expired** (lookup returns `invalid token`;
+    created 2026-05-18, 768 h period, never renewed). The path is also readable
+    by the instance-wide `eso-reader` role, as well as `bionic-platform`,
+    `credential-shape-scan` and `eso-pg-superuser-writer`. A live admin token stored
+    there could be pulled by any namespace that can create an ExternalSecret.
+    Short-lived Kubernetes-auth tokens remove the need for a stored token.
+    Recommendation to the owner: stop storing admin tokens at that path.
 - **Adapter env hygiene.** The 10 files that spread `{...process.env}` switch to
   `sanitizeInheritedPaperclipEnv`: 8 adapters' `execute.ts`, plus `opencode-local`
   and `pi-local` `models.ts`. A repo check fails if `...process.env` reappears under
@@ -395,7 +417,7 @@ clean `main` and tagged with the SHA. `predeploy-check.sh` runs before every dep
 | 4 | PR-D | `setup-vault-paperclip-provider.sh` + probe. Helm env. | Probe passes, and fails on a planted over-broad policy. |
 | 5 | deploy | Deploy `main`. Run the Vault setup script. Create one `vault` provider vault per company and check its health is `ready`. Set it as the **company default**. Soak 48 h. | Real UI: create a secret, bind it to an agent, run the agent; the access event has `provider=vault`. |
 | 6 | ops | **Precondition: PR-B deployed** (Claude OAuth compatibility). Migrate company by company: dry-run, then migrate. User-scoped and low-churn secrets first, the 211-version credential last. Watch `secret_access_events.error_code`. | DB query shows all on `vault` (minus exceptions). Real runs: agent, plugin, tool connection, Brev environment probe, an OAuth refresh producing a new KV version. |
-| 7 | PR-E + ops | Brev key → external ref `t6-apps/bionic-org/sandbox#brev_ssh_private_key`, then retire `sync-brev-sandbox-key.sh`. Ghost keys → `external/ghost` + relink, then remove the key push from `setup-ghost-connections.sh`. Update `deploy/README.md`. | A key rotated in Vault reaches the next environment probe with no script run (external refs are uncached). |
+| 7 | PR-E + ops | Brev key → external ref `t6-apps/bionic-org/sandbox#brev_ssh_private_key`, then retire `sync-brev-sandbox-key.sh`. Ghost connections → external refs `t6-apps/mcp/config#apikey_ghost_<site>_key`, then remove the key push from `setup-ghost-connections.sh`. Update `deploy/README.md`. | A key rotated in Vault reaches the next environment probe with no script run (external refs are uncached). |
 | 8 | decision | After soak: blank the `material` of superseded `local_encrypted` versions or keep it. The master key is kept regardless. | Owner. |
 
 **Rollback after phase 5.** Set the company default back to local. Migrate secrets
@@ -440,28 +462,22 @@ per-version provider.
 | Paperclip can shrink history in its own subtree (metadata `update`). | Decision 7.3. Confined to `paperclip/*`. |
 | `value_sha256` (sha256 of plaintext) stays in Postgres, indexed. Low-entropy values can be guessed offline. | Not changed by this plan. Named here; a follow-up can null it for vault-backed versions once agreement checks no longer need it. |
 | Fork is 847 commits behind upstream, which reworked `secrets.ts`. | Decision 7.1. |
+| Paperclip (and so, per the threat model, any local agent) can read all of `t6-apps/mcp/config`, including the gworkspace tenant OAuth client JSON. | **Accepted by owner 2026-10-24** (decision 7.4). Trigger to revisit: the agent-isolation epic, or a new high-value key added to `mcp/config`. |
 | High-churn credential vs `max_versions`. | Metadata-first create with 100 versions; the health check verifies it. Bindings default to `latest`. Phase 0.2 checks for pinned numeric selectors. |
 | A Vault login token outlives a crashed pod. | TTL 1 h. `revoke-self` on SIGTERM. Revoke by accessor on suspected leak. |
 
-## 7. Open decisions (owner)
+## 7. Owner decisions (recorded 2026-10-24)
 
-1. **Upstream sync first?** Recommendation: if an upstream sync is planned within
-   weeks, do it first as its own epic. PR-B and PR-C touch the `secrets.ts` regions
-   upstream reworked, and agent-owned (`instance`) secrets exist only upstream.
-   Otherwise build on `main` now and accept a harder merge later.
-2. **Leaf by secret UUID** (recommended) or by key, as AWS does.
-3. **History control.** (a) Stay at `secret/t6-apps/bionic-org/paperclip` as you
-   asked, and accept that Paperclip can lower `max_versions` on its own entries
-   (recommended). (b) A dedicated KV mount with mount-level `max_versions` and no
-   metadata `update` for Paperclip.
-4. **Ghost keys:** copy them into `external/ghost` (recommended), or grant read on all
-   of `t6-apps/mcp/config` (which also holds the gworkspace tenant OAuth JSON).
-5. **Claude OAuth user secrets:** let them follow the company default (recommended;
-   one-line compatibility change) or keep them local as listed exceptions.
-6. **Read cache:** 15-minute TTL with a 10-minute stale-on-error window
-   (recommended; covers the ~60 s sealed period after a Vault restart with margin),
-   or no cache, accepting that runs fail while Vault restarts.
-7. **Phase 8:** blank superseded local versions or keep them.
+| # | Decision | Owner's choice |
+|---|---|---|
+| 7.1 | Upstream sync first? | "Follow the recommendation." The recommendation is conditional: sync first *if* an upstream sync is planned. Git history shows the fork split from upstream on 2026-09-30 (merge-base `c8f874311`) and has never merged it back. Upstream has added 847 commits since (tip 2026-10-22). **Clarification requested:** is an upstream sync planned? PR-0 does not depend on the answer. |
+| 7.2 | Vault leaf | Secret UUID. |
+| 7.3 | History control | Stay at `secret/t6-apps/bionic-org/paperclip`; Paperclip may set `max_versions` on its own entries. |
+| 7.4 | Ghost keys | **Paperclip reads all of `t6-apps/mcp/config`** (not the recommended copy). Policy in §3.3, risk in §6. |
+| 7.5 | Claude OAuth user secrets | Follow the company default (two-site change, §3.5.3). |
+| 7.6 | Read cache | 15-minute TTL, served stale up to 10 minutes while Vault is unavailable. |
+| 7.7 | Phase 8 | **Blank** superseded `local_encrypted` material after the soak period. The master key is kept for the encryption-primitive uses (§2). |
+| 7.8 | Root token in `/workspace/.env` | Remove the dependency on `/workspace/.env`; `t6-apps/vault/admin_token:token` "if needed". Implemented as short-lived Kubernetes-auth ops tokens; no stored token is needed (§3.6). |
 
 ## 8. Out of scope
 
