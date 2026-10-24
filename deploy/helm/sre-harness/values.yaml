@@ -250,7 +250,13 @@ monitor:
     4. `kubectl -n bionicorg get events --sort-by=.lastTimestamp` - Warning
        events from the last 40 minutes.
     5. `kubectl -n bionicorg get jobs -o wide` - any Failed jobs (the
-       sre-harness-monitor job failing is itself reportable).
+       sre-harness-monitor job failing is itself reportable). Supersession
+       rule: these jobs use backoffLimit=0 on purpose - the next cron tick
+       is the retry - so a Failed job that a newer Completed run of the
+       same component superseded already retried and passed. Treat a
+       superseded failure as stale history: mention it in one bullet, but
+       it must not, alone or with other benign signals, make the verdict
+       WARN or FAIL.
 
     Your final message MUST start with exactly one line, either:
     PAPERCLIP HEALTH: OK
@@ -258,7 +264,7 @@ monitor:
     PAPERCLIP HEALTH: FAIL
     Then at most 6 short evidence bullets (what/where/count). OK means every
     check passed. WARN means degraded but serving (e.g. recent restarts,
-    benign-looking errors, stale warnings). FAIL means the API is unhealthy,
+    benign-looking errors, unresolved warnings). FAIL means the API is unhealthy,
     a workload is down/crashlooping, or fresh fatal errors are appearing.
 
 # Remediation: dispatched BY the monitor when a sweep reports WARN/FAIL
