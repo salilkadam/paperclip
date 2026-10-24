@@ -1,7 +1,12 @@
+import { normalizeEscapedLineBreaks } from "@paperclipai/shared/validators/text";
+import { notifyDeliveryWork, DELIVERY_QUEUES } from "./delivery-work-notifications.js";
+import { historicalQuestionCondition } from "./issue-question-context.js";
 import {
   currentContinuationOrigins,
   deliveredContinuationCommentIds,
 } from "./execution-continuation.js";
+import { parseQuestionInteractionAnswers } from "./question-interaction-answers.js";
+import { isUniqueViolation } from "../db-errors.js";
 import { assertAgentRunWriteAllowed } from "../agent-run-cancellation.js";
 import { connectionIntentDeliveries } from "@paperclipai/db";
 import { isDeepStrictEqual } from "node:util";
@@ -21,6 +26,7 @@ import {
 import type { Db } from "@paperclipai/db";
 import {
   agents,
+  chatVoiceSessions,
   authUsers,
   companySecretProposals,
   companies,
@@ -46,6 +52,7 @@ import type {
   CancelIssueThreadInteraction,
   ConnectionIntentInteraction,
   CreateIssueThreadInteraction,
+  CreateIssueThreadInteractionInput,
   InteractionResolverGovernance,
   IssueReviewPolicy,
   IssueThreadInteraction,
@@ -110,6 +117,7 @@ import {
 } from "./issue-review-policy.js";
 import {
   issueService,
+  ensureAssignmentIssueAccessGrant,
   readAcceptedPlanConfirmationTarget,
   runWorkspaceIsFinalized,
 } from "./issues.js";
@@ -581,20 +589,6 @@ function isUserCommentSupersedableKind(
   return (
     USER_COMMENT_SUPERSEDABLE_INTERACTION_KINDS as readonly string[]
   ).includes(kind);
-}
-
-function isIssueThreadInteractionIdempotencyConflict(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const err = error as {
-    code?: string;
-    constraint?: string;
-    constraint_name?: string;
-  };
-  const constraint = err.constraint ?? err.constraint_name;
-  return (
-    err.code === "23505" &&
-    constraint === ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT
-  );
 }
 
 function isEquivalentCreateRequest(
@@ -1676,6 +1670,7 @@ function resolveRequestItemVerdictSubmissions(args: {
 
 function normalizeQuestionAnswers(args: {
   questions: AskUserQuestionsInteraction["payload"]["questions"];
+  textQuestionIds?: ReadonlySet<string>;
   answers: RespondIssueThreadInteraction["answers"];
 }) {
   const questionById = new Map(
@@ -1710,7 +1705,11 @@ function normalizeQuestionAnswers(args: {
       );
     }
 
-    const otherText = answer.otherText?.trim() ?? "";
+    // Canonical text fields may contain code or intentional whitespace. The
+    // legacy custom-answer path keeps its historical newline/trim behavior.
+    const otherText = args.textQuestionIds?.has(answer.questionId)
+      ? answer.otherText ?? ""
+      : normalizeEscapedLineBreaks(answer.otherText ?? "").trim();
     answerByQuestionId.set(answer.questionId, {
       questionId: answer.questionId,
       optionIds: uniqueOptionIds,
@@ -1722,7 +1721,7 @@ function normalizeQuestionAnswers(args: {
     const answer = answerByQuestionId.get(question.id);
     if (
       question.required &&
-      (!answer || (answer.optionIds.length === 0 && !answer.otherText))
+      (!answer || (answer.optionIds.length === 0 && !answer.otherText?.trim()))
     ) {
       throw unprocessable(`Question ${question.id} requires an answer`);
     }
@@ -2008,6 +2007,53 @@ export function issueThreadInteractionService(
       .then((rows) => rows[0] ?? null);
   }
 
+  // Readiness is a projection, not durable interaction state. Use the same
+  // source-run predicate as accept so another run cannot hold a ready card back.
+  async function withAcceptanceReadiness(
+    interactions: IssueThreadInteraction[],
+    issueWorkspace?: { companyId: string; executionWorkspaceId: string | null },
+  ): Promise<IssueThreadInteraction[]> {
+    const guarded = interactions.filter((interaction) =>
+      interaction.status === "pending"
+      && interaction.sourceRunId
+      && (interaction.kind === "request_checkbox_confirmation"
+        || (interaction.kind === "request_confirmation"
+          // Tool reviews resolve through their own route while the originating
+          // run may be waiting for the user's decision.
+          && !interaction.payload.toolAction)),
+    );
+    if (guarded.length === 0) return interactions;
+    const workspace = issueWorkspace ?? await db
+      .select({
+        companyId: issues.companyId,
+        executionWorkspaceId: issues.executionWorkspaceId,
+      })
+      .from(issues)
+      .where(and(
+        eq(issues.id, guarded[0].issueId),
+        eq(issues.companyId, guarded[0].companyId),
+      ))
+      .then((rows) => rows[0]);
+    if (!workspace?.executionWorkspaceId) return interactions;
+
+    // Only pending confirmations need checks, once per source run even if that
+    // run produced several cards. Historical interactions add no queries.
+    const { companyId, executionWorkspaceId } = workspace;
+    const sourceRunIds = [...new Set(guarded.map((interaction) => interaction.sourceRunId!))];
+    const pendingRunIds = new Set<string>();
+    await Promise.all(sourceRunIds.map(async (runId) => {
+      if (!await runWorkspaceIsFinalized(db, companyId, executionWorkspaceId, runId)) {
+        pendingRunIds.add(runId);
+      }
+    }));
+    const guardedIds = new Set(guarded.map((interaction) => interaction.id));
+    return interactions.map((interaction) =>
+      guardedIds.has(interaction.id) && pendingRunIds.has(interaction.sourceRunId!)
+        ? { ...interaction, acceptanceBlocker: "workspace_sync_pending" }
+        : interaction,
+    );
+  }
+
   async function getForIssue(
     issue: { id: string; companyId: string },
     interactionId: string,
@@ -2024,7 +2070,7 @@ export function issueThreadInteractionService(
     ) {
       throw interactionNotFoundError();
     }
-    return hydrateInteraction(current);
+    return (await withAcceptanceReadiness([hydrateInteraction(current)]))[0];
   }
 
   async function assertIssueWorkspaceFinalizedForAccept(args: {
@@ -2578,7 +2624,7 @@ export function issueThreadInteractionService(
           || existing.sourceRunId !== input.sourceRunId
           || existing.addresseeUserId !== input.addresseeUserId
           || (existing.kind === "connection_intent"
-            ? (connectionIntentPayloadSchema.parse(existing.payload).serviceSlug !== payload.serviceSlug || connectionIntentPayloadSchema.parse(existing.payload).purpose !== payload.purpose)
+            ? (connectionIntentPayloadSchema.parse(existing.payload).serviceSlug !== payload.serviceSlug || connectionIntentPayloadSchema.parse(existing.payload).purpose !== payload.purpose || !isDeepStrictEqual(connectionIntentPayloadSchema.parse(existing.payload).accessRequest, payload.accessRequest))
             : !isDeepStrictEqual(existing.payload, payload))
         ) {
           throw conflict(
@@ -2615,7 +2661,7 @@ export function issueThreadInteractionService(
           eq(issueThreadInteractions.addresseeUserId, input.addresseeUserId),
         ));
         const reusable = pending.find((candidate) =>
-          connectionIntentPayloadSchema.parse(candidate.payload).serviceSlug === payload.serviceSlug && connectionIntentPayloadSchema.parse(candidate.payload).purpose === payload.purpose);
+          connectionIntentPayloadSchema.parse(candidate.payload).serviceSlug === payload.serviceSlug && connectionIntentPayloadSchema.parse(candidate.payload).purpose === payload.purpose && isDeepStrictEqual(connectionIntentPayloadSchema.parse(candidate.payload).accessRequest, payload.accessRequest));
         if (reusable) return reusable;
 
         const [sourceRun] = await tx.select({ context: heartbeatRuns.contextSnapshot }).from(heartbeatRuns)
@@ -2638,7 +2684,7 @@ export function issueThreadInteractionService(
             sourceRunId: input.sourceRunId,
             originCommentIds,
             sourceIdentityContextId: input.sourceIdentityContextId ?? null,
-            title: `Connect ${payload.serviceName}`,
+            title: payload.accessRequest ? `Grant ${payload.serviceName} access to ${payload.requestingAgentName}?` : `Connect ${payload.serviceName}`,
             summary: `${payload.requestingAgentName} needs this connection to continue.`,
             createdByAgentId: payload.requestingAgentId,
             addresseeUserId: input.addresseeUserId,
@@ -2693,6 +2739,7 @@ export function issueThreadInteractionService(
         }
         await touchIssue(tx, issue.id);
         inserted = true;
+        await notifyDeliveryWork(tx, DELIVERY_QUEUES.connection);
         return row;
       });
 
@@ -2785,6 +2832,7 @@ export function issueThreadInteractionService(
         .returning();
         if (!row) throw interactionAlreadyResolvedError();
         if (status === "accepted" || status === "rejected") {
+          await notifyDeliveryWork(tx, DELIVERY_QUEUES.connection);
           await tx.insert(connectionIntentDeliveries).values({ interactionId, companyId: issue.companyId }).onConflictDoNothing();
         }
         return row;
@@ -2983,7 +3031,7 @@ export function issueThreadInteractionService(
       };
     },
     listForIssue: async (issueId: string) => {
-      const [rows, issueStatus] = await Promise.all([
+      const [rows, issue] = await Promise.all([
         db
           .select()
           .from(issueThreadInteractions)
@@ -2993,16 +3041,20 @@ export function issueThreadInteractionService(
             asc(issueThreadInteractions.id),
           ),
         db
-          .select({ status: issues.status })
+          .select({
+            status: issues.status,
+            companyId: issues.companyId,
+            executionWorkspaceId: issues.executionWorkspaceId,
+          })
           .from(issues)
           .where(eq(issues.id, issueId))
-          .then((issueRows) => issueRows[0]?.status ?? null),
+          .then((issueRows) => issueRows[0]),
       ]);
 
-      return rows.map((row) =>
+      const interactions = rows.map((row) =>
         hydrateInteraction(
-          issueStatus &&
-            isTerminalIssueStatus(issueStatus) &&
+          issue &&
+            isTerminalIssueStatus(issue.status) &&
             row.status === "pending"
             ? {
                 ...row,
@@ -3013,6 +3065,7 @@ export function issueThreadInteractionService(
             : row,
         ),
       );
+      return withAcceptanceReadiness(interactions, issue);
     },
 
     getById: async (interactionId: string) => {
@@ -3022,7 +3075,7 @@ export function issueThreadInteractionService(
         .where(eq(issueThreadInteractions.id, interactionId))
         .then((rows) => rows[0] ?? null);
 
-      return row ? hydrateInteraction(row) : null;
+      return row ? (await withAcceptanceReadiness([hydrateInteraction(row)]))[0] : null;
     },
 
     recordSecretProposalExecutionResult: async (
@@ -3322,7 +3375,7 @@ export function issueThreadInteractionService(
 
     create: async (
       issue: { id: string; companyId: string },
-      input: CreateIssueThreadInteraction,
+      input: CreateIssueThreadInteractionInput,
       actor: InteractionActor,
       options: CreateInteractionOptions = {},
     ) => {
@@ -3592,6 +3645,7 @@ export function issueThreadInteractionService(
                     isNotNull(issueComments.authorUserId),
                     ne(issueComments.authorUserId, "board-concierge"),
                     isNull(issueComments.createdByRunId),
+              eq(issueComments.origin, "comment"),
                     isNull(issueComments.deletedAt),
                     gte(issueComments.createdAt, sourceRunCreatedAt),
                   ),
@@ -3623,6 +3677,15 @@ export function issueThreadInteractionService(
               lockForUpdate: true,
             });
           }
+          // An unverified phone caller has no authenticated human identity.
+          // Their clarifications use the ordinary task-comment/follow-up queue;
+          // a protected native question would otherwise wait indefinitely.
+          if (data.kind === "ask_user_questions" && !actor.userId) {
+            const [guest] = await tx.select({id: chatVoiceSessions.id}).from(chatVoiceSessions)
+              .where(and(eq(chatVoiceSessions.companyId, issue.companyId), eq(chatVoiceSessions.issueId, issue.id),
+                eq(chatVoiceSessions.callerAuthority, "guest_intake"))).limit(1);
+            if (guest) throw unprocessable("Ask this unverified caller a clarification in a task comment; submit_request will deliver their spoken follow-up. Protected human-input questions require authenticated access.", {code: "voice_guest_use_task_comment"});
+          }
           const [row] = await tx
             .insert(issueThreadInteractions)
             .values({
@@ -3650,6 +3713,13 @@ export function issueThreadInteractionService(
               payload: data.payload,
             })
             .returning();
+
+          if (row.addresseeAgentId || row.addresseeUserId) {
+            const [privacyIssue] = await tx.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+            await ensureAssignmentIssueAccessGrant(tx, { ...privacyIssue!,
+              assigneeAgentId: row.addresseeAgentId, assigneeUserId: row.addresseeUserId,
+            }, null, { agentId: actor.agentId, userId: actor.userId });
+          }
 
           // An agent replacing its own still-pending card supersedes the older
           // one so the thread never accumulates stale sibling cards. This covers
@@ -3730,7 +3800,7 @@ export function issueThreadInteractionService(
       } catch (error) {
         if (
           !normalizedData.idempotencyKey ||
-          !isIssueThreadInteractionIdempotencyConflict(error)
+          !isUniqueViolation(error, ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT)
         ) {
           throw error;
         }
@@ -4274,10 +4344,11 @@ export function issueThreadInteractionService(
         createdAt: Date | string;
         authorUserId?: string | null;
         createdByRunId?: string | null;
+        origin?: string | null;
       },
       actor: InteractionActor,
     ) => {
-      if (!comment.authorUserId) return [];
+      if (!comment.authorUserId || comment.origin === "fast_response") return [];
       // Local-CLI adapters post under user auth, so authorUserId can't tell a human from a
       // machine; createdByRunId can. Only genuine human comments (no run context) supersede.
       if (comment.createdByRunId) return [];
@@ -4388,6 +4459,7 @@ export function issueThreadInteractionService(
               isNotNull(issueComments.authorUserId),
               // Only genuine human comments supersede; machine-originated ones carry createdByRunId.
               isNull(issueComments.createdByRunId),
+              eq(issueComments.origin, "comment"),
             ),
           )
           .orderBy(asc(issueComments.createdAt)),
@@ -4674,12 +4746,46 @@ export function issueThreadInteractionService(
     },
 
     expireConnectionIntentsForOwnershipChange: async (issue: { id: string; companyId: string }) => {
-      const expired = await db.update(issueThreadInteractions).set({
-        status: "expired", result: { version: 1, outcome: "expired", reason: "The task assignment changed" },
-        resolvedAt: now(), updatedAt: now(),
-      }).where(and(eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id),
-        eq(issueThreadInteractions.kind, "connection_intent"), eq(issueThreadInteractions.status, "pending"))).returning();
-      if (expired.length) await db.delete(toolOauthStates).where(inArray(toolOauthStates.interactionId, expired.map((row) => row.id)));
+      // A pending connection_intent asks for either an AI account or a tool
+      // account, and the two leave different things broken. One bulk write gave
+      // every row the AI wording, so an expired Notion request told the reader
+      // the AI account was missing. Read the pending rows first and name the
+      // subject each row actually asked for.
+      const pending = await db
+        .select({ id: issueThreadInteractions.id, payload: issueThreadInteractions.payload })
+        .from(issueThreadInteractions)
+        .where(and(
+          eq(issueThreadInteractions.companyId, issue.companyId),
+          eq(issueThreadInteractions.issueId, issue.id),
+          eq(issueThreadInteractions.kind, "connection_intent"),
+          eq(issueThreadInteractions.status, "pending"),
+        ));
+      const expired: typeof issueThreadInteractions.$inferSelect[] = [];
+      for (const row of pending) {
+        const payload = row.payload as { purpose?: string; serviceName?: string } | null;
+        const subject = payload?.purpose === "ai"
+          ? "the AI account"
+          : `the ${payload?.serviceName?.trim() || "requested"} connection`;
+        const [updated] = await db
+          .update(issueThreadInteractions)
+          .set({
+            status: "expired",
+            result: {
+              version: 1,
+              outcome: "expired",
+              reason: `The task was reassigned before the connection request was answered, so ${subject} is still not connected. Reconnect it or choose an available connection.`,
+            },
+            resolvedAt: now(),
+            updatedAt: now(),
+          })
+          .where(and(
+            eq(issueThreadInteractions.id, row.id),
+            eq(issueThreadInteractions.status, "pending"),
+          ))
+          .returning();
+        if (updated) expired.push(updated);
+      }
+      if (expired.length) await db.delete(toolOauthStates).where(inArray(toolOauthStates.interactionId, expired.map((item) => item.id)));
       return expired;
     },
     expirePendingInteractionsForTerminalIssue: async (
@@ -4695,6 +4801,9 @@ export function issueThreadInteractionService(
             eq(issueThreadInteractions.companyId, issue.companyId),
             eq(issueThreadInteractions.issueId, issue.id),
             eq(issueThreadInteractions.status, "pending"),
+            // Completed work retains ordinary historical questions for later
+            // human answers. Cancellation and governed requests still expire.
+            issue.status === "done" ? sql`not ${historicalQuestionCondition()}` : undefined,
           ),
         );
       if (rows.length === 0) return [];
@@ -4876,7 +4985,6 @@ export function issueThreadInteractionService(
       actor: InteractionActor,
       mutationOptions: InteractionResolutionMutationOptions = {},
     ) => {
-      assertIssueOpenForInteractionResolution(issue);
       const current = await db
         .select()
         .from(issueThreadInteractions)
@@ -4905,10 +5013,38 @@ export function issueThreadInteractionService(
       ) as AskUserQuestionsInteraction;
       const normalizedAnswers = normalizeQuestionAnswers({
         questions: interaction.payload.questions,
+        textQuestionIds: new Set((interaction.payload.questionSet?.questions ?? [])
+          .filter((question) => question.answerMode === "text")
+          .map((question) => question.id)),
         answers: input.answers,
       });
+      if (interaction.payload.questionSet) {
+        try {
+          await parseQuestionInteractionAnswers(interaction.payload.questionSet, normalizedAnswers, interaction.payload.questions);
+        } catch (error) {
+          throw unprocessable(
+            error instanceof Error ? error.message : "Invalid question response",
+            { code: "invalid_question_response" },
+          );
+        }
+      }
 
       const updated = await db.transaction(async (tx) => {
+        // Serialize against task completion/cancellation and use the persisted
+        // status, including when the caller read the task before it closed.
+        const [issueRow] = await tx.select({ status: issues.status }).from(issues)
+          .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for("update");
+        if (!issueRow) throw interactionNotFoundError();
+        let historicalAnswer = false;
+        if (isTerminalIssueStatus(issueRow.status)) {
+          if (issueRow.status === "done" && actor.userId && !actor.agentId && !actor.runId && !actor.systemId) {
+            historicalAnswer = (await tx.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions)
+              .where(and(eq(issueThreadInteractions.id, interactionId),
+                eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id),
+                historicalQuestionCondition())).limit(1)).length > 0;
+          }
+          if (!historicalAnswer) throw interactionIssueClosedError();
+        }
         await assertInteractionRunWriteAllowed(tx as unknown as Db, issue, actor);
         await mutationOptions.beforeResolveInTransaction?.(tx);
         const resolvedAt = new Date();
@@ -4937,9 +5073,14 @@ export function issueThreadInteractionService(
 
         if (!row) throw interactionAlreadyResolvedError();
         const answered = hydrateInteraction(row) as AskUserQuestionsInteraction;
-        await tx
-          .insert(issueQuestionResponseDeliveries)
-          .values(questionResponseDeliveryValues(answered));
+        // This answer updates conversation history only. It must not resume
+        // the completed source run or enqueue new work for the closed task.
+        if (!historicalAnswer) {
+          await notifyDeliveryWork(tx, DELIVERY_QUEUES.question);
+          await tx
+            .insert(issueQuestionResponseDeliveries)
+            .values(questionResponseDeliveryValues(answered));
+        }
         // Provider callbacks use this hook to atomically claim and complete
         // the action that resolved the interaction. Settle all remaining
         // provider controls only after that winner is durable; otherwise the
@@ -4957,6 +5098,49 @@ export function issueThreadInteractionService(
       const answered = hydrateInteraction(updated);
       await emitInteractionResolvedTelemetry(db, answered);
       return answered;
+    },
+
+    dismissInteraction: async (
+      issue: { id: string; companyId: string },
+      interactionId: string,
+      actor: InteractionActor,
+    ) => {
+      if (!actor.userId || actor.agentId || actor.runId || actor.systemId) {
+        throw forbidden("Only a human can dismiss a request");
+      }
+      return db.transaction(async (tx) => {
+        // Use the same lock order as resolution and completion. Dismissal only
+        // changes attention state; it never resolves or executes the request.
+        const [task] = await tx.select({
+          id: issues.id,
+          companyId: issues.companyId,
+          status: issues.status,
+          executionRunId: issues.executionRunId,
+          workMode: issues.workMode,
+          assigneeAgentId: issues.assigneeAgentId,
+          assigneeUserId: issues.assigneeUserId,
+          reviewPolicy: issues.reviewPolicy,
+          createdByAgentId: issues.createdByAgentId,
+          createdByUserId: issues.createdByUserId,
+        }).from(issues)
+          .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for("update");
+        if (!task) throw interactionNotFoundError();
+        const [current] = await tx.select().from(issueThreadInteractions).where(and(
+          eq(issueThreadInteractions.id, interactionId), eq(issueThreadInteractions.companyId, issue.companyId),
+          eq(issueThreadInteractions.issueId, issue.id),
+        )).for("update");
+        if (!current) throw interactionNotFoundError();
+        assertInteractionResolutionAllowed(current, actor);
+        if (current.status !== "pending" || current.dismissedAt) return hydrateInteraction(current);
+        if (task.status === "in_review" && isRequestConfirmationLikeKind(current.kind)) {
+          await assertRequestConfirmationResolutionAllowedUnderLock(tx as unknown as Db, task, current, actor);
+        }
+        const now = new Date();
+        const [updated] = await tx.update(issueThreadInteractions)
+          .set({ dismissedAt: now, dismissedByUserId: actor.userId, updatedAt: now })
+          .where(eq(issueThreadInteractions.id, interactionId)).returning();
+        return hydrateInteraction(updated!);
+      });
     },
 
     skipInteraction: async (

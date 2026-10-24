@@ -2,10 +2,9 @@
 name: prcheckloop
 description: >
   Iterate on a GitHub PR until the local CI suite passes on the head SHA or a
-  precise blocker is named — GitHub Actions is disabled on this instance for
-  cost reasons and no branch protection exists, so the agent's own local
-  typecheck/test/build run is the merge gate. Use when a PR still has failing
-  checks or tests after review fixes, including after greploop.
+  precise blocker is named. GitHub Actions is off here, so the agent's own
+  local typecheck/test/build run is the merge gate. Use when a PR still has
+  failing checks or tests after review fixes, including after greploop.
 ---
 
 # PRCheckloop

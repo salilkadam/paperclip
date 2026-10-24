@@ -35,3 +35,20 @@ describe("successful run handoff UI helpers", () => {
     expect(successfulRunHandoffActivityTone(SUCCESSFUL_RUN_HANDOFF_RESOLVED_ACTION).className).toContain("border");
   });
 });
+
+describe("successful-run handoff comment matching across brands", () => {
+  // The server writes these bodies; the UI must recognise them whether they
+  // carry the server's "Paperclip" prefix or a rebranded "Bionic" prefix.
+  it.each([
+    "Paperclip needs a disposition before this issue can continue.",
+    "Bionic needs a disposition before this issue can continue.",
+  ])("recognises the required notice %s", (body) => {
+    expect(isSuccessfulRunHandoffComment(body)).toBe(true);
+  });
+  it.each([
+    "Paperclip exhausted the bounded successful-run handoff correction after 3 attempts.",
+    "Bionic exhausted the bounded successful-run handoff correction after 3 attempts.",
+  ])("recognises the escalation %s", (body) => {
+    expect(isSuccessfulRunHandoffEscalationComment(body)).toBe(true);
+  });
+});

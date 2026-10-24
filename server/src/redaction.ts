@@ -1,9 +1,9 @@
 import { redactCommandText } from "@paperclipai/adapter-utils";
-import { isPublicExecutorToolSelector } from "@paperclipai/adapter-utils/command-redaction";
+import { isPublicExecutorToolSelector, looksLikeCredentialJwt } from "@paperclipai/adapter-utils/command-redaction";
 
-const SECRET_FIELD_NAME_PATTERN = String.raw`[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?token|auth(?:_?token)?|token|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring|browser[-_]?code|login[-_]?url)[A-Za-z0-9_-]*`;
+const SECRET_FIELD_NAME_PATTERN = String.raw`[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?token|auth(?:_?token)?|token|authorization(?:[-_]?code)?|bearer|secrets?|passwd|passwords?|credentials?|jwt|private[-_]?key|cookie|connectionstring|browser[-_]?code|login[-_]?url)(?:[-_]?(?:value|header|prod(?:uction)?|dev(?:elopment)?|test|staging|primary|secondary))*`;
 
-const SECRET_PAYLOAD_KEY_RE = new RegExp(SECRET_FIELD_NAME_PATTERN, "i");
+const SECRET_PAYLOAD_KEY_RE = new RegExp(`^(?:${SECRET_FIELD_NAME_PATTERN})(?:_plain|_ref)?$`, "i");
 // Authorization reasons are policy decision codes, not credentials. They must
 // remain visible in audit receipts even though the field name contains
 // "authorization". JWT-shaped values are still caught by the value guard below.
@@ -44,16 +44,13 @@ function isAuditCountField(key: string, value: unknown): boolean {
 const COMMAND_PAYLOAD_KEY_RE =
   /(^command$|^cmd$|command[-_]?line|resolved[-_]?command|PAPERCLIP_RESOLVED_COMMAND)/i;
 const COMMAND_ARGS_PAYLOAD_KEY_RE = /^(commandArgs|command_?args|argv)$/i;
-const JWT_VALUE_RE =
-  /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/;
-// Durable protocol schema identifiers share JWT's broad dotted shape but are
-// public discriminators, not credentials. Exempt the Paperclip schema
-// namespace only in fields that actually declare a schema; the same value in
-// arbitrary provider data remains subject to the fail-closed JWT guard.
+// Public protocol discriminators are retained verbatim. A dotted identifier
+// alone is not a credential; JWT detection requires an encoded JSON header.
 const PAPERCLIP_SCHEMA_FIELDS = new Set(["schema", "runtimeSchema"]);
 export const PAPERCLIP_PUBLIC_SCHEMA_IDS = new Set([
   "paperclip.artifact.generated.v1",
   "paperclip.artifact.viewed.v1",
+  "paperclip.auth.credentials.updated.v1",
   "paperclip.capability-discovery.v1",
   "paperclip.capability.authorization-record.v1",
   "paperclip.capability.control-plane.v1",
@@ -93,6 +90,9 @@ export const PAPERCLIP_PUBLIC_SCHEMA_IDS = new Set([
   "paperclip.native-execution-input.v3",
   "paperclip.native-execution-input.v4",
   "paperclip.native-execution-input.v5",
+  "paperclip.native-execution-input.v7",
+  "paperclip.native-execution-input.v8",
+  "paperclip.native-execution-input.v9",
   "paperclip.native-finalization.v1",
   "paperclip.native-finalization.v2",
   "paperclip.native-harness-backup-stamp.v1",
@@ -217,6 +217,7 @@ export const PRP_V1_EVENT_TYPES = new Set([
   "workspace.change.updated",
   "workspace.diff.recorded",
   "workspace.file.referenced",
+  "auth.credentials.updated",
   "harness.starting",
   "harness.ready",
   "harness.exited",
@@ -332,6 +333,17 @@ const NATIVE_RUN_SPAN_NAMES = new Set([
   "provider.time_to_first_agent_event",
   "provider.turn.queue",
   "question_response.to_run_created",
+  "harness_state.inspect",
+  "harness_state.path_check",
+  "harness_state.launch_material",
+  "provider_pack.select",
+  "provider_pack.discover",
+  "provider_pack.verify",
+  "provider_pack.verify_preinstalled",
+  "provider_pack.verify_uploaded",
+  "provider_pack.link_preinstalled",
+  "provider_pack.clear_stale",
+  "provider_pack.upload",
   "runner.artifact.discover",
   "runner.artifact.prepare",
   "runner.prp.authenticate",
@@ -345,7 +357,9 @@ const NATIVE_RUN_SPAN_NAMES = new Set([
   "runner.turn.submit",
   "task.prepare",
   "task.run",
+  "task.provider_session",
   "task.run.measured",
+  "task.provider_session.measured",
   "task.settle",
 ]);
 const CLI_SECRET_FLAG_RE = new RegExp(
@@ -379,13 +393,50 @@ const ESCAPED_CONSENT_URL_TEXT_KEY_RE = /^(?:\\")?auth_?url(?:\\")?\s*:\s*(?:\\"
 
 function isPublicConsentUrl(value: unknown): value is string {
   if (typeof value !== "string" || !value.startsWith("https://")) return false;
-  if (JWT_VALUE_RE.test(value)) return false;
+  if (looksLikeCredentialJwt(value)) return false;
   try {
     const url = new URL(value);
     return url.protocol === "https:" && Boolean(url.hostname) && !url.username && !url.password;
   } catch {
     return false;
   }
+}
+
+/**
+ * Value-level credential guard for URLs (owner decision F3, 2026-10-24).
+ *
+ * Upstream anchored SECRET_PAYLOAD_KEY_RE so keys that merely contain a
+ * secret word (`author`, `token_count`, `secret_name`) are no longer blanked.
+ * That fixed real over-redaction, but URL-valued keys (`auth_url`, `token_url`,
+ * `password_reset_link`, ...) then passed through even when the URL itself
+ * carried a credential. This guard looks at the value instead of the key: it
+ * redacts URL userinfo (`user:pass@`, or a bare token used as the username)
+ * and the values of secret-looking query parameters, wherever the URL
+ * appears. Scheme, host, path and harmless parameters stay readable, so an
+ * OAuth consent URL (client_id, state, scope, ...) is unchanged.
+ */
+const URL_IN_TEXT_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`\\]+/gi;
+const URL_USERINFO_RE = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#@\s]+)@/i;
+const URL_QUERY_PARAM_RE = /([?&;])([^=&#;]+)=([^&#;]*)/g;
+const SECRET_URL_PARAM_RE =
+  /^(?:code|token|access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|key|sig|signature|password|passwd|pwd|secret|client[-_]?secret|session[-_]?id|sessionid|x-amz-(?:signature|credential|security-token)|x-goog-(?:signature|credential))$/i;
+
+function redactCredentialUrl(url: string): string {
+  const withoutUserinfo = url.replace(URL_USERINFO_RE, (_match, scheme: string) => `${scheme}${REDACTED_EVENT_VALUE}@`);
+  const queryStart = withoutUserinfo.indexOf("?");
+  if (queryStart === -1) return withoutUserinfo;
+  const head = withoutUserinfo.slice(0, queryStart);
+  const tail = withoutUserinfo.slice(queryStart).replace(
+    URL_QUERY_PARAM_RE,
+    (match, sep: string, name: string, value: string) =>
+      value && SECRET_URL_PARAM_RE.test(name) ? `${sep}${name}=${REDACTED_EVENT_VALUE}` : match,
+  );
+  return head + tail;
+}
+
+export function redactCredentialUrls(input: string): string {
+  if (!input.includes("://")) return input;
+  return input.replace(URL_IN_TEXT_RE, redactCredentialUrl);
 }
 
 function redactJsonSecretTextMatch(
@@ -396,7 +447,7 @@ function redactJsonSecretTextMatch(
   consentKeyRe: RegExp,
 ): string {
   if (consentKeyRe.test(keyPrefix) && isPublicConsentUrl(value)) {
-    return `${keyPrefix}${value}${valueSuffix}`;
+    return `${keyPrefix}${redactCredentialUrls(value)}${valueSuffix}`;
   }
   return `${keyPrefix}${REDACTED_EVENT_VALUE}${valueSuffix}`;
 }
@@ -751,6 +802,10 @@ function redactStandaloneBearerCredentials(input: string): string {
       }
     }
 
+    const candidate = input.slice(credentialStart, end);
+    // Preserve known authentication terms after bearer, unless explicitly quoted.
+    // Named Authorization fields are already handled independently above.
+    if (/^(?:tokens?|authentication|authorization|credentials?|schemes?|flows?)[.,;:!?]?$/i.test(candidate)) continue;
     if (credentialStart < copiedThrough) continue;
     parts.push(input.slice(copiedThrough, credentialStart), replacement);
     copiedThrough = end;
@@ -777,7 +832,7 @@ function sanitizeValue(value: unknown): unknown {
   // string leaf after validated protocol discriminators have had a chance to
   // opt in above in sanitizeRecord.
   if (typeof value === "string") {
-    return JWT_VALUE_RE.test(value) && !isPublicExecutorToolSelector(value)
+    return looksLikeCredentialJwt(value) && !isPublicExecutorToolSelector(value)
       ? REDACTED_EVENT_VALUE
       : redactSensitiveText(value);
   }
@@ -931,11 +986,11 @@ export function sanitizeRecord(
       continue;
     }
     if (CONSENT_URL_PAYLOAD_KEY_RE.test(key) && isPublicConsentUrl(value)) {
-      redacted[key] = value;
+      redacted[key] = redactCredentialUrls(value);
       continue;
     }
     if (
-      SECRET_PAYLOAD_KEY_RE.test(key) &&
+      (SECRET_PAYLOAD_KEY_RE.test(key) || AUDIT_COUNT_PAYLOAD_KEYS.has(key)) &&
       !AUDIT_REASON_PAYLOAD_KEY_RE.test(key) &&
       !isAuditCountField(key, value)
     ) {
@@ -954,9 +1009,7 @@ export function sanitizeRecord(
       redacted[key] = REDACTED_EVENT_VALUE;
       continue;
     }
-    // Interpret a validated schema field before applying generic value-shape
-    // heuristics. The exemption is deliberately closed to this one PRP v1
-    // discriminator; the same dotted string in any other field is redacted.
+    // Preserve public protocol identities before scanning diagnostic values.
     if (isKnownPrpEventDiscriminator(record, key, value)) {
       redacted[key] = value;
       continue;
@@ -971,7 +1024,7 @@ export function sanitizeRecord(
     }
     if (
       typeof value === "string" &&
-      JWT_VALUE_RE.test(value) &&
+      looksLikeCredentialJwt(value) &&
       !isPublicExecutorToolSelector(value) &&
       !isPaperclipSchemaDiscriminator(key, value)
     ) {
@@ -1034,7 +1087,10 @@ export function redactAgentAdapterConfig(
   return { ...(redactEventPayload(rest) ?? {}), env: redactedEnv };
 }
 
-export function redactSensitiveText(input: string): string {
+export function redactSensitiveText(raw: string): string {
+  // URL credentials first: `?code=...` or `user:pass@` need not contain any of
+  // the cheap secret-text hints below.
+  const input = redactCredentialUrls(raw);
   if (!maybeContainsSecretText(input)) return input;
   return redactCommandText(
     redactStandaloneBearerCredentials(redactAuthorizationCredentials(input))
