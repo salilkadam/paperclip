@@ -46,7 +46,7 @@ describeEmbeddedPostgres("agent service remove", () => {
       name: "Remove Co",
       issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
     });
-    await db.insert(agents).values({ id: agentId, companyId, name: "Probe", role: "general", adapterType: "opencode_local" });
+    await db.insert(agents).values({ id: agentId, companyId, name: "Probe", role: "general", adapterType: "opencode_local", status: "terminated", lifecycleState: "terminated" });
     await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, invocationSource: "on_demand", status: "succeeded" });
     return { companyId, agentId, runId };
   }

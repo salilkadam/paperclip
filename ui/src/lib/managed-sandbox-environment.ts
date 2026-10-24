@@ -2,7 +2,7 @@ import type { Environment } from "@paperclipai/shared";
 
 /**
  * True iff the environment row was provisioned by the platform (the
- * managed-config environment provisioner stamps `metadata.managedByBionic`).
+ * managed-config environment provisioner stamps `metadata.managedByPaperclip`).
  * The server enforces the write floor on these rows — everything except env
  * vars is rejected — so the UI renders them locked instead of letting a
  * save fail at the API.
@@ -10,7 +10,7 @@ import type { Environment } from "@paperclipai/shared";
 export function isPlatformManagedEnvironment(
   environment: Pick<Environment, "metadata"> | null | undefined,
 ): boolean {
-  return environment?.metadata?.managedByBionic === true;
+  return environment?.metadata?.managedByPaperclip === true;
 }
 
 /**

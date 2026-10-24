@@ -339,7 +339,7 @@ function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | 
       source = `
         const SDK = globalThis.__paperclipPluginBridge__?.sdkUi ?? {};
         function missing(name) {
-          return function MissingBionicSdkUiComponent() {
+          return function MissingPaperclipSdkUiComponent() {
             throw new Error('Bionic plugin UI runtime is not initialized for "' + name + '". Ensure the host loaded the plugin bridge before rendering this UI module.');
           };
         }

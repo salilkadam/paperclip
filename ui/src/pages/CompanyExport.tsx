@@ -92,7 +92,7 @@ function checkedSlugs(checkedFiles: Set<string>): {
  * since the file has a known, simple structure produced by our own
  * renderYamlBlock.
  */
-function filterBionicYaml(yaml: string, checkedFiles: Set<string>): string {
+function filterPaperclipYaml(yaml: string, checkedFiles: Set<string>): string {
   const slugs = checkedSlugs(checkedFiles);
   const lines = yaml.split("\n");
   const out: string[] = [];
@@ -910,7 +910,7 @@ export function CompanyExport() {
     // Filter .paperclip.yaml
     const yamlPath = exportData.paperclipExtensionPath;
     if (yamlPath && typeof exportData.files[yamlPath] === "string") {
-      filtered[yamlPath] = filterBionicYaml(exportData.files[yamlPath], checkedFiles);
+      filtered[yamlPath] = filterPaperclipYaml(exportData.files[yamlPath], checkedFiles);
     }
 
     // Regenerate README.md based on checked selection
