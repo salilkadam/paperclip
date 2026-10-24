@@ -3,8 +3,10 @@
 # role that deploy/scripts/lib/vault-ops.sh logs in with. Idempotent and
 # additive: it writes only policy `bionic-org-ops` and role `bionic-org-ops`.
 #
-# The ServiceAccount bionicorg/bionic-org-ops itself is created by the
-# bionic-org Helm chart (templates/serviceaccount-ops.yaml).
+# It also creates the identity-only ServiceAccount vault/bionic-org-ops
+# (automount off, no RBAC). It sits in the vault namespace because no non-admin
+# workload there may create pods or ServiceAccount tokens; in bionicorg the SRE
+# harness may, and could otherwise mint this identity.
 #
 # Needs a Vault token allowed to write sys/policies/acl and
 # auth/kubernetes/role — an operator admin token. It is read from the file named
@@ -19,27 +21,22 @@ set -euo pipefail
 ROLE=bionic-org-ops
 POLICY=bionic-org-ops
 SA_NAME=bionic-org-ops
-SA_NAMESPACE=bionicorg
+SA_NAMESPACE=vault
 AUTH_MOUNT=kubernetes
 VAULT_NS=vault
 VAULT_POD=vault-0
 
 # Exactly what the ops scripts touch:
-#   bionic-org/config   read           probe-bionic-vault-token
-#   bionic-org/sandbox  read           sync-brev-sandbox-key
+#   bionic-org/sandbox  read               sync-brev-sandbox-key
 #   mcp/config          read/update/patch  switch-tenant-client-*, setup-ghost-connections
-#   ghost/config        read           setup-ghost-plugin
-POLICY_HCL='path "secret/data/t6-apps/bionic-org/config" {
-  capabilities = ["read"]
-}
-path "secret/data/t6-apps/bionic-org/sandbox" {
+#   ghost/config        read               setup-ghost-plugin
+# Deliberately NOT bionic-org/config: it holds the secrets master key and no
+# ops script needs it.
+POLICY_HCL='path "secret/data/t6-apps/bionic-org/sandbox" {
   capabilities = ["read"]
 }
 path "secret/data/t6-apps/mcp/config" {
   capabilities = ["read", "update", "patch"]
-}
-path "secret/metadata/t6-apps/mcp/config" {
-  capabilities = ["read"]
 }
 path "secret/data/t6-apps/ghost/config" {
   capabilities = ["read"]
@@ -57,8 +54,18 @@ else
 fi
 [[ -n "$ADMIN_TOKEN" ]] || { echo "empty admin token" >&2; exit 1; }
 
-timeout 30 kubectl -n "$SA_NAMESPACE" get serviceaccount "$SA_NAME" >/dev/null \
-  || { echo "serviceaccount $SA_NAMESPACE/$SA_NAME is missing: helm upgrade the bionic-org chart first" >&2; exit 1; }
+timeout 60 kubectl apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: $SA_NAME
+  namespace: $SA_NAMESPACE
+  labels:
+    app.kubernetes.io/part-of: bionic-org
+    app.kubernetes.io/component: vault-ops-identity
+automountServiceAccountToken: false
+EOF
+echo "serviceaccount $SA_NAMESPACE/$SA_NAME applied"
 
 # Token on line 1, policy HCL on the remaining lines; nothing secret in argv.
 { printf '%s\n' "$ADMIN_TOKEN"; printf '%s\n' "$POLICY_HCL"; } \
@@ -69,8 +76,8 @@ vault policy write "$1" - >/dev/null
 echo "policy $1 written"
 vault write "auth/$3/role/$2" \
   bound_service_account_names="$4" bound_service_account_namespaces="$5" \
-  token_policies="$1" token_ttl=15m token_max_ttl=1h token_no_default_policy=false >/dev/null
-echo "role $2 written (sa $5/$4, ttl 15m, max 1h)"
+  audience=vault token_policies="$1" token_ttl=15m token_max_ttl=1h >/dev/null
+echo "role $2 written (sa $5/$4, audience vault, ttl 15m, max 1h)"
 ' _ "$POLICY" "$ROLE" "$AUTH_MOUNT" "$SA_NAME" "$SA_NAMESPACE"
 unset ADMIN_TOKEN
 

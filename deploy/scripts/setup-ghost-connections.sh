@@ -58,11 +58,11 @@ log() { echo "[ghost-connections] $*"; }
 for b in curl jq kubectl; do command -v "$b" >/dev/null || die "$b is required"; done
 # shellcheck source=lib/vault-ops.sh
 source "$(cd "$(dirname "$0")" && pwd)/lib/vault-ops.sh"
-vault_ops_login   # short-lived Vault token via the bionic-org-ops ServiceAccount
 [[ -r "${PAPERCLIP_BOARD_KEY_FILE:-}" ]] || die "PAPERCLIP_BOARD_KEY_FILE must point to a readable file"
 [[ "$(stat -c %a "$PAPERCLIP_BOARD_KEY_FILE")" == 600 ]] || die "$PAPERCLIP_BOARD_KEY_FILE must be mode 0600"
 
 WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf "$WORK"; vault_ops_logout' EXIT
+vault_ops_login   # short-lived Vault token via the bionic-org-ops ServiceAccount
 # curl reads the Authorization header from a file (-H @file): the key never
 # reaches argv.
 printf 'Authorization: Bearer %s\n' "$(tr -d '\r\n' < "$PAPERCLIP_BOARD_KEY_FILE")" > "$WORK/auth"

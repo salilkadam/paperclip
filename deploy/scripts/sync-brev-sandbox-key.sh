@@ -30,7 +30,7 @@ ENV_ID=${2:-4123fb2c-ee70-4cc7-97bb-b0354ee66de3}
 NS=bionicorg
 VAULT_PATH=secret/t6-apps/bionic-org/sandbox
 
-POD=$(kubectl -n "$NS" get pods --no-headers | awk '/^bionic-org-/ && $3=="Running" {print $1; exit}')
+POD=$(timeout 60 kubectl -n "$NS" get pods --no-headers | awk '/^bionic-org-/ && $3=="Running" {print $1; exit}')
 [ -n "$POD" ] || { echo "no running bionic-org pod" >&2; exit 1; }
 
 TMP=$(mktemp -d)
@@ -79,16 +79,16 @@ try {
   await sql.end();
 }
 JS
-kubectl -n "$NS" cp "$TMP/rotate.mjs" "$POD:/tmp/sync-brev-sandbox-key.mjs" >/dev/null
+timeout 60 kubectl -n "$NS" cp "$TMP/rotate.mjs" "$POD:/tmp/sync-brev-sandbox-key.mjs" >/dev/null
 
 # Vault -> pipe -> Paperclip. The key exists only in this pipe.
 set +e
 vault_ops_sh 'vault kv get -field=brev_ssh_private_key "$1"' "$VAULT_PATH" \
-  | kubectl -n "$NS" exec -i "$POD" -- env SECRET_ID="$SECRET_ID" ENV_ID="$ENV_ID" BOARD_USER_ID="${BOARD_USER_ID:-mO44P6K9aWIwqI1BGM9v3XOvkpDwWTXy}" \
+  | timeout 60 kubectl -n "$NS" exec -i "$POD" -- env SECRET_ID="$SECRET_ID" ENV_ID="$ENV_ID" BOARD_USER_ID="${BOARD_USER_ID:-mO44P6K9aWIwqI1BGM9v3XOvkpDwWTXy}" \
       node /tmp/sync-brev-sandbox-key.mjs
 pipe=("${PIPESTATUS[@]}")   # capture both ends before any other command resets it
 vault_status=${pipe[0]}; status=${pipe[1]}
 set -e
 [ "$vault_status" -eq 0 ] || { echo "Vault read of $VAULT_PATH failed (exit $vault_status)" >&2; status=1; }
-kubectl -n "$NS" exec "$POD" -- rm -f /tmp/sync-brev-sandbox-key.mjs
+timeout 60 kubectl -n "$NS" exec "$POD" -- rm -f /tmp/sync-brev-sandbox-key.mjs
 exit $status

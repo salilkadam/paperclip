@@ -12,6 +12,6 @@ vault kv get -format=json secret/t6-apps/mcp/config > /tmp/mcp-cfg.json
 echo "data keys:"; grep -o "\"[a-z_]*\":" /tmp/mcp-cfg.json | tr -d "\":
 " | sort -u | head -12
 '
-kubectl -n vault cp vault-0:/tmp/mcp-cfg.json /tmp/mcp-cfg.json
+timeout 60 kubectl -n vault cp vault-0:/tmp/mcp-cfg.json /tmp/mcp-cfg.json
 chmod 600 /tmp/mcp-cfg.json
 echo "saved locally: $(wc -c < /tmp/mcp-cfg.json) bytes"

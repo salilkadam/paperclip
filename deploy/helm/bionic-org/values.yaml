@@ -270,18 +270,6 @@ minio:
   rootPasswordSecret: ""   # synced from existing minio credentials
 
 # ---------------------------------------------------------------------------
-# Ops identity for Vault (deploy/scripts/lib/vault-ops.sh)
-# ---------------------------------------------------------------------------
-# An identity-only ServiceAccount: no pod mounts it. Ops scripts mint a
-# 10-minute token for it with `kubectl create token` and exchange it at Vault's
-# Kubernetes auth method (role/policy bionic-org-ops, created by
-# deploy/scripts/setup-vault-ops-role.sh). Replaces the static vault_token
-# that used to be mounted into the app pod, where every local agent could read it.
-opsServiceAccount:
-  enabled: true
-  name: bionic-org-ops
-
-# ---------------------------------------------------------------------------
 # Environment (non-secret, goes in ConfigMap)
 # ---------------------------------------------------------------------------
 env:

@@ -387,18 +387,29 @@ History: `t6-apps/bionic-org/config` used to hold a `vault_token`. It was root u
 read it, but every local agent inherited it. Agents run as the server's uid and
 can read `/proc/<server-pid>/environ`, so the token was effectively agent-readable.
 
-Now **no ops Vault token is stored anywhere** (not in Vault config, not in the
-pod, not in `/workspace/.env`):
+Now **no deploy script or pod uses a stored Vault token**. A root-policy token
+still sits in `/workspace/.env` and in five other workspace `.env` files.
+Nothing here reads it, but retiring it is an owner decision, because other
+repos may use it:
 
-- `deploy/scripts/lib/vault-ops.sh` mints a 10-minute JWT for the
-  identity-only ServiceAccount `bionicorg/bionic-org-ops` (Helm
-  `opsServiceAccount`, never mounted by a pod) with `kubectl create token`. It
-  exchanges the JWT at Vault Kubernetes auth role `bionic-org-ops` (TTL 15m,
-  max 1h) and revokes the token when the script exits. The bootstrap credential
-  is the operator's kubeconfig.
+- `deploy/scripts/lib/vault-ops.sh` mints a 10-minute JWT (audience `vault`)
+  for the identity-only ServiceAccount `vault/bionic-org-ops` with
+  `kubectl create token`. It exchanges the JWT at Vault Kubernetes auth role
+  `bionic-org-ops` (TTL 15m, max 1h) and revokes the token when the script
+  exits. The bootstrap credential is the operator's kubeconfig.
+  - The SA lives in the `vault` namespace on purpose. In `bionicorg`,
+    `sre-harness-sa` may create ServiceAccount tokens and pods, so it could mint
+    the identity. In `vault` it cannot. Do not move the SA back.
+  - Snippets run under `set -e`, so a denied write fails the script instead of
+    being followed by "success".
 - Policy `bionic-org-ops` (source of truth: `setup-vault-ops-role.sh`, print it
-  with `--print-policy`): read `bionic-org/config`, `bionic-org/sandbox` and
-  `ghost/config`; read, update and patch `mcp/config`. Nothing else.
+  with `--print-policy`):
+  - read `bionic-org/sandbox` and `ghost/config`
+  - read, update and patch `mcp/config`
+  - **not** `bionic-org/config`, which holds the secrets master key
+- Local gate: `deploy/scripts/test-vault-ops-local.sh` runs the helper, the
+  policy and the probe against a throwaway Vault 1.21.2. It includes planted
+  defects (an over-broad policy, a denied write) that must be caught.
 - Users: `probe-bionic-vault-token.sh` (proves allowed **and** denied
   capabilities; exit 1 on any mismatch), `switch-tenant-client-*`,
   `sync-brev-sandbox-key.sh`, `setup-ghost-connections.sh`,
@@ -407,6 +418,32 @@ pod, not in `/workspace/.env`):
   `setup-vault-secrets.sh`) take an operator admin token from `VAULT_TOKEN_FILE`
   (0600), a prompt, or the operator's own `vault login`. They never read
   `/workspace/.env`.
+- **One-time cut-over from the static token** (2026-10-24), in this order:
+  1. Upgrade the chart without changing anything else:
+
+     ```bash
+     TAG=$(kubectl -n bionicorg get deploy bionic-org -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/.*://')
+     helm upgrade bionic-org deploy/helm/bionic-org -n bionicorg --reset-then-reuse-values --set image.tag="$TAG"
+     helm -n bionicorg get values bionic-org   # still: domain, env override, image.tag
+     ```
+
+     Do not use plain `--reuse-values` or a bare upgrade. The first breaks
+     rendering on new chart keys; the second silently reverts `image.tag`,
+     `domain` and the env override to the chart defaults.
+  2. `VAULT_TOKEN_FILE=<0600 admin token file> deploy/scripts/setup-vault-ops-role.sh`
+  3. `deploy/scripts/probe-bionic-vault-token.sh` must exit 0.
+  4. Delete `vault_token` from `secret/t6-apps/bionic-org/config` (`vault kv patch -remove-data` or a kv put without
+     it). Then `kubectl -n bionicorg annotate externalsecret bionic-org-secrets force-sync=$(date +%s) --overwrite`.
+     Confirm `bionic-org-secrets` has no `vault_token`. **Only after step 1:**
+     the old Deployment spec requires that key.
+  5. Revoke the old `bionic-org-app` token by accessor, and delete the
+     `bionic-org-app` policy.
+  6. `kubectl -n vault exec vault-0 -- rm -f /tmp/va.txt /tmp/.va /tmp/vt.txt`
+     (leftovers of the old scripts).
+
+  Rollback caveat: after step 4, `kubectl rollout undo` to a pre-cut-over
+  ReplicaSet fails with `CreateContainerConfigError`, because those specs still
+  reference `vault_token`. Roll forward instead.
 - `secret/t6-apps/vault/admin_token` is **not** used. As of 2026-10-24 that token
   had expired. The path is also readable by the instance-wide `eso-reader` role,
   so a live admin token stored there could be pulled by any namespace that can

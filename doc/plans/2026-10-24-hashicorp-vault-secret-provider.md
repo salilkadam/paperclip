@@ -374,11 +374,14 @@ no SDK.
   - Update `deploy/README.md` and `deploy/CHECKLIST.md`.
 - **Ops scripts stop using any static token, including `/workspace/.env`** (owner,
   2026-10-24). New helper `deploy/scripts/lib/vault-ops-login.sh`:
-  - Mints a 10-minute ServiceAccount JWT with `kubectl -n bionicorg create token
-    bionic-org-ops --duration=10m`. The SA is an identity only; no pod mounts it.
+  - Mints a 10-minute ServiceAccount JWT (audience `vault`) with
+    `kubectl -n vault create token bionic-org-ops --duration=10m`. The SA is an
+    identity only and lives in `vault`: in `bionicorg`, `sre-harness-sa` can mint
+    tokens and create pods (PR-0 review F2).
   - Exchanges the JWT for a Vault token through the new Kubernetes-auth role
-    `bionic-org-ops`: TTL 15 m, max 1 h. Its policy `bionic-org-ops` grants the old
-    `bionic-org-app` scope plus read on `sandbox`.
+    `bionic-org-ops`: TTL 15 m, max 1 h. Policy `bionic-org-ops`: read `sandbox` and
+    `ghost/config`; read/update/patch `mcp/config`. **Not** `bionic-org/config`,
+    which holds the master key (PR-0 review F3).
   - Pipes the token into `vault-0` on stdin. It is never written to disk or to argv,
     and it is revoked with `revoke-self` when the script exits.
   - The bootstrap credential is the operator's kubeconfig, which these scripts
