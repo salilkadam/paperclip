@@ -393,10 +393,11 @@ but never stored, and the config still held a **root** token. See the incident
 record below.
 
 Now **no deploy script or pod uses a stored Vault token**. The operator admin token
-in `/workspace/.env` (the project `.env` files are symlinks to it) is an **orphan**
+in `/workspace/.env` (the five project `.env` symlinks point to it) is an **orphan**
 token named `token-workspace-admin-2026-10-24`, with the `admin` policy (everything
-except seal/rekey/rotate/raw) and a 768h period. **Renew it at least every 32 days**
-with `vault token renew`, or it expires the way `t6-apps/vault/admin_token` did.
+except seal/rekey/rotate/raw) and a 768h period. **Renew it every 28 days or sooner**
+(`vault token renew`). 768h is exactly 32 days, the expiry line itself; a missed
+renewal is how `t6-apps/vault/admin_token` died.
 
 #### Incident 2026-10-24: revoking the stored token cascaded
 
@@ -405,21 +406,38 @@ with `vault token renew`, or it expires the way `t6-apps/vault/admin_token` did.
   `policies=["root"]`, but the step continued. The `/workspace/.env` admin token was
   that root token's **child**, so it was revoked in the cascade.
 - **Recovery.** Root was regenerated with `vault-regenerate-root.sh`.
-  - The script's first run lost the generated token: the container is non-root, so
-    the write to `/root` failed, and the inner script kept going without `set -e`.
-    The script is now fixed.
+  - The script's first run lost the generated token. The container is non-root,
+    so the write to `/root` failed; the inner script kept going and deleted the
+    encoded token. The deeper cause was that the OTP and the encoded token were
+    never both kept until the token was safely out. The script now persists both
+    (mode 600) until decoding succeeds, removes key shares on every exit path,
+    copies the token out and deletes the pod copy in the same run, and points a
+    stale attempt at `generate-root -cancel` instead of deleting the Vault pod.
+    It was tested against Vault 1.21.2 with 3 shares and a threshold of 2.
   - A new orphan admin token was minted and written to `/workspace/.env`.
   - The break-glass root token was revoked.
 - **Not affected:** ESO (JWT and Kubernetes auth), auto-unseal, bionic-platform
   (Kubernetes auth), production Paperclip.
+- **Unchecked:** `seed-vault.sh` also seeds a `vault_token` into the socialx
+  (trypost) config. That runtime pod was not checked.
 - **At risk:** OpenMontage loads keys from Vault with a static `VAULT_TOKEN` at
   startup, and a failure there is only a warning. No live token matches it, so its
   next restart will log a Vault 403. Move it to Kubernetes auth.
-- **Pending (run with the new admin token):**
-  - `vault policy delete bionic-org-app`
-  - revoke the unused orphan `token-bionic-org-app` (look it up by display name)
-  - revoke the one remaining `root`-named token, generated during the failed first
-    break-glass run; nobody holds its value
+- **Pending (run with the new admin token, applying the rule below):**
+  1. Find each token by metadata. Vault has no lookup by name.
+     ```bash
+     for a in $(vault list -format=json auth/token/accessors | jq -r '.[]'); do
+       vault token lookup -format=json -accessor "$a" 2>/dev/null |
+         jq -r --arg a "$a" '.data | "\($a) \(.display_name) orphan=\(.orphan) policies=\(.policies|join(","))"'
+     done
+     ```
+  2. Revoke only an exact match, sparing any children. Expect
+     `token-bionic-org-app` with `policies=bionic-org-app,default`, and `root` with
+     `policies=root` but **not** your own token's accessor
+     (`vault token lookup -format=json | jq -r .data.accessor`):
+     `vault token revoke -mode=orphan -accessor <accessor>`.
+  3. `vault policy delete bionic-org-app`. A source grep found nothing bound to it;
+     the ops scripts use `bionic-org-ops`.
 - **Rule:** before revoking any Vault token, look up its policies and check whether
   anything you need is its child. Abort on any mismatch with what the docs claim.
   Mint admin tokens with `-orphan`.
@@ -476,8 +494,10 @@ with `vault token renew`, or it expires the way `t6-apps/vault/admin_token` did.
      `kubectl -n bionicorg annotate externalsecret bionic-org-secrets force-sync=$(date +%s) --overwrite`.
      Confirm `bionic-org-secrets` has no `vault_token`. **Only after step 1:**
      the old Deployment spec requires that key.
-  5. Revoke the old `bionic-org-app` token by accessor, and delete the
-     `bionic-org-app` policy.
+  5. **Done 2026-10-24, and the cause of the incident above.** Rule for any rerun:
+     look up the token first (`vault token lookup -format=json -accessor <a>`),
+     abort unless `policies` is exactly what you expect, and revoke with
+     `-mode=orphan`.
   6. `kubectl -n vault exec vault-0 -- rm -f /tmp/va.txt /tmp/.va /tmp/vt.txt`
      (leftovers of the old scripts).
 

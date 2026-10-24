@@ -1,58 +1,76 @@
 #!/usr/bin/env bash
-# Break-glass: regenerate the Vault root token when no usable token exists.
-# (2026-10-07: the ops token stored in bionic-org/config was scoped down to
-# the `bionic-org-app` policy; root is no longer stored anywhere.)
+# Break-glass: regenerate a Vault root token when no usable admin token exists.
 #
-# Requirements: kubectl access to ns `vault`; the StatefulSet `vault` with pod
-# vault-0; secret `vault-unseal-keys` holding 2 of 3 shamir shares (fields
-# key1/key2, matching the t=2 threshold).
+# Requirements: kubectl access to ns `vault`; pod vault-0 (StatefulSet `vault`,
+# runs as non-root uid 100); secret `vault-unseal-keys` holding 2 of 3 shamir
+# shares (fields key1/key2, matching the t=2 threshold).
 #
-# Notes learned the hard way:
-# - The vault CLI is non-interactive here: pipe shares with `-` (stdin) or
-#   pass as an argument; a tty prompt hangs.
-# - `generate-root -generate-otp` prints the bare OTP with no label.
-# - An attempt started before a process restart survives in memory; deleting
-#   the vault-0 pod clears it (the vault-auto-unseal cronjob re-unseals it
-#   within a minute using the same k8s secret).
-# - The vault container runs as a non-root user: the token goes to
-#   /tmp/.vault-root-token (mode 600), not /root. The inner script stops on
-#   the first error so a failed write can never be followed by deleting the
-#   encoded token (2026-10-24: that lost one generated root token).
-# - Revoke the regenerated root token (`vault token revoke -self`) once an
-#   orphan admin token exists; the durable mitigation against share leakage
-#   is rotating unseal keys (`vault operator rotate`).
+# Output: the root token lands in a local 0600 file (ROOT_TOKEN_FILE, default
+# ~/.vault-root-token) and is removed from the pod in the same run. Use it only
+# to mint an ORPHAN admin token (`vault token create -orphan -policy=admin ...`),
+# then revoke it: `VAULT_TOKEN=$(cat ~/.vault-root-token) vault token revoke -self`.
+#
+# Safety properties (2026-10-24 incident: one generated root token was lost):
+# - The OTP and the encoded token are kept (mode 600) until the token has been
+#   decoded in memory and written; if decoding fails they are left in place and
+#   the exact recovery command is printed, so a generated token is never lost.
+# - Key shares are removed on every exit path, in the pod and locally.
+# - A stale in-progress attempt is reported with the non-disruptive fix
+#   `vault operator generate-root -cancel` (unauthenticated; no pod restart).
+# - Vault's own error messages stay visible.
 set -euo pipefail
+umask 077
 NS=${NS:-vault}
 POD=${POD:-vault-0}
+ROOT_TOKEN_FILE=${ROOT_TOKEN_FILE:-$HOME/.vault-root-token}
 
-kubectl -n "$NS" get secret vault-unseal-keys -o go-template='{{index .data "key1"}}' | base64 -d > /tmp/.us1
-kubectl -n "$NS" get secret vault-unseal-keys -o go-template='{{index .data "key2"}}' | base64 -d > /tmp/.us2
-chmod 600 /tmp/.us1 /tmp/.us2
-trap 'rm -f /tmp/.us1 /tmp/.us2' EXIT
-kubectl -n "$NS" cp /tmp/.us1 "$POD:/tmp/.us1"
-kubectl -n "$NS" cp /tmp/.us2 "$POD:/tmp/.us2"
+cleanup() {
+  rm -f /tmp/.us1 /tmp/.us2
+  timeout 30 kubectl -n "$NS" exec "$POD" -- rm -f /tmp/.us1 /tmp/.us2 >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-kubectl -n "$NS" exec "$POD" -- sh -c '
+[[ ! -e "$ROOT_TOKEN_FILE" ]] || { echo "$ROOT_TOKEN_FILE already exists; move it away first" >&2; exit 1; }
+
+timeout 30 kubectl -n "$NS" get secret vault-unseal-keys -o go-template='{{index .data "key1"}}' | base64 -d > /tmp/.us1
+timeout 30 kubectl -n "$NS" get secret vault-unseal-keys -o go-template='{{index .data "key2"}}' | base64 -d > /tmp/.us2
+timeout 60 kubectl -n "$NS" cp /tmp/.us1 "$POD:/tmp/.us1"
+timeout 60 kubectl -n "$NS" cp /tmp/.us2 "$POD:/tmp/.us2"
+
+timeout 180 kubectl -n "$NS" exec "$POD" -- sh -c '
 set -e
 umask 077
 export VAULT_ADDR=http://127.0.0.1:8200
-chmod 600 /tmp/.us1 /tmp/.us2
+trap "rm -f /tmp/.us1 /tmp/.us2" EXIT
 OTP=$(vault operator generate-root -generate-otp | tr -d "[:space:]")
-if [ ${#OTP} -lt 20 ]; then echo "OTP generation failed"; exit 2; fi
-INIT=$(vault operator generate-root -init -otp="$OTP" 2>&1)
+if [ ${#OTP} -lt 20 ]; then echo "OTP generation failed" >&2; exit 2; fi
+INIT=$(vault operator generate-root -init -otp="$OTP" 2>&1) || true
 NONCE=$(printf "%s" "$INIT" | awk "/[Nn]once/{print \$2; exit}")
 if [ -z "$NONCE" ]; then
-  echo "init failed (stale attempt?): $(printf "%s" "$INIT" | head -1)"
-  echo "clear it: kubectl -n vault delete pod vault-0 (auto-unseal recovers), then rerun"
+  echo "generate-root init failed: $(printf "%s" "$INIT" | head -2)" >&2
+  echo "If an earlier attempt is still in progress, cancel it (no restart needed):" >&2
+  echo "  kubectl -n vault exec vault-0 -- sh -c \"VAULT_ADDR=http://127.0.0.1:8200 vault operator generate-root -cancel\"" >&2
   exit 2
 fi
-printf "%s" "$(cat /tmp/.us1)" | vault operator generate-root -otp="$OTP" -nonce="$NONCE" - >/dev/null 2>&1
-printf "%s" "$(cat /tmp/.us2)" | vault operator generate-root -otp="$OTP" -nonce="$NONCE" - >/tmp/.gr
+# Persist the OTP before any share is submitted: from here on, the encoded
+# token plus this OTP are the only way to obtain the generated root token.
+printf "%s" "$OTP" > /tmp/.otp
+vault operator generate-root -otp="$OTP" -nonce="$NONCE" - < /tmp/.us1 >/dev/null
+vault operator generate-root -otp="$OTP" -nonce="$NONCE" - < /tmp/.us2 > /tmp/.gr
 ENC=$(awk "/Encoded Token/{print \$3; exit}" /tmp/.gr)
-[ -n "$ENC" ] || { echo "no encoded token; shares did not reach threshold"; tail -2 /tmp/.gr; exit 3; }
-vault operator generate-root -decode="$ENC" -otp="$OTP" > /tmp/.vault-root-token
-chmod 600 /tmp/.vault-root-token
-rm -f /tmp/.us1 /tmp/.us2 /tmp/.gr
-echo "root token written to ${POD}:/tmp/.vault-root-token (sha8: $(sha256sum /tmp/.vault-root-token | cut -c1-8))"
-echo "Copy it out (kubectl cp), store it in the operator password manager, then remove it from the pod."
+[ -n "$ENC" ] || { echo "no encoded token; shares did not reach threshold:" >&2; tail -2 /tmp/.gr >&2; rm -f /tmp/.otp /tmp/.gr; exit 3; }
+if ! TOK=$(vault operator generate-root -decode="$ENC" -otp="$OTP"); then
+  echo "decode failed; the root token is NOT lost. Encoded token in /tmp/.gr, OTP in /tmp/.otp (both 600)." >&2
+  echo "Retry inside vault-0: vault operator generate-root -decode=<Encoded Token from /tmp/.gr> -otp=<contents of /tmp/.otp>" >&2
+  exit 4
+fi
+printf "%s" "$TOK" > /tmp/.vault-root-token
+rm -f /tmp/.otp /tmp/.gr
 '
+
+# Copy the token out and remove the pod copy in the same run.
+timeout 60 kubectl -n "$NS" exec "$POD" -- cat /tmp/.vault-root-token > "$ROOT_TOKEN_FILE"
+[[ -s "$ROOT_TOKEN_FILE" ]] || { echo "copy-out failed; token remains at $POD:/tmp/.vault-root-token" >&2; exit 5; }
+timeout 30 kubectl -n "$NS" exec "$POD" -- rm -f /tmp/.vault-root-token
+echo "root token written to $ROOT_TOKEN_FILE (0600, sha8 $(sha256sum "$ROOT_TOKEN_FILE" | cut -c1-8)); pod copy removed."
+echo "Next: mint an orphan admin token with it, then revoke it (vault token revoke -self) and delete the file."
