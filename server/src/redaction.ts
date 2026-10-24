@@ -393,7 +393,7 @@ const ESCAPED_CONSENT_URL_TEXT_KEY_RE = /^(?:\\")?auth_?url(?:\\")?\s*:\s*(?:\\"
 
 function isPublicConsentUrl(value: unknown): value is string {
   if (typeof value !== "string" || !value.startsWith("https://")) return false;
-  if (JWT_VALUE_RE.test(value)) return false;
+  if (looksLikeCredentialJwt(value)) return false;
   try {
     const url = new URL(value);
     return url.protocol === "https:" && Boolean(url.hostname) && !url.username && !url.password;

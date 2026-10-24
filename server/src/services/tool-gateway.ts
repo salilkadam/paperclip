@@ -567,6 +567,7 @@ export function classifyToolProbeResult(result: unknown): ToolConnectionProbeRes
     };
   }
   return { ok: true };
+}
 
 function connectionRequiresMcpSession(connection: { config: unknown }): boolean {
   const config = asRecord(connection.config);
