@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
@@ -64,6 +64,28 @@ function createApp(db: Db, actor: Express.Request["actor"]) {
   app.use("/api", agentRoutes(db));
   app.use(errorHandler);
   return app;
+}
+
+
+// Production disables the native Paperclip Runner adapter
+// (/paperclip/adapter-settings.json: disabledTypes ["paperclip_runner"]), so a
+// new opencode_local hire stays on the legacy runner where the fork's
+// central-model-access features apply. Mirror that deployment setting for the
+// suites that exercise those features.
+function useDeploymentAdapterSettings(settings: { disabledTypes: string[] }) {
+  let previousHome: string | undefined;
+  let settingsHome: string;
+  beforeAll(() => {
+    previousHome = process.env.PAPERCLIP_HOME;
+    settingsHome = mkdtempSync(path.join(os.tmpdir(), "paperclip-adapter-settings-"));
+    writeFileSync(path.join(settingsHome, "adapter-settings.json"), JSON.stringify(settings));
+    process.env.PAPERCLIP_HOME = settingsHome;
+  });
+  afterAll(() => {
+    if (previousHome === undefined) delete process.env.PAPERCLIP_HOME;
+    else process.env.PAPERCLIP_HOME = previousHome;
+    rmSync(settingsHome, { recursive: true, force: true });
+  });
 }
 
 describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
@@ -263,6 +285,34 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(childEnvOf(res).XAI_API_KEY).toMatchObject({ type: "secret_ref", secretId: secret.id });
+  });
+
+  it.each(["create", "hire"] as const)("blocks native Claude credential redirection before %s inheritance", async mode => {
+    const companyId = await seedCompany();
+    const secret = await createCompanySecret(companyId, "fixture-parent-credential");
+    const parent = await seedParentAgent(companyId, "paperclip_runner", { ANTHROPIC_API_KEY: secretRef(secret.id) });
+    await db.update(agents).set({ adapterConfig: { provider: "acpx", acpxAgent: "claude", env: { ANTHROPIC_API_KEY: secretRef(secret.id) } } }).where(eq(agents.id, parent.id));
+    const app = createApp(db, agentActor(companyId, parent.id));
+    const res = await request(app).post(`/api/companies/${companyId}/${mode === "hire" ? "agent-hires" : "agents"}`).send({
+      name: "Redirected child", role: "engineer", adapterType: "paperclip_runner",
+      adapterConfig: { provider: "acpx", acpxAgent: "claude", env: { ANTHROPIC_BASE_URL: "https://untrusted.example.test" } },
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toContain("host-executed local adapter settings");
+    expect(await db.select().from(agents).where(eq(agents.companyId, companyId))).toHaveLength(1);
+  });
+
+  it("still inherits Claude credential references for an ordinary native hire", async () => {
+    const companyId = await seedCompany();
+    const secret = await createCompanySecret(companyId, "fixture-parent-credential");
+    const parent = await seedParentAgent(companyId, "claude_local", { ANTHROPIC_API_KEY: secretRef(secret.id) });
+    const res = await hire(agentActor(companyId, parent.id), companyId, {
+      name: "Native child", role: "engineer", adapterType: "paperclip_runner",
+      adapterConfig: { provider: "acpx", acpxAgent: "claude" },
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.agent.adapterType).toBe("paperclip_runner");
+    expect(childEnvOf(res).ANTHROPIC_API_KEY).toMatchObject({ type: "secret_ref", secretId: secret.id });
   });
 
   it("inherits a claude_local parent's ANTHROPIC_API_KEY reference", async () => {
@@ -499,13 +549,13 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
     const parent = await seedParentAgent(companyId, "paperclip_runner", {});
     await db.update(agents).set({ adapterConfig: {
       provider: "acpx", acpxAgent: "claude", model: "claude-sonnet-5", acpxPermissionMode: "approve-all",
-      env: { ANTHROPIC_API_KEY: secretRef("parent-secret") }, cwd: "/private/parent",
+      env: { PRIVATE_PARENT_TOKEN: secretRef("parent-secret") }, cwd: "/private/parent",
       invocationLimits: { maxIterations: 3, credentials: "never-copy" },
     } }).where(eq(agents.id, parent.id));
     const res = await hire(agentActor(companyId, parent.id), companyId, {
       name: "Approval Snapshot Child", role: "engineer", adapterType: "paperclip_runner", inheritRuntimeFrom: "caller",
     });
-    expect(res.status).toBe(201);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.agent.status).toBe("pending_approval");
     expect(res.body.approval.payload.inheritRuntimeFrom).toBeUndefined();
     expect(res.body.approval.payload.adapterConfig).toMatchObject({ provider: "acpx", acpxAgent: "claude", acpxPermissionMode: "approve-all" });
@@ -545,6 +595,7 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
   });
 
   describe("opencode_local hires are equipped by the hiring manager", () => {
+    useDeploymentAdapterSettings({ disabledTypes: ["paperclip_runner"] });
     const GATEWAY_PROVIDERS = JSON.stringify({
       gpuai: {
         npm: "@ai-sdk/openai-compatible",
@@ -617,19 +668,20 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
       expect(childEnv.GPUAI_API_KEY).toMatchObject({ type: "user_secret_ref", key: "GPUAI_API_KEY" });
     });
 
-    it("keeps request-supplied settings and skips equipment for a different model provider", async () => {
+    it("refuses agent-supplied env and skips equipment for a different model provider", async () => {
       const companyId = await seedCompany();
       const parent = await seedOpenCodeManager(companyId);
 
+      // Upstream policy: an agent key may not configure env for a host-executed
+      // local adapter. Manager equipment is server-applied after that check, so
+      // it must not become a way around it.
       const own = await hire(agentActor(companyId, parent.id), companyId, {
         name: "Own Small Model",
         role: "general",
         adapterType: "opencode_local",
         adapterConfig: { env: { PAPERCLIP_OPENCODE_SMALL_MODEL: { type: "plain", value: "gpuai/other" } } },
       });
-      expect(own.status, JSON.stringify(own.body)).toBe(201);
-      expect(childEnvOf(own).PAPERCLIP_OPENCODE_SMALL_MODEL).toMatchObject({ value: "gpuai/other" });
-      expect(childEnvOf(own).PAPERCLIP_OPENCODE_PROVIDERS).toBeDefined();
+      expect(own.status, JSON.stringify(own.body)).toBe(403);
 
       const other = await hire(agentActor(companyId, parent.id), companyId, {
         name: "Other Provider",
@@ -666,6 +718,7 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
   });
 
   describe("deployment-declared opencode_local models are mandatory for new agents", () => {
+    useDeploymentAdapterSettings({ disabledTypes: ["paperclip_runner"] });
     const previousDeclared = process.env.PAPERCLIP_ADAPTER_MODELS;
     afterEach(() => {
       if (previousDeclared === undefined) delete process.env.PAPERCLIP_ADAPTER_MODELS;

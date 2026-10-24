@@ -339,7 +339,7 @@ function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | 
       source = `
         const SDK = globalThis.__paperclipPluginBridge__?.sdkUi ?? {};
         function missing(name) {
-          return function MissingBionicSdkUiComponent() {
+          return function MissingPaperclipSdkUiComponent() {
             throw new Error('Bionic plugin UI runtime is not initialized for "' + name + '". Ensure the host loaded the plugin bridge before rendering this UI module.');
           };
         }
@@ -905,6 +905,12 @@ type PluginSlotOutletProps = {
   itemClassName?: string;
   errorClassName?: string;
   missingBehavior?: "hidden" | "placeholder";
+  /**
+   * `hidden` suppresses the inline error and keeps rendering the last loaded
+   * slots, so ambient chrome (the sidebar) stays quiet while the server is
+   * unreachable.
+   */
+  errorBehavior?: "inline" | "hidden";
 };
 
 export function PluginSlotOutlet({
@@ -915,6 +921,7 @@ export function PluginSlotOutlet({
   itemClassName,
   errorClassName,
   missingBehavior = "hidden",
+  errorBehavior = "inline",
 }: PluginSlotOutletProps) {
   const { slots, errorMessage } = usePluginSlots({
     slotTypes,
@@ -922,7 +929,7 @@ export function PluginSlotOutlet({
     companyId: context.companyId,
   });
 
-  if (errorMessage) {
+  if (errorMessage && errorBehavior === "inline") {
     return (
       <div className={cn("rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive", errorClassName)}>
         Plugin extensions unavailable: {errorMessage}
