@@ -3,10 +3,15 @@ import type { ActivityEvent, Issue, SuccessfulRunHandoffState } from "@paperclip
 export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION = "issue.successful_run_handoff_required";
 export const SUCCESSFUL_RUN_HANDOFF_RESOLVED_ACTION = "issue.successful_run_handoff_resolved";
 export const SUCCESSFUL_RUN_HANDOFF_ESCALATED_ACTION = "issue.successful_run_handoff_escalated";
+// These are the exact comment bodies the server writes
+// (server/src/services/recovery/successful-run-handoff.ts), so they are a
+// protocol between server and UI, not display copy: keep them byte-identical to
+// the server. The matchers below also accept a "Bionic" prefix so a future
+// server-side rebrand, or comments already stored with either prefix, still match.
 export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY =
-  "Bionic needs a disposition before this issue can continue.";
+  "Paperclip needs a disposition before this issue can continue.";
 export const SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY =
-  "Bionic could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.";
+  "Paperclip could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.";
 
 export function isSuccessfulRunHandoffActivity(action: string) {
   return action === SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION
@@ -67,17 +72,21 @@ export function successfulRunHandoffFromActivity(event: ActivityEvent): Successf
   };
 }
 
+function withServerBrand(text: string) {
+  return text.replace(/^Bionic\b/, "Paperclip");
+}
+
 export function isSuccessfulRunHandoffComment(text: string) {
-  const trimmed = text.trim();
+  const trimmed = withServerBrand(text.trim());
   return trimmed === SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY
     || /^##\s+(This issue still needs a next step|Run finished without a next step|Successful run missing issue disposition)/i.test(trimmed)
     || isSuccessfulRunHandoffEscalationComment(trimmed);
 }
 
 export function isSuccessfulRunHandoffEscalationComment(text: string) {
-  const trimmed = text.trim();
+  const trimmed = withServerBrand(text.trim());
   return trimmed === SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY
-    || /^Bionic exhausted the bounded successful-run handoff correction\b/i.test(trimmed);
+    || /^Paperclip exhausted the bounded successful-run handoff correction\b/i.test(trimmed);
 }
 
 export function successfulRunHandoffActivityTone(action: string) {
