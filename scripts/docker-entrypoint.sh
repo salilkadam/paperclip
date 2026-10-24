@@ -1,6 +1,14 @@
 #!/bin/sh
 set -e
 
+# Timestamped progress lines make the pre-start phase (container start to
+# the first app log line) measurable from the container log alone.
+log() {
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) docker-entrypoint.sh: $*"
+}
+
+log "starting"
+
 # Capture runtime UID/GID from environment variables, defaulting to 1000
 PUID=${USER_UID:-1000}
 PGID=${USER_GID:-1000}
@@ -32,20 +40,60 @@ if [ "$(id -u)" -ne 0 ]; then
     if [ "$(id -u)" -ne "$PUID" ] || [ "$(id -g)" -ne "$PGID" ]; then
         echo "docker-entrypoint.sh: running unprivileged as $(id -u):$(id -g); cannot remap to requested ${PUID}:${PGID}" >&2
     fi
+    log "starting app as $(id -u):$(id -g)"
     maybe_composio_login
     exec "$@"
 fi
 
-# Adjust the node user's UID/GID if they differ from the runtime request
-if [ "$(id -u node)" -ne "$PUID" ]; then
+# Adjust the node user's UID/GID if they differ from the runtime request.
+#
+# `usermod -u` and `usermod -g` also re-own every file under the user's home
+# directory. When that home is the app home (the data volume), the walk can
+# take minutes on a large home, and the app cannot start until it ends. In
+# that case the remap runs while the home points at a placeholder path that
+# does not exist, so usermod changes only the account, and the ownership probe
+# below repairs the app home when the IDs really changed (the home directory
+# itself then has the old owner, which the shallow probe detects on the same
+# boot). A passwd home outside the app home is not covered by that probe, so
+# it keeps the plain usermod behavior, which re-owns it.
+#
+# The placeholder embeds the original home, so a boot that stops between the
+# two usermod -d calls is repaired on the next start of the same container.
+remap_home_prefix="/nonexistent/paperclip-uid-remap"
+node_home="$(getent passwd node 2>/dev/null | cut -d: -f6 || true)"
+case "$node_home" in
+    "$remap_home_prefix"/*)
+        node_home="${node_home#"$remap_home_prefix"}"
+        echo "Restoring node home to $node_home after an interrupted remap"
+        usermod -d "$node_home" node
+        ;;
+esac
+
+remap_uid=0
+remap_gid=0
+[ "$(id -u node)" -ne "$PUID" ] && remap_uid=1
+[ "$(id -g node)" -ne "$PGID" ] && remap_gid=1
+app_home="${PAPERCLIP_HOME:-/paperclip}"
+move_home=0
+if { [ "$remap_uid" -eq 1 ] || [ "$remap_gid" -eq 1 ]; } \
+    && [ -n "$node_home" ] && [ "${node_home%/}" = "${app_home%/}" ]; then
+    move_home=1
+    usermod -d "$remap_home_prefix$node_home" node
+fi
+
+if [ "$remap_uid" -eq 1 ]; then
     echo "Updating node UID to $PUID"
     usermod -o -u "$PUID" node
 fi
 
-if [ "$(id -g node)" -ne "$PGID" ]; then
+if [ "$remap_gid" -eq 1 ]; then
     echo "Updating node GID to $PGID"
     groupmod -o -g "$PGID" node
     usermod -g "$PGID" node
+fi
+
+if [ "$move_home" -eq 1 ]; then
+    usermod -d "$node_home" node
 fi
 
 # Ensure the app home is owned by the runtime user BEFORE dropping
@@ -53,67 +101,113 @@ fi
 # (Docker named volume, Railway volume, Kubernetes PV) arrives root-owned
 # and shadows the image's build-time chown, so with the default UID the old
 # remap-only condition dropped privileges onto an unwritable home and the
-# server crashed on its first mkdir. The probe is a first-mismatch find
-# over the WHOLE tree (uid and gid): a root-owned mount or descendant
-# (init containers, backup restores, files written before a remap) is
-# found immediately and repaired recursively, a GID-only remap is caught,
-# and a fully-correct tree costs one metadata-only walk with no chown.
+# server crashed on its first mkdir.
 #
-# The scan is deliberately scoped to EXCLUDE $home_dir/instances. That
-# subtree is server-created runtime data (agent workspaces, trial-build
-# rootfs copies) and is unbounded: an idle production instance accumulated
-# millions of files there on NFS, and the whole-tree probe crawled all of
-# them on every boot, stalling the pod for ~10 minutes. Everything under
-# instances/ is written by the server after privileges drop to node, so it
-# is node-owned by construction; we repair only the instances directory
-# itself (bounded, non-recursive) to cover a root-owned fresh mount.
-# Repair is per-mismatch (-exec chown -h ... +) rather than a recursive
-# chown -R of the whole home: it fixes exactly the entries the probe finds
-# (following -h so symlink ownership is set, not dereferenced) without
-# re-chowning every correct file on the volume.
+# A full-tree probe costs one stat per file, so the probe is tiered:
+#  1. A shallow probe (the home and its first few levels) runs on every
+#     boot. It catches a fresh root-owned mount and a UID/GID remap, because
+#     both change the owner of the home directory itself.
+#  2. A full-tree probe runs only when the marker file below is missing or
+#     records a different node UID/GID. It catches a mismatch deeper in the
+#     tree (init containers, backup restores, files written before a remap,
+#     the first boot after an upgrade from an older image).
+# After a clean probe or a successful repair, the marker records the verified
+# node UID/GID, so later boots skip the full walk. Delete the marker to force
+# a full probe on the next boot.
 #
-# The repair is best-effort. On a shared (RWX) volume another pod -- e.g.
-# the previous replica during a rolling update -- keeps creating and
-# deleting files (npm cache temp entries, agent scratch files) while this
-# walk runs. find/chown then report entries that vanished mid-scan and exit
-# non-zero, and under `set -e` that aborted the boot (exit 1, one restart per
-# deploy). A vanished entry needs no repair, so never fail startup here.
+# Both probes and the repair PRUNE $home_dir/instances. That subtree is
+# server-created runtime data (agent workspaces, trial-build rootfs copies)
+# and is unbounded: an idle production instance accumulated millions of files
+# there on NFS, and a whole-tree walk stalled the pod for ~10 minutes.
+# Everything under instances/ is written by the server after privileges drop
+# to node, so it is node-owned by construction; only the instances directory
+# itself is repaired (non-recursive) to cover a root-owned fresh mount.
+#
+# Repair is per-mismatch (-exec chown -h ... +), not chown -R: it fixes exactly
+# the entries that are wrong, follows -h so symlink ownership is set rather
+# than dereferenced, and is best-effort. On a shared (RWX) volume another pod
+# keeps creating and deleting files during the walk; find/chown then exit
+# non-zero for vanished entries, which under `set -e` used to abort the boot.
+# A vanished entry needs no repair, so a failed repair never fails startup
+# (and is not recorded as verified).
+#
+# Every walk is bounded by PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS (default 120)
+# so slow storage delays but never owns the boot. timeout cannot rescue a
+# process stuck in D-state on an NFS hard mount -- the kill is delivered only
+# once the hung RPC returns -- so on storage that can hang outright the escape
+# hatch is PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1, which skips probe and repair
+# and trusts the volume's ownership. (2026-10-23 incident: a degraded NFS
+# export held the probe's first lstat in D for >8 minutes and liveness
+# restart-looped the pod seven times.)
 home_dir="${PAPERCLIP_HOME:-/paperclip}"
-#
-# Wall-clock budget for the probe/repair walks so slow storage delays but
-# never owns the boot. IMPORTANT: timeout cannot rescue a process stuck in
-# D-state on an NFS hard mount -- the kill is only delivered once the hung
-# RPC returns -- so on storage that can HANG outright the escape hatch is
-# PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1, which skips the probe entirely and
-# trusts the volume's ownership. (2026-10-23 incident: a Synology export
-# degraded so far that the probe's first lstat sat in D for >8 minutes, the
-# server never started, and liveness restart-looped the pod seven times.)
-# PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS widens the budget for legitimately
-# large-but-healthy homes.
+ownership_marker="$home_dir/.paperclip-ownership-verified"
+ownership_shallow_depth=3
 scan_budget="${PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS:-120}"
+if command -v timeout >/dev/null 2>&1; then
+    scan_wrapper="timeout $scan_budget"
+else
+    scan_wrapper=""
+fi
+
+# Sets needs_repair=1 when any entry outside instances/ is not node:node, and
+# probe_failed=1 when find exits non-zero (I/O error, or 124 = budget spent),
+# so an incomplete walk is never recorded as verified. The arguments bound the
+# walk (empty for the full tree); -quit stops at the first mismatch.
+probe_ownership() {
+    set +e
+    first_mismatch="$($scan_wrapper find "$home_dir" "$@" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)"
+    probe_rc=$?
+    set -e
+    if [ "$probe_rc" -eq 124 ]; then
+        probe_failed=1
+        echo "docker-entrypoint.sh: WARNING ownership probe timed out after ${scan_budget}s; booting anyway (slow storage behind $home_dir; set PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1 if it can hang)" >&2
+    elif [ "$probe_rc" -ne 0 ]; then
+        probe_failed=1
+        log "ownership probe of $home_dir failed; it will run again on the next boot"
+    fi
+    if [ -n "$first_mismatch" ]; then
+        needs_repair=1
+    fi
+}
+
 if [ "${PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN:-0}" = "1" ]; then
     echo "docker-entrypoint.sh: app-home ownership scan skipped (PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1)" >&2
 elif [ -d "$home_dir" ]; then
-    # Bound the walks when coreutils timeout exists; degrade to the bare
-    # pre-timeout behaviour when it does not.
-    if command -v timeout >/dev/null 2>&1; then
-        scan_wrapper="timeout $scan_budget"
-    else
-        scan_wrapper=""
+    expected_marker="v1 $(id -u node):$(id -g node)"
+    current_marker="$(cat "$ownership_marker" 2>/dev/null || true)"
+    needs_repair=0
+    probe_failed=0
+    repair_ok=0
+    probe_ownership -maxdepth "$ownership_shallow_depth"
+    if [ "$needs_repair" -eq 0 ] && [ "$probe_failed" -eq 0 ] && [ "$current_marker" != "$expected_marker" ]; then
+        log "full ownership probe of $home_dir (no current marker)"
+        probe_started=$(date +%s)
+        probe_ownership
+        log "full ownership probe finished in $(( $(date +%s) - probe_started ))s"
     fi
-    set +e
-    mismatch=$($scan_wrapper find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)
-    probe_rc=$?
-    set -e
-    if [ "$probe_rc" -eq 124 ] && [ -z "$mismatch" ]; then
-        echo "docker-entrypoint.sh: WARNING ownership probe timed out after ${scan_budget}s; skipping ownership repair and booting anyway (slow storage behind $home_dir; set PAPERCLIP_SKIP_HOME_OWNERSHIP_SCAN=1 to skip the probe outright, or PAPERCLIP_HOME_SCAN_TIMEOUT_SECONDS to widen the budget)" >&2
-    elif [ -n "$mismatch" ]; then
-        if ! $scan_wrapper find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -exec chown -h node:node {} + 2>/dev/null; then
+
+    if [ "$needs_repair" -eq 1 ]; then
+        log "repairing ownership of $home_dir to node:node"
+        repair_started=$(date +%s)
+        if $scan_wrapper find "$home_dir" -path "$home_dir/instances" -prune -o \( ! -user node -o ! -group node \) -exec chown -h node:node {} + 2>/dev/null; then
+            repair_ok=1
+        else
             echo "docker-entrypoint.sh: ownership repair skipped entries that changed during the scan (continuing)" >&2
         fi
         if [ -d "$home_dir/instances" ]; then
             chown -h node:node "$home_dir/instances" || true
         fi
+        log "ownership repair finished in $(( $(date +%s) - repair_started ))s"
+    fi
+
+    # Record the marker only when the tree is known good: a repair that
+    # completed, or probes that all completed without a mismatch.
+    if [ "$current_marker" != "$expected_marker" ] && { [ "$repair_ok" -eq 1 ] || { [ "$needs_repair" -eq 0 ] && [ "$probe_failed" -eq 0 ]; }; }; then
+        # Write as node so the marker itself never trips the shallow probe
+        # (root-squashed network mounts included). Best effort: a read-only
+        # home only costs a full probe on the next boot.
+        # shellcheck disable=SC2016 # $1/$2 expand in the inner shell
+        gosu node sh -c 'printf "%s\n" "$1" > "$2"' sh "$expected_marker" "$ownership_marker" 2>/dev/null || true
     fi
 fi
 
@@ -127,4 +221,5 @@ if [ -n "${COMPOSIO_USER_API_KEY:-}" ] && command -v composio >/dev/null 2>&1; t
     fi
 fi
 
+log "starting app as node"
 exec gosu node "$@"
