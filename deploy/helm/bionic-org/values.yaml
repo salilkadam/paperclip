@@ -270,13 +270,6 @@ minio:
   rootPasswordSecret: ""   # synced from existing minio credentials
 
 # ---------------------------------------------------------------------------
-# Vault K8s Auth (for API token signing, etc.)
-# ---------------------------------------------------------------------------
-vaultAuth:
-  role: bionic-org
-  address: http://vault-internal.vault.svc.cluster.local:8200
-
-# ---------------------------------------------------------------------------
 # Environment (non-secret, goes in ConfigMap)
 # ---------------------------------------------------------------------------
 env:
@@ -306,8 +299,6 @@ env:
   KEYCLOAK_URL: "{{ .Values.keycloak.url }}"
   KEYCLOAK_INTERNAL_URL: "{{ .Values.keycloak.internalUrl }}"
   KEYCLOAK_REDIRECT_URI: "{{ .Values.keycloak.redirectUri }}"
-  VAULT_ADDR: "{{ .Values.vaultAuth.address }}"
-  VAULT_K8S_ROLE: "{{ .Values.vaultAuth.role }}"
   MINIO_ENDPOINT: "{{ .Values.minio.endpoint }}"
   MINIO_USE_SSL: "{{ .Values.minio.useSSL }}"
   MAIL_FROM: info@bionicaisolutions.com

@@ -1,25 +1,38 @@
 #!/usr/bin/env bash
-# Probe capabilities of the bionic app's Vault token (never prints the token).
-# Since the 2026-10-07 scope-down the token is policy `bionic-org-app`
-# (periodic, self-renewing on use), so `capabilities-self` is not available
-# (it needs sudo); capability proofs are functional instead.
+# Probe the ops Vault identity (role/policy bionic-org-ops, see
+# setup-vault-ops-role.sh). Logs in with a short-lived ServiceAccount token,
+# checks every capability the ops scripts need AND that nothing broader is
+# allowed (incl. the master-key config entry), then revokes the token. Reads no
+# secret at all.
+# Exit 0 only if every expectation holds.
 set -euo pipefail
-kubectl -n bionicorg get secret bionic-org-secrets -o jsonpath='{.data.vault_token}' | base64 -d > /tmp/va.txt
-chmod 600 /tmp/va.txt
-kubectl -n vault cp /tmp/va.txt vault-0:/tmp/va.txt
-rm -f /tmp/va.txt
-kubectl -n vault exec vault-0 -- sh -c '
-export VAULT_ADDR=http://127.0.0.1:8200
-export VAULT_TOKEN=$(cat /tmp/va.txt)
-echo "== identity =="
-vault token lookup 2>&1 | grep -E "token_display_name|policies|ttl |period" | head -6
-echo "== self-renew (keeps the periodic token alive) =="
-vault token renew >/dev/null 2>&1 && echo "renew ok" || echo "renew FAILED"
-echo "== functional: secret/t6-apps/mcp/config =="
-vault kv get -format=json secret/t6-apps/mcp/config >/dev/null 2>&1 && echo "read OK" || echo "read DENIED"
-echo "== functional: secret/t6-apps/bionic-org/config =="
-vault kv get -format=json secret/t6-apps/bionic-org/config >/dev/null 2>&1 && echo "read OK" || echo "read DENIED"
-echo "== negative control (must be denied) =="
-vault kv put secret/t6-apps/probe-test x=1 >/dev/null 2>&1 && echo "UNEXPECTED: write outside scope allowed" || echo "write outside scope: DENIED (correct)"
-rm -f /tmp/va.txt
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/vault-ops.sh
+source "$HERE/lib/vault-ops.sh"
+trap vault_ops_logout EXIT
+vault_ops_login
+
+vault_ops_sh '
+fail=0
+# Every check asks Vault for the capabilities of this token (capabilities-self):
+# authoritative, never mutates a secret, and cannot mistake "path missing" for
+# "denied".
+expect_cap() {  # expect_cap PATH EXACT_CAPS
+  got=$(vault token capabilities "$1" | tr -d " ") || got="ERROR"
+  if [ "$got" = "$2" ]; then echo "ok    $1: $got"; else echo "FAIL  $1: $got (expected $2)"; fail=1; fi
+}
+vault token lookup -format=json | grep -E "\"policies\"|\"ttl\"" -A2 | tr -s " \n" " "; echo
+expect_cap secret/data/t6-apps/bionic-org/sandbox  read
+expect_cap secret/data/t6-apps/mcp/config          patch,read,update
+expect_cap secret/data/t6-apps/ghost/config        read
+expect_cap secret/data/t6-apps/bionic-org/config   deny
+expect_cap secret/data/t6-apps/bionic-org/logins   deny
+expect_cap secret/data/t6-apps/vault/admin_token   deny
+expect_cap secret/data/shared/api-keys             deny
+expect_cap secret/metadata/t6-apps/mcp/config      deny
+expect_cap secret/destroy/t6-apps/mcp/config       deny
+expect_cap secret/data/t6-apps/probe-test          deny
+expect_cap sys/policies/acl/probe                  deny
+expect_cap auth/kubernetes/role/bionic-org-ops     deny
+exit $fail
 '

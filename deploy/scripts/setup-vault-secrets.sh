@@ -24,7 +24,6 @@
 #     --session-secret "..." \
 #     --keycloak-client-id "..." \
 #     --keycloak-client-secret "..." \
-#     [--vault-token "token"] \
 #     [--minio-root-user "..."] [--minio-root-password "..."] \
 #     [--rotate-master-key]
 #
@@ -44,7 +43,6 @@ while [[ $# -gt 0 ]]; do
     --session-secret)        SESSION_SECRET="$2"; shift 2 ;;
     --keycloak-client-id)    KEYCLOAK_CLIENT_ID="$2"; shift 2 ;;
     --keycloak-client-secret) KEYCLOAK_CLIENT_SECRET="$2"; shift 2 ;;
-    --vault-token)           VAULT_TOKEN="$2"; shift 2 ;;
     --minio-root-user)       MINIO_ROOT_USER="$2"; shift 2 ;;
     --minio-root-password)   MINIO_ROOT_PASSWORD="$2"; shift 2 ;;
     --rotate-master-key)     ROTATE_MASTER_KEY=true; shift ;;
@@ -62,7 +60,7 @@ if ! command -v vault &> /dev/null; then
   echo "  Required keys:"
   echo "    - database_url, better_auth_secret, session_secret"
   echo "    - keycloak_client_id, keycloak_client_secret"
-  echo "    - vault_token, minio_root_user, minio_root_password"
+  echo "    - minio_root_user, minio_root_password"
   echo "    - ${MASTER_KEY_KEY}  (base64 of a 32-byte key; generate ONCE:"
   echo "        openssl rand -base64 32)"
   exit 0
@@ -134,7 +132,6 @@ for pair in \
   "session_secret:${SESSION_SECRET:-}" \
   "keycloak_client_id:${KEYCLOAK_CLIENT_ID:-}" \
   "keycloak_client_secret:${KEYCLOAK_CLIENT_SECRET:-}" \
-  "vault_token:${VAULT_TOKEN:-}" \
   "minio_root_user:${MINIO_ROOT_USER:-}" \
   "minio_root_password:${MINIO_ROOT_PASSWORD:-}"
 do

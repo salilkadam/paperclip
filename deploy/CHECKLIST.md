@@ -32,7 +32,6 @@
   - [ ] `session_secret`
   - [ ] `keycloak_client_id`
   - [ ] `keycloak_client_secret`
-  - [ ] `vault_token`
   - [ ] `minio_root_user`
   - [ ] `minio_root_password`
 

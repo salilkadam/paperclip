@@ -40,7 +40,7 @@
 # (e.g. other tenants' t6-apps/<org>/config), or those tenants 403 too.
 #
 # Usage:
-#   VAULT_TOKEN=<admin token> ./deploy/scripts/setup-vault-jwt.sh \
+#   VAULT_TOKEN_FILE=<0600 file with an admin token> ./deploy/scripts/setup-vault-jwt.sh \
 #       [--vault-addr http://vault.vault.svc.cluster.local:8200] \
 #       [--role eso-reader] [--policy eso-bionic-org-policy] \
 #       [--shared-policy eso-reader] [--bind-sa <name> <namespace>] \
@@ -79,7 +79,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-: "${VAULT_TOKEN:?VAULT_TOKEN (admin token) is required}"
+: "${VAULT_TOKEN_FILE:=}"   # admin token: VAULT_TOKEN_FILE (0600) preferred over VAULT_TOKEN
+if [[ -n "$VAULT_TOKEN_FILE" ]]; then
+  [[ -r "$VAULT_TOKEN_FILE" && "$(stat -c %a "$VAULT_TOKEN_FILE")" == 600 ]] \
+    || { echo "VAULT_TOKEN_FILE must be a readable 0600 file" >&2; exit 1; }
+  VAULT_TOKEN="$(tr -d '\r\n' < "$VAULT_TOKEN_FILE")"
+fi
+: "${VAULT_TOKEN:?an admin token is required (VAULT_TOKEN_FILE or VAULT_TOKEN)}"
 
 # --- local preparation -------------------------------------------------------
 echo "==> Fetching cluster OIDC JWKS and converting keys to SPKI PEM"
@@ -139,7 +145,7 @@ kubectl create configmap vault-jwt-setup -n vault \
 # --- one privileged pod does all Vault writes --------------------------------
 echo "==> Enabling jwt auth, pinning OIDC keys, writing policy and role"
 kubectl run vault-jwt-setup -n vault --rm -i --restart=Never \
-  --image=hashicorp/vault:1.20.3 --env="VAULT_TOKEN=$VAULT_TOKEN" \
+  --image=hashicorp/vault:1.20.3 \
   --overrides="{\"spec\":{\"containers\":[{\"name\":\"vault-jwt-setup\",\"image\":\"hashicorp/vault:1.20.3\",\"command\":[\"sh\",\"-c\",\"sleep 300\"],\"volumeMounts\":[{\"name\":\"cm\",\"mountPath\":\"/setup\",\"readOnly\":true}]}],\"volumes\":[{\"name\":\"cm\",\"configMap\":{\"name\":\"vault-jwt-setup\"}}]}}" &
 SETUP_POD=vault-jwt-setup
 
@@ -148,8 +154,9 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-kubectl exec "$SETUP_POD" -n vault -- sh -c "
-  export VAULT_ADDR=$VAULT_ADDR VAULT_TOKEN=\$VAULT_TOKEN
+# The admin token reaches the pod on stdin only: never argv, never the pod spec.
+printf '%s\n' "$VAULT_TOKEN" | timeout 300 kubectl exec -i "$SETUP_POD" -n vault -- sh -c "
+  read -r VAULT_TOKEN; export VAULT_ADDR=$VAULT_ADDR VAULT_TOKEN
   vault auth enable jwt 2>&1 | tail -1
   vault write auth/jwt/config jwt_validation_pubkeys=\"\$(cat /setup/pubkeys.json)\" 2>&1 | tail -1
   vault policy write $POLICY /setup/policy.hcl 2>&1 | tail -1
