@@ -36,8 +36,8 @@ POD=$(timeout 60 kubectl -n "$NS" get pods --no-headers | awk '/^bionic-org-/ &&
 TMP=$(mktemp -d)
 # shellcheck source=lib/vault-ops.sh
 source "$(cd "$(dirname "$0")" && pwd)/lib/vault-ops.sh"
-vault_ops_login   # short-lived Vault token via the bionic-org-ops ServiceAccount
 trap 'rm -rf "$TMP"; vault_ops_logout' EXIT
+vault_ops_login   # short-lived Vault token via the bionic-org-ops ServiceAccount
 
 cat > "$TMP/rotate.mjs" <<'JS'
 import { createHash, randomBytes } from "node:crypto";

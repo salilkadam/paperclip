@@ -9,8 +9,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/vault-ops.sh
 source "$HERE/lib/vault-ops.sh"
-vault_ops_login
 trap vault_ops_logout EXIT
+vault_ops_login
 
 vault_ops_sh '
 fail=0

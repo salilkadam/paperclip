@@ -8,18 +8,20 @@ python3 deploy/scripts/switch-tenant-client-2b-payload.py
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/vault-ops.sh
 source "$HERE/lib/vault-ops.sh"
-vault_ops_login
 trap vault_ops_logout EXIT
+vault_ops_login
 timeout 60 kubectl -n vault cp /tmp/payload.json vault-0:/tmp/payload.json
 rm -f /tmp/payload.json
 
 echo "== kv put =="
 vault_ops_sh '
-vault kv put secret/t6-apps/mcp/config @/tmp/payload.json >/dev/null && echo "put ok"
+vault kv put secret/t6-apps/mcp/config @/tmp/payload.json >/dev/null
+echo "put ok"
 vault kv get -format=json secret/t6-apps/mcp/config > /tmp/mcp-cfg2.json
 rm -f /tmp/payload.json
 '
 timeout 60 kubectl -n vault cp vault-0:/tmp/mcp-cfg2.json /tmp/mcp-cfg2.json
+timeout 60 kubectl -n vault exec vault-0 -- rm -f /tmp/mcp-cfg2.json   # no secret copy left in the Vault pod
 chmod 600 /tmp/mcp-cfg2.json
 
 echo "== verify vault read-back =="

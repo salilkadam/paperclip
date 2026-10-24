@@ -51,9 +51,11 @@ vault_ops_login() {
 
 # vault_ops_sh SNIPPET [ARGS...] — run a shell snippet inside the Vault pod with
 # VAULT_TOKEN/VAULT_ADDR exported; ARGS are $1.. inside the snippet. The snippet
-# runs under `set -e`: the first failing command fails the call, so a denied
-# write can never be followed by "success". Use `|| true` explicitly for
-# commands allowed to fail. The snippet cannot read further stdin (the token is
+# runs under `set -e`, so a failing simple command fails the call. POSIX errexit
+# does NOT cover commands in `&&`/`||` lists or non-final pipeline members:
+# write commands (kv put/patch, policy write) must be standalone statements.
+# test-vault-ops-local.sh rejects `&&` after a write in any script here. Use
+# `|| true` explicitly for commands allowed to fail. The snippet cannot read further stdin (the token is
 # the first line).
 vault_ops_sh() {
   [[ -n "$VAULT_OPS_TOKEN" ]] || vault_ops_die "vault_ops_sh called before vault_ops_login"

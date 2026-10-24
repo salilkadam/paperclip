@@ -7,8 +7,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/vault-ops.sh
 source "$HERE/lib/vault-ops.sh"
-vault_ops_login
 trap vault_ops_logout EXIT
+vault_ops_login
 
 # a) push the payload into vault-0 (the token travels on stdin per call)
 timeout 60 kubectl -n vault cp /tmp/nt.txt vault-0:/tmp/nt.txt
@@ -21,6 +21,7 @@ vault kv get -format=json secret/t6-apps/mcp/config > /tmp/mcp-cfg2.json
 rm -f /tmp/nt.txt /tmp/mcp-cfg2.json.check 2>/dev/null || true
 '
 timeout 60 kubectl -n vault cp vault-0:/tmp/mcp-cfg2.json /tmp/mcp-cfg2.json
+timeout 60 kubectl -n vault exec vault-0 -- rm -f /tmp/mcp-cfg2.json   # no secret copy left in the Vault pod
 chmod 600 /tmp/mcp-cfg2.json
 
 echo "== verify vault read-back =="

@@ -81,4 +81,9 @@ with_ops vault_ops_logout
 set +e; root sh -c "VAULT_TOKEN=$OPS vault token lookup" >/dev/null 2>&1; rc=$?; set -e
 check "vault_ops_logout revokes the token" "$([[ $rc -ne 0 ]] && echo revoked || echo live)" revoked
 
+# Lint: POSIX errexit ignores commands inside && / || lists, so a write written
+# as `vault kv put ... && echo ok` could fail silently. None may exist.
+bad="$(grep -nE 'vault (kv (put|patch)|policy write|write)[^|]*&&' "$HERE"/*.sh "$HERE"/lib/*.sh | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' || true)"
+check "no Vault write inside an && list" "${bad:-none}" none
+
 echo "---"; [[ $fails -eq 0 ]] && echo "all checks passed" || { echo "$fails check(s) failed"; exit 1; }

@@ -419,21 +419,29 @@ repos may use it:
   (0600), a prompt, or the operator's own `vault login`. They never read
   `/workspace/.env`.
 - **One-time cut-over from the static token** (2026-10-24), in this order:
-  1. Upgrade the chart without changing anything else:
+  1. Upgrade the chart, keeping the same image and values. The pod spec
+     changes (`VAULT_TOKEN` and two ConfigMap keys are removed), so this
+     restarts the app pod once.
 
      ```bash
+     helm -n bionicorg get values bionic-org -o yaml > /tmp/bionic-org-values.before.yaml   # capture BEFORE
      TAG=$(kubectl -n bionicorg get deploy bionic-org -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/.*://')
+     [[ -n "$TAG" ]] || { echo "could not read the running image tag" >&2; exit 1; }
      helm upgrade bionic-org deploy/helm/bionic-org -n bionicorg --reset-then-reuse-values --set image.tag="$TAG"
-     helm -n bionicorg get values bionic-org   # still: domain, env override, image.tag
+     helm -n bionicorg get values bionic-org -o yaml | diff /tmp/bionic-org-values.before.yaml -   # expect no diff
      ```
 
      Do not use plain `--reuse-values` or a bare upgrade. The first breaks
      rendering on new chart keys; the second silently reverts `image.tag`,
      `domain` and the env override to the chart defaults.
   2. `VAULT_TOKEN_FILE=<0600 admin token file> deploy/scripts/setup-vault-ops-role.sh`
-  3. `deploy/scripts/probe-bionic-vault-token.sh` must exit 0.
-  4. Delete `vault_token` from `secret/t6-apps/bionic-org/config` (`vault kv patch -remove-data` or a kv put without
-     it). Then `kubectl -n bionicorg annotate externalsecret bionic-org-secrets force-sync=$(date +%s) --overwrite`.
+  3. `deploy/scripts/probe-bionic-vault-token.sh` must exit 0. This is the
+     first real run of the Kubernetes login. The local gate stubs it out.
+  4. **With the admin token** (the ops identity is denied `bionic-org/config` by
+     design): `vault kv patch -remove-data=vault_token secret/t6-apps/bionic-org/config`.
+     Never use a `kv put` without the key: it drops every other key it does not
+     list. Then
+     `kubectl -n bionicorg annotate externalsecret bionic-org-secrets force-sync=$(date +%s) --overwrite`.
      Confirm `bionic-org-secrets` has no `vault_token`. **Only after step 1:**
      the old Deployment spec requires that key.
   5. Revoke the old `bionic-org-app` token by accessor, and delete the
