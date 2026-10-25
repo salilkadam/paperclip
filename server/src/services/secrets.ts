@@ -102,7 +102,6 @@ const SENSITIVE_ENV_KEY_RE =
 const REDACTED_SENTINEL = "***REDACTED***";
 const COMING_SOON_SECRET_PROVIDERS: ReadonlySet<SecretProvider> = new Set([
   "gcp_secret_manager",
-  "vault",
 ]);
 const FALLBACK_ADAPTER_SCHEMA_SECRET_FIELDS: Readonly<Record<string, readonly string[]>> = {
   hermes_gateway: ["apiKey"],
@@ -2265,6 +2264,17 @@ export function secretService(db: Db | DbTransaction) {
       })
       .returning()
       .then((rows) => rows[0]);
+    // The reserved row gives the secret its identity before any provider
+    // write, so ownership-placed providers (Vault) can derive its path.
+    const identifiedWriteContext: SecretProviderWriteContext = {
+      ...providerWriteContext,
+      secretId: reservedSecret.id,
+      scope: reservedSecret.scope as SecretProviderWriteContext["scope"],
+      ownerUserId: reservedSecret.ownerUserId,
+      ownerAgentId: reservedSecret.ownerAgentId,
+      ownerProjectId: reservedSecret.ownerProjectId,
+      ownerPluginId: reservedSecret.ownerPluginId,
+    };
 
     let prepared: PreparedSecretVersion;
     try {
@@ -2274,13 +2284,13 @@ export function secretService(db: Db | DbTransaction) {
               externalRef: input.externalRef ?? "",
               providerVersionRef: input.providerVersionRef ?? null,
               providerConfig,
-              context: providerWriteContext,
+              context: identifiedWriteContext,
             })
           : await provider.createSecret({
               value: input.value ?? "",
               externalRef: null,
               providerConfig,
-              context: providerWriteContext,
+              context: identifiedWriteContext,
             });
     } catch (error) {
       throw await throwProviderWriteOrReservedRowRollbackError({
@@ -2320,7 +2330,7 @@ export function secretService(db: Db | DbTransaction) {
           provider,
           prepared,
           providerConfig,
-          context: providerWriteContext,
+          context: identifiedWriteContext,
           mode: "delete",
           operation: "create.prepare_rollback",
         });
@@ -2378,7 +2388,7 @@ export function secretService(db: Db | DbTransaction) {
           provider,
           prepared,
           providerConfig,
-          context: providerWriteContext,
+          context: identifiedWriteContext,
           mode: "delete",
           operation: "create.rollback",
         });
@@ -2471,11 +2481,17 @@ export function secretService(db: Db | DbTransaction) {
     if (secret.managedMode !== "external_reference" && !input.value?.trim()) {
       throw unprocessable("Managed secrets require value");
     }
-    const providerWriteContext = {
+    const providerWriteContext: SecretProviderWriteContext = {
       companyId: secret.companyId,
       secretKey: secret.key,
       secretName: secret.name,
       version: nextVersion,
+      secretId: secret.id,
+      scope: secret.scope as SecretProviderWriteContext["scope"],
+      ownerUserId: secret.ownerUserId,
+      ownerAgentId: secret.ownerAgentId,
+      ownerProjectId: secret.ownerProjectId,
+      ownerPluginId: secret.ownerPluginId,
     };
     let prepared: PreparedSecretVersion;
     try {
@@ -3080,6 +3096,12 @@ export function secretService(db: Db | DbTransaction) {
       }
       throw error;
     }
+    const identifiedWriteContext: SecretProviderWriteContext = {
+      ...providerWriteContext,
+      secretId: reservedSecret.id,
+      scope: "user",
+      ownerUserId,
+    };
 
     let prepared: PreparedSecretVersion;
     try {
@@ -3089,13 +3111,13 @@ export function secretService(db: Db | DbTransaction) {
               externalRef: input.externalRef ?? "",
               providerVersionRef: input.providerVersionRef ?? null,
               providerConfig,
-              context: providerWriteContext,
+              context: identifiedWriteContext,
             })
           : await provider.createSecret({
               value: input.value ?? "",
               externalRef: null,
               providerConfig,
-              context: providerWriteContext,
+              context: identifiedWriteContext,
             });
     } catch (error) {
       throw await throwProviderWriteOrReservedRowRollbackError({
@@ -3143,7 +3165,7 @@ export function secretService(db: Db | DbTransaction) {
           provider,
           prepared,
           providerConfig,
-          context: providerWriteContext,
+          context: identifiedWriteContext,
           mode: "delete",
           operation: "user_secret_value.create_rollback",
         });

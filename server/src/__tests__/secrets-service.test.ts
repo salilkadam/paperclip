@@ -2240,23 +2240,23 @@ describeEmbeddedPostgres("secretService", () => {
     expect(deleteSpy).toHaveBeenCalledWith(expect.objectContaining({
       externalRef: userOneSecret.externalRef,
       providerConfig: expect.objectContaining({ id: awsVault.id }),
-      context: {
+      context: expect.objectContaining({
         companyId,
         secretKey: userOneSecret.key,
         secretName: userOneSecret.name,
         version: 1,
-      },
+      }),
       mode: "delete",
     }));
     expect(deleteSpy).toHaveBeenCalledWith(expect.objectContaining({
       externalRef: userTwoSecret.externalRef,
       providerConfig: expect.objectContaining({ id: awsVault.id }),
-      context: {
+      context: expect.objectContaining({
         companyId,
         secretKey: userTwoSecret.key,
         secretName: userTwoSecret.name,
         version: 1,
-      },
+      }),
       mode: "delete",
     }));
   });
@@ -2300,12 +2300,12 @@ describeEmbeddedPostgres("secretService", () => {
     expect(deleteSpy).toHaveBeenCalledWith(expect.objectContaining({
       externalRef: userSecret.externalRef,
       providerConfig: expect.objectContaining({ id: awsVault.id }),
-      context: {
+      context: expect.objectContaining({
         companyId,
         secretKey: userSecret.key,
         secretName: userSecret.name,
         version: 1,
-      },
+      }),
       mode: "delete",
     }));
   });
@@ -3028,12 +3028,12 @@ describeEmbeddedPostgres("secretService", () => {
       externalRef: prepared.externalRef,
       mode: "delete",
       providerConfig: expect.objectContaining({ id: awsVault.id }),
-      context: {
+      context: expect.objectContaining({
         companyId,
         secretKey: "create-rollback",
         secretName: "Create Rollback",
         version: 1,
-      },
+      }),
     }));
 
     const persisted = await svc.getByName(companyId, "Create Rollback");
@@ -3158,12 +3158,12 @@ describeEmbeddedPostgres("secretService", () => {
       externalRef: prepared.externalRef,
       mode: "archive",
       providerConfig: expect.objectContaining({ id: awsVault.id }),
-      context: {
+      context: expect.objectContaining({
         companyId,
         secretKey: "rotate-rollback",
         secretName: "Rotate Rollback",
         version: 2,
-      },
+      }),
     }));
   });
 
@@ -3684,12 +3684,12 @@ describeEmbeddedPostgres("secretService", () => {
       externalRef,
       mode: "archive",
       providerConfig: expect.objectContaining({ id: awsVault.id }),
-      context: {
+      context: expect.objectContaining({
         companyId,
         secretKey: "external-rollback",
         secretName: "External rollback",
         version: 2,
-      },
+      }),
     }));
   });
 
@@ -3721,9 +3721,9 @@ describeEmbeddedPostgres("secretService", () => {
     const svc = secretService(db);
     const secret = await svc.create(companyId, {
       name: `external-${randomUUID()}`,
-      provider: "vault",
+      provider: "gcp_secret_manager",
       managedMode: "external_reference",
-      externalRef: "kv/data/shared/neon-admin",
+      externalRef: "projects/p/secrets/neon-admin",
     });
 
     await expect(svc.rotate(secret.id, { value: "new-admin-key" })).rejects.toThrow(
@@ -4071,12 +4071,12 @@ describeEmbeddedPostgres("secretService", () => {
         source: "managed",
       },
       externalRef,
-      context: {
+      context: expect.objectContaining({
         companyId,
         secretKey: "openai-api-key",
         secretName: "OpenAI API Key",
         version: 1,
-      },
+      }),
       mode: "delete",
       providerConfig: null,
     });
