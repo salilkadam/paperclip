@@ -50,11 +50,16 @@ describe("cursor local adapter skill injection", () => {
     expect(logs.some((line) => line.includes('Injected Cursor skill "paperclip-create-agent"'))).toBe(true);
   });
 
-  it("preserves existing targets and only links missing skills", async () => {
+  // Since #21 a real directory that differs from the managed skill is moved to
+  // <skillsHome>/../skills-replaced/ (content kept) and the managed skill is
+  // linked; before that it silently shadowed the skill forever.
+  it("moves a differing existing target aside, keeps its content, and links every skill", async () => {
     const skillsDir = await makeTempDir("paperclip-cursor-preserve-src-");
-    const skillsHome = await makeTempDir("paperclip-cursor-preserve-home-");
+    const homeRoot = await makeTempDir("paperclip-cursor-preserve-home-");
+    const skillsHome = path.join(homeRoot, "skills");
+    await fs.mkdir(skillsHome, { recursive: true });
     cleanupDirs.add(skillsDir);
-    cleanupDirs.add(skillsHome);
+    cleanupDirs.add(homeRoot);
 
     await createSkillDir(skillsDir, "paperclip");
     await createSkillDir(skillsDir, "paperclip-create-agent");
@@ -65,8 +70,12 @@ describe("cursor local adapter skill injection", () => {
 
     await ensureCursorSkillsInjected(async () => {}, { skillsDir, skillsHome });
 
-    expect((await fs.lstat(existingTarget)).isDirectory()).toBe(true);
-    expect(await fs.readFile(path.join(existingTarget, "keep.txt"), "utf8")).toBe("keep");
+    expect((await fs.lstat(existingTarget)).isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(existingTarget)).toBe(path.join(skillsDir, "paperclip"));
+    const backupRoot = path.join(path.dirname(skillsHome), "skills-replaced");
+    const backups = (await fs.readdir(backupRoot)).filter((name) => /^paperclip-\d{4}-/.test(name));
+    expect(backups).toHaveLength(1);
+    expect(await fs.readFile(path.join(backupRoot, backups[0]!, "keep.txt"), "utf8")).toBe("keep");
     expect((await fs.lstat(path.join(skillsHome, "paperclip-create-agent"))).isSymbolicLink()).toBe(true);
   });
 

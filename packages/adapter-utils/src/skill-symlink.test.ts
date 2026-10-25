@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -152,5 +152,104 @@ describe("ensurePaperclipSkillSymlink with an unmanaged copy at the target", () 
     await symlink(path.join(root, "gone"), target);
     await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("repaired");
     expect(await readlink(target)).toBe(source);
+  });
+});
+
+describe("ensurePaperclipSkillSymlink with a link to another existing copy", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  // Production after rev 65: ~/.claude/skills/trypost -> a company-skill copy
+  // imported before trypost was bundled. The old code skipped any link whose
+  // target still existed, so agents kept the pre-fix gateway header.
+  async function setup(oldContent: string) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-skill-relink-"));
+    roots.push(root);
+    const source = path.join(root, "app", "skills", "trypost");
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, "SKILL.md"), "X-Paperclip-Tool-Gateway-Token\n");
+    const old = path.join(root, "instances", "skills", "company-a", "trypost");
+    await mkdir(old, { recursive: true });
+    await writeFile(path.join(old, "SKILL.md"), oldContent);
+    const skillsHome = path.join(root, "home", ".claude", "skills");
+    await mkdir(skillsHome, { recursive: true });
+    const target = path.join(skillsHome, "trypost");
+    await symlink(old, target);
+    return { root, source, old, skillsHome, target };
+  }
+
+  it("re-points a link whose target differs from the source and keeps the old copy", async () => {
+    const { source, old, skillsHome, target } = await setup("Authorization: Bearer <sessionToken>\n");
+    await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("repaired");
+    expect(await readlink(target)).toBe(source);
+    expect(await readFile(path.join(old, "SKILL.md"), "utf8")).toBe("Authorization: Bearer <sessionToken>\n");
+    expect(await readdir(skillsHome)).toEqual(["trypost"]);
+    await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("skipped");
+  });
+
+  it("leaves a link to an identical copy alone", async () => {
+    const { source, old, target } = await setup("X-Paperclip-Tool-Gateway-Token\n");
+    await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("skipped");
+    expect(await readlink(target)).toBe(old);
+  });
+
+  it("never re-points away from an immutable __versions__ pin, so two sources converge", async () => {
+    const { root, source, target } = await setup("unused\n");
+    const pinned = path.join(root, "instances", "skills", "company-b", "__versions__", "skill-1", "version-1");
+    await mkdir(pinned, { recursive: true });
+    await writeFile(path.join(pinned, "SKILL.md"), "pinned older version\n");
+    await rm(target);
+    await symlink(pinned, target);
+    // Agents with different sources alternate; the pin must win every time.
+    for (let i = 0; i < 4; i += 1) {
+      await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("skipped");
+      await expect(ensurePaperclipSkillSymlink(pinned, target)).resolves.toBe("skipped");
+    }
+    expect(await readlink(target)).toBe(pinned);
+  });
+
+  it("treats a mode-only difference as identical (read-only pinned copies)", async () => {
+    const { source, old, target } = await setup("X-Paperclip-Tool-Gateway-Token\n");
+    await chmod(path.join(old, "SKILL.md"), 0o444);
+    await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("skipped");
+    expect(await readlink(target)).toBe(old);
+  });
+
+  it("skips (does not throw) when the linked copy cannot be read", async () => {
+    const { source, old, target } = await setup("stale\n");
+    const locked = path.join(old, "locked");
+    await mkdir(locked);
+    await chmod(locked, 0o000);
+    try {
+      await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("skipped");
+      expect(await readlink(target)).toBe(old);
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
+  it("leaves no staging link when linking fails after creating it", async () => {
+    const { source, old, root, target } = await setup("stale\n");
+    const partialLink = async (src: string, dst: string) => {
+      await symlink(src, dst);
+      throw new Error("failed after linking");
+    };
+    await expect(ensurePaperclipSkillSymlink(source, target, partialLink)).rejects.toThrow("failed after linking");
+    expect(await readlink(target)).toBe(old);
+    const staging = await readdir(path.join(root, "home", ".claude", "skills-replaced")).catch(() => []);
+    expect(staging.filter((name) => name.includes(".link-"))).toEqual([]);
+  });
+
+  it("keeps the original link when the new link cannot be made", async () => {
+    const { source, old, root, target } = await setup("stale\n");
+    const failingLink = async () => {
+      throw Object.assign(new Error("symlinks unavailable"), { code: "EPERM" });
+    };
+    await expect(ensurePaperclipSkillSymlink(source, target, failingLink)).rejects.toThrow("symlinks unavailable");
+    expect(await readlink(target)).toBe(old);
+    const staging = await readdir(path.join(root, "home", ".claude", "skills-replaced")).catch(() => []);
+    expect(staging.filter((name) => name.includes(".link-"))).toEqual([]);
   });
 });
