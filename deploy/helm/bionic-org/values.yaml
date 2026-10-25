@@ -163,7 +163,10 @@ persistence:
 # Enabling only makes Vault usable; secrets move there when a company default is
 # set (Secrets → Provider vaults) and `paperclip secrets migrate-provider` runs.
 secretsVault:
-  enabled: false
+  # On: the role/policy are created by the setup script before this rolls out.
+  # Off again removes the env and the token mount; nothing else depends on it
+  # until a company default points at a Vault provider vault.
+  enabled: true
   address: "http://vault.vault.svc.cluster.local:8200"
   mount: secret
   prefix: t6-apps/bionic-org/paperclip
