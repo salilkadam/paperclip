@@ -264,11 +264,13 @@ describe("vault provider: per-company provider vault config", () => {
 
   it("lets a provider vault pick only the deployment namespace or an allowed one", async () => {
     const kv = new FakeKv();
-    const base = config({ namespace: "admin", allowedNamespaces: ["admin/bionic"] });
+    const base = config({ namespace: "admin", allowedNamespaces: ["admin/bionic/"] }); // operator wrote a trailing slash
     const provider = createVaultProvider({ config: base, gateway: kv });
     await expect(provider.createSecret({ value: "x", context: ctx(), providerConfig: vaultRow({ namespace: "admin" }) })).resolves.toBeTruthy();
     await expect(provider.createSecret({ value: "x", context: ctx({ secretId: "77777777-7777-4777-8777-777777777777" }), providerConfig: vaultRow({ namespace: "admin/bionic" }) })).resolves.toBeTruthy();
     await expect(provider.createSecret({ value: "x", context: ctx(), providerConfig: vaultRow({ namespace: "root" }) })).rejects.toThrow(/not allowed by the deployment/);
+    // "ns/" and "ns" are the same Vault namespace.
+    await expect(provider.createSecret({ value: "x", context: ctx({ secretId: "88888888-8888-4888-8888-888888888888" }), providerConfig: vaultRow({ namespace: "admin/bionic/" }) })).resolves.toBeTruthy();
     await expect(provider.createSecret({ value: "x", context: ctx(), providerConfig: vaultRow({ namespace: "admin/bionic\r\nx: y" }) })).rejects.toThrow(/not allowed by the deployment/);
   });
 
@@ -382,6 +384,28 @@ describe("VaultHttpGateway auth", () => {
     const gw = new VaultHttpGateway(config({ address: "http://vault-d.test:8200", k8sJwtPath: jwtPath }));
     for (let i = 0; i < 10; i += 1) await expect(gw.readData("p", null)).rejects.toMatchObject({ code: "access_denied" });
     expect(logins).toBe(2); // the initial login + one forced re-login in the window
+  });
+
+  it("concurrent callers that hit 403 after a revocation share the one fresh login", async () => {
+    let logins = 0;
+    let revoked = "";
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith("/login")) {
+        logins += 1;
+        await new Promise((r) => setTimeout(r, 20));
+        return respond(200, { auth: { client_token: `t${logins}`, lease_duration: 3600, renewable: true } });
+      }
+      const token = (init.headers as Record<string, string>)["x-vault-token"];
+      if (token === revoked) return respond(403, { errors: ["permission denied"] });
+      return respond(200, { data: { data: { value: "ok" }, metadata: { version: 1 } } });
+    }));
+    writeFileSync(jwtPath, "jwt-G");
+    const gw = new VaultHttpGateway(config({ address: "http://vault-g.test:8200", k8sJwtPath: jwtPath }));
+    await gw.readData("warm", 1);
+    revoked = "t1"; // operator revokes the server's token
+    const results = await Promise.all([gw.readData("a", 1), gw.readData("b", 1), gw.readData("c", 1)]);
+    expect(results.map((r) => r?.data.value)).toEqual(["ok", "ok", "ok"]);
+    expect(logins).toBe(2);
   });
 
   it("re-reads a rotated token file once on 403 (token_file mode)", async () => {

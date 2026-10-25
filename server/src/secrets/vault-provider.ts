@@ -163,7 +163,7 @@ export function loadVaultProviderConfig(): VaultProviderConfig {
   }
   return {
     address: normalizeAddress(env("PAPERCLIP_SECRETS_VAULT_ADDR")!),
-    namespace: env("PAPERCLIP_SECRETS_VAULT_NAMESPACE"),
+    namespace: env("PAPERCLIP_SECRETS_VAULT_NAMESPACE") ? cleanPath(env("PAPERCLIP_SECRETS_VAULT_NAMESPACE")!) : null,
     mount,
     prefix,
     authMethod: (env("PAPERCLIP_SECRETS_VAULT_AUTH_METHOD") ?? "kubernetes") as VaultAuthMethod,
@@ -176,7 +176,7 @@ export function loadVaultProviderConfig(): VaultProviderConfig {
     externalPrefixes,
     allowedNamespaces: (env("PAPERCLIP_SECRETS_VAULT_ALLOWED_NAMESPACES") ?? "")
       .split(",")
-      .map((value) => value.trim())
+      .map((value) => cleanPath(value.trim()))
       .filter(Boolean),
   };
 }
@@ -203,11 +203,11 @@ function applyProviderVaultConfig(
       );
     }
   }
-  const namespace = typeof config.namespace === "string" && config.namespace.trim() ? config.namespace.trim() : null;
-  if (!namespace || namespace === base.namespace) return base;
+  const namespace = typeof config.namespace === "string" && config.namespace.trim() ? cleanPath(config.namespace.trim()) : null;
+  if (!namespace || namespace === (base.namespace ? cleanPath(base.namespace) : null)) return base;
   // The namespace picks which auth mount receives the server's ServiceAccount
   // JWT, so a company may only choose one the deployment has allowed.
-  if (!NAMESPACE_RE.test(namespace) || !(base.allowedNamespaces ?? []).includes(namespace)) {
+  if (!NAMESPACE_RE.test(namespace) || !(base.allowedNamespaces ?? []).map(cleanPath).includes(namespace)) {
     throw unprocessable(
       "This Vault namespace is not allowed by the deployment (PAPERCLIP_SECRETS_VAULT_ALLOWED_NAMESPACES)",
     );
@@ -459,7 +459,9 @@ export class VaultHttpGateway implements VaultKvGateway {
     if (result.status !== 403) return result;
     const entry = this.entry();
     let retryToken: string | null = null;
-    if (entry.cached && entry.cached.token !== used) {
+    if (entry.pending) {
+      retryToken = (await entry.pending).token; // a concurrent caller is re-authenticating; share it
+    } else if (entry.cached && entry.cached.token !== used) {
       retryToken = entry.cached.token; // a concurrent caller already re-authenticated
     } else if (Date.now() - entry.lastForcedLoginAt >= FORCED_LOGIN_MIN_INTERVAL_MS) {
       entry.lastForcedLoginAt = Date.now();
@@ -538,6 +540,8 @@ function errorText(json: Record<string, unknown> | null, text: string): string {
  * crashed-or-replaced pod's token from outliving the pod.
  */
 export async function revokeVaultLoginForShutdown(timeoutMs = 5_000): Promise<"revoked" | "none" | "failed"> {
+  // Let in-flight logins land first so their tokens are revoked too.
+  await Promise.allSettled([...loginCache.values()].map((entry) => entry.pending).filter(Boolean));
   // Every cached login (one per allowed namespace), not just the env default.
   const entries = [...loginCache.values()].filter((entry) => entry.cached && entry.config.authMethod === "kubernetes");
   if (entries.length === 0) return "none";
@@ -708,6 +712,7 @@ export function createVaultProvider(options?: {
           authMethod: config.authMethod,
           maxVersions: config.maxVersions,
           externalPaths: config.externalPrefixes,
+          probedAt: new Date().toISOString(), // results are cached; this is when Vault was actually probed
         },
         backupGuidance: [
           "Back up Vault (its storage) as well as the Paperclip database: Vault holds the only copy of managed values.",
@@ -726,6 +731,7 @@ export function createVaultProvider(options?: {
         details: {
           code: error instanceof SecretProviderClientError ? error.code : "provider_error",
           operation: error instanceof SecretProviderClientError ? error.operation : null,
+          probedAt: new Date().toISOString(),
         },
       };
       if (cacheKey) healthCache.set(cacheKey, { result, expiresAt: Date.now() + HEALTH_CACHE_ERROR_MS });

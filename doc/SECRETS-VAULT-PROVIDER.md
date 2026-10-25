@@ -11,7 +11,9 @@ Vault unless a secret is explicitly created against a Vault provider vault.
   Kubernetes ServiceAccount (Vault Kubernetes auth) and gets a short-lived token,
   renewed at 2/3 of its TTL and re-acquired on a 403 (at most once per 30 s, and only
   if no concurrent request already replaced the token, so a policy gap cannot mint a
-  token per failing call). The projected
+  token per failing call; concurrent callers share the one re-login). Consequence: a
+  second revocation within 30 s of the first gives up to 30 s of `access_denied`
+  before the server re-authenticates. The projected
   ServiceAccount token is re-read on every login (the kubelet rotates it). The token
   is revoked (`revoke-self`) as the last step of a graceful shutdown.
 - **Per-company provider vaults** carry only an optional Vault Enterprise
@@ -53,7 +55,8 @@ Vault unless a secret is explicitly created against a Vault provider vault.
   supported.
 - **Health** writes a canary (metadata first, then data) and reads it back. The
   result is cached per server for 5 minutes (1 minute after a failure), so the Secrets
-  page's 60 s poll does not write to Vault on every tick.
+  page's 60 s poll does not write to Vault on every tick. `details.probedAt` records
+  when Vault was actually probed; a revoked role can show healthy for up to 5 minutes.
 - **Errors** map to typed codes: 400 cas → `conflict`, 400 → `invalid_request`,
   403 → `access_denied`, 404 / deleted / pruned → `not_found`, 429 → `throttled`,
   unreachable / sealed / 5xx gateway → `provider_unavailable`, else `provider_error`.
