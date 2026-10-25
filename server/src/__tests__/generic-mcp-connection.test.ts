@@ -49,6 +49,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { toolAccessService } from "../services/tool-access.js";
+import { secretService } from "../services/secrets.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import * as instanceSettingsModule from "../services/instance-settings.js";
 import { connectionIntentService } from "../services/connection-intents.js";
@@ -1107,6 +1108,68 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
     expect(serialized).not.toContain("phx_fixture_secret");
     // The header *name* is what review and diagnostics get to show.
     expect(serialized).toContain("X-Api-Key");
+  });
+
+  it("backs a header credential with an existing company secret by reference, without copying it", async () => {
+    installMcpOAuthFixture({
+      auth: "header",
+      requiredHeader: { name: "X-Api-Key", value: "phx_fixture_secret" },
+    });
+    const company = await createCompany(db);
+    const other = await createCompany(db);
+    const secrets = secretService(db);
+    // Stand-in for a read-only Vault external reference: any active company secret.
+    const linked = await secrets.create(company.id, { name: `linked-${randomUUID()}`, value: "phx_fixture_secret" });
+    const foreign = await secrets.create(other.id, { name: `foreign-${randomUUID()}`, value: "phx_fixture_secret" });
+    const archived = await secrets.create(company.id, { name: `archived-${randomUUID()}`, value: "phx_fixture_secret" });
+    await db.update(companySecrets).set({ status: "archived" }).where(eq(companySecrets.id, archived.id));
+    const service = toolAccessService(db);
+    const before = await db.select({ id: companySecrets.id }).from(companySecrets).where(eq(companySecrets.companyId, company.id));
+
+    // Discovery succeeds only if the fixture receives the right header value:
+    // the reference really resolves.
+    const result = await service.connectGalleryApp(company.id, {
+      link: MCP_URL,
+      name: "Fixture linked header",
+      authMode: "custom_headers",
+      credentialSecretIds: { "headers.X-Api-Key": linked.id },
+    });
+    expect(result.catalog).toHaveLength(2);
+    const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, result.connectionId));
+    expect(connection!.credentialSecretRefs).toEqual([
+      expect.objectContaining({ secretId: linked.id, configPath: "headers.X-Api-Key" }),
+    ]);
+    const after = await db.select({ id: companySecrets.id }).from(companySecrets).where(eq(companySecrets.companyId, company.id));
+    expect(after.length).toBe(before.length); // nothing copied
+
+    for (const [label, secretId] of [["another company's", foreign.id], ["an archived", archived.id]] as const) {
+      await expect(service.connectGalleryApp(company.id, {
+        link: MCP_URL,
+        name: `Fixture ${label}`,
+        authMode: "custom_headers",
+        credentialSecretIds: { "headers.X-Api-Key": secretId },
+      }), label).rejects.toThrow(/must be an active company secret of this company/);
+    }
+    // Reconnecting with a NEW value must not overwrite the linked secret
+    // (Paperclip does not own it): a fresh owned secret takes its place.
+    const linkedBefore = await secrets.getById(linked.id);
+    await service.reconnectGalleryApp(result.connectionId, company.id, {
+      credentialValues: { "headers.X-Api-Key": "phx_fixture_secret" },
+    });
+    const linkedAfter = await secrets.getById(linked.id);
+    expect(linkedAfter!.latestVersion).toBe(linkedBefore!.latestVersion);
+    const [reconnected] = await db.select().from(toolConnections).where(eq(toolConnections.id, result.connectionId));
+    const newRef = reconnected!.credentialSecretRefs.find((ref) => ref.configPath === "headers.X-Api-Key");
+    expect(newRef?.secretId).not.toBe(linked.id);
+    expect((await secrets.getById(newRef!.secretId))!.key.startsWith("tool_app.")).toBe(true);
+
+    await expect(service.connectGalleryApp(company.id, {
+      link: MCP_URL,
+      name: "Fixture personal",
+      authMode: "custom_headers",
+      grantKind: "user",
+      credentialSecretIds: { "headers.X-Api-Key": linked.id },
+    }, { actorType: "user", actorId: "user-1" } as never)).rejects.toThrow(/organization/);
   });
 
   it("rejects header names Paperclip refuses to send", async () => {

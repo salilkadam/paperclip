@@ -59,9 +59,18 @@ export async function writeConnectionCredential(
     if (existing?.scope === "user" && existing.ownerUserId !== input.ownerUserId) {
       throw unprocessable("Reconnect this connection as its credential owner.", { code: "grant_credential_invalid" });
     }
+    // Rotate in place only a company secret this connection flow created
+    // (`tool_app.` key, managed by Paperclip) — the same provenance rule
+    // connection removal uses. A linked secret (e.g. a Vault external reference
+    // attached via credentialSecretIds) is not ours to overwrite: a new value
+    // gets a fresh owned secret below and the ref is swapped.
+    // Owned keys: `tool_app.` (this function) and `tool-connection/<id>/oauth/`
+    // (tool-oauth-legacy-backfill.ts).
+    const ownedCompanySecret = existing?.scope === "company" && existing.managedMode === "paperclip_managed" &&
+      (existing.key.startsWith("tool_app.") || existing.key.startsWith("tool-connection/"));
     if (existing?.status === "active" && (input.ownerUserId
       ? existing.scope === "user" && Boolean(existing.userSecretDefinitionId)
-      : existing.scope === "company")) {
+      : ownedCompanySecret)) {
       const secret = input.ownerUserId
         ? await vault.rotateCurrentUserSecretValue(input.companyId, input.ownerUserId, existing.id, { value: input.value }, input.actor)
         : await vault.rotate(existing.id, { value: input.value }, input.actor);

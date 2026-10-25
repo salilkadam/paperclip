@@ -425,6 +425,13 @@ export const connectToolAppSchema = z.object({
   link: z.string().trim().url().max(2000).optional(),
   name: z.string().trim().min(1).max(160).optional(),
   credentialValues: z.record(z.string().trim().min(1).max(200), z.string().min(1)).optional(),
+  /**
+   * Use an EXISTING company secret for a credential field instead of a value,
+   * e.g. a read-only HashiCorp Vault external reference. configPath -> secret id.
+   * The secret must belong to the company, be company-scoped and active; only
+   * organization (shared) grants. The secret is referenced, never copied.
+   */
+  credentialSecretIds: z.record(z.string().trim().min(1).max(200), z.string().guid()).optional(),
   configValues: z.record(z.string().trim().min(1).max(200), z.unknown()).optional(),
   applicationId: z.string().guid().optional(),
   /** Pending connection request this setup should resolve after authorization. */
@@ -453,6 +460,25 @@ export const connectToolAppSchema = z.object({
   }
   if (value.configValues) rejectSensitiveConfigKeys(value.configValues, ctx, ["configValues"]);
   if (value.credentialValues) rejectUnsafeHeaderCredentials(value.credentialValues, ctx, ["credentialValues"]);
+  if (value.credentialSecretIds) {
+    // Same header-name gate as values (a secret id itself is a safe header value).
+    rejectUnsafeHeaderCredentials(
+      Object.fromEntries(Object.keys(value.credentialSecretIds).map((configPath) => [configPath, "secret-ref"])),
+      ctx,
+      ["credentialSecretIds"],
+    );
+    for (const configPath of Object.keys(value.credentialSecretIds)) {
+      if (value.credentialValues?.[configPath] !== undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["credentialSecretIds", configPath], message: "Give a value or an existing secret for a field, not both" });
+      }
+    }
+    if (value.grantKind && value.grantKind !== "organization") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["credentialSecretIds"], message: "Existing secrets can only back an organization (shared) credential" });
+    }
+    if (value.credentialSource === "vercel_connect") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["credentialSecretIds"], message: "Existing secrets cannot back a Vercel Connect credential" });
+    }
+  }
   if ((value.grantKind === "agent") !== Boolean(value.subjectAgentId)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["subjectAgentId"], message: "subjectAgentId is required exactly for an agent grant" });
   }

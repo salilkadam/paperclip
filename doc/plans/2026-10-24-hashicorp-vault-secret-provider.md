@@ -471,7 +471,7 @@ no SDK.
 | 5 deploy | Helm rev 63 `edf9430e2` (19:31 UTC). The pod's own Vault login was verified as uid 1000 (health `ok`, canary written, revoke-self `revoked`). A Vault provider vault per company is health `ready` and is the company default. |
 | 6 migrate | Dry run: 0 failures. Real run: Bionic AI Solutions 18 secrets + 2 definitions (19:48), Reliora Inc 25 secrets + 3 definitions (20:05). **All 43 active managed secrets on `vault`**; 0 external refs, 0 non-active. |
 | 6 checks | Post-move reads through Vault, 0 failures, 0 server error lines: plugin workers 14, tool connections 17 (Bionic AI Solutions 19:48-20:20, Reliora Inc 20:05-20:20). **Not yet observed:** an agent run resolving a secret, the Brev environment probe, an OAuth refresh writing a new Vault version. |
-| 7 PR-E | Not started (Brev and Ghost external refs) |
+| 7 PR-E | **Brev:** done 2026-10-25. The environment `sshPrivateKey` is the Vault external ref `939ce914…` (`sandbox#brev_ssh_private_key`); probe OK before and after; `sync-brev-sandbox-key.sh` retired. **Ghost:** the connect API gains `credentialSecretIds` (back a credential field with an existing company secret, organization grants only); `setup-ghost-connections.sh` defaults to linking `mcp/config#apikey_ghost_<site>_key` references. The Ghost *plugin* Admin API keys stay copies: their source `t6-apps/ghost/config` is outside the server's Vault policy by design. |
 | 8 | Blank superseded local material after the 48 h soak (decision 7.7): not before 2026-10-27 20:05 UTC |
 
 Rollback: `paperclip secrets migrate-provider --company-id <id> --to-provider local_encrypted`,

@@ -3,6 +3,10 @@
 # Paperclip image (default: the one production runs) with throwaway state, and
 # the REAL ghost MCP gateway + per-company keys from Vault.
 #
+# Runs the script in GHOST_KEY_MODE=copy: this throwaway server has no Vault.
+# Reference mode (the production default) is proven by the script's own
+# per-company test call when it runs against production.
+#
 # Proves, end to end:
 #   - both companies get a "Ghost blog" connection; re-running is idempotent
 #   - each company's agent sees only its own site (gh_list_sites)
@@ -61,10 +65,10 @@ for pair in "bionic:Bionic AI Solutions" "reliora:Reliora Inc"; do
 done
 
 echo "== setup (first run)"
-PAPERCLIP_API_BASE="$U" PAPERCLIP_BOARD_KEY_FILE="$W/boardkey" "$HERE/setup-ghost-connections.sh" | tee "$W/run1"
+GHOST_KEY_MODE=copy PAPERCLIP_API_BASE="$U" PAPERCLIP_BOARD_KEY_FILE="$W/boardkey" "$HERE/setup-ghost-connections.sh" | tee "$W/run1"
 grep -q "sees only site 'bionic'" "$W/run1" && grep -q "sees only site 'reliora'" "$W/run1" || fail "first run did not verify both"
 echo "== setup (re-run: idempotent)"
-PAPERCLIP_API_BASE="$U" PAPERCLIP_BOARD_KEY_FILE="$W/boardkey" "$HERE/setup-ghost-connections.sh" > "$W/run2"
+GHOST_KEY_MODE=copy PAPERCLIP_API_BASE="$U" PAPERCLIP_BOARD_KEY_FILE="$W/boardkey" "$HERE/setup-ghost-connections.sh" > "$W/run2"
 [[ "$(grep -c 'exists; re-applying access' "$W/run2")" -eq 2 ]] || fail "re-run created new connections"
 
 conn() { api GET "/companies/${CID[$1]}/tools/connections" | jq -r '[(if type=="array" then . else .connections end)[] | select(.name=="Ghost blog")] | if length==1 then .[0].id else error("not exactly one") end'; }
