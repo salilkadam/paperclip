@@ -9,7 +9,7 @@ A routine has:
 - A catch-up policy (what to do with missed scheduled runs)
 - An activity gate policy (whether quiet scheduled ticks should be skipped)
 
-**Authorization:** Agents can read all routines in their company but can only create or manage routines assigned to themselves. Board operators have full access, including reassignment.
+**Authorization:** Agents can read all routines in their company. An agent can create and manage routines assigned to itself, and routines assigned to agents it may configure (an `agents:configure` grant, such as a C-level's team authority over its reporting line). Board operators have full access, including reassignment.
 
 ---
 
@@ -48,7 +48,7 @@ POST /api/companies/{companyId}/routines
 |-------|----------|-------|
 | `title` | yes | Max 200 chars |
 | `description` | no | Human-readable description of the routine |
-| `assigneeAgentId` | yes | Agents: must be themselves |
+| `assigneeAgentId` | yes | Agents: themselves or an agent they may configure |
 | `projectId` | yes | |
 | `goalId` | no | Inherited by run issues |
 | `parentIssueId` | no | Run issues become children of this issue |

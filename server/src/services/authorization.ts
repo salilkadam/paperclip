@@ -1849,6 +1849,23 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
       return broadDecision;
     }
 
+    // Agent-config grants are checked against the target agent, so a grant
+    // scoped to a manager's subtree (`managedSubtreeAgentIds: [managerId]`)
+    // covers that manager's reports. An agent's OWN record is never a scoped
+    // target: a subtree contains its root, and a self-matching grant would let a
+    // manager make protected changes to itself (e.g. `role: "ceo"`). Self edits
+    // keep their existing rules (allow_self, or an unscoped grant).
+    const targetsActorItself =
+      input.actor.type === "agent" && input.resource.type === "agent"
+      && input.resource.agentId === input.actor.agentId;
+    const agentGrantScope = (() => {
+      if (input.resource.type !== "agent" || !input.resource.agentId) return input.scope;
+      if (!targetsActorItself) return { ...(input.scope ?? {}), targetAgentId: input.resource.agentId };
+      // Drop any caller-supplied target so no scoped grant can match the actor itself.
+      const { targetAgentId: _target, assigneeAgentId: _assignee, ...rest } = input.scope ?? {};
+      return input.scope ? rest : input.scope;
+    })();
+
     async function decideWithAgentConfigReadGrant(
       principalType: PrincipalType,
       principalId: string,
@@ -1859,7 +1876,7 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         principalId,
         action: input.action,
         permissionKey: "agents:configure",
-        scope: input.scope,
+        scope: agentGrantScope,
       });
       if (configureDecision.allowed || configureDecision.reason === "deny_missing_membership") {
         return configureDecision;
@@ -1871,7 +1888,7 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         principalId,
         action: input.action,
         permissionKey: "agents:suggest-changes",
-        scope: input.scope,
+        scope: agentGrantScope,
       });
       if (suggestDecision.allowed || suggestDecision.reason === "deny_missing_grant") {
         return suggestDecision;
@@ -1890,7 +1907,7 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         principalId,
         action: input.action,
         permissionKey: keys.direct,
-        scope: input.scope,
+        scope: agentGrantScope,
       });
       if (directDecision.allowed) {
         return allow({
@@ -1908,7 +1925,7 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         principalId,
         action: input.action,
         permissionKey: keys.suggest,
-        scope: input.scope,
+        scope: agentGrantScope,
       });
       if (suggestDecision.allowed) {
         if (scopeBoolean(input.scope, "consentedChange")) {
@@ -2582,7 +2599,9 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
       const restricted = await decideWithProtectedChangeGrants("agent", actorAgentId, {
         direct: "agents:configure", suggest: "agents:suggest-changes",
       });
-      if (restricted.reason !== "deny_no_grant" || input.resource.type !== "agent" || input.resource.agentId !== actorAgentId) return restricted;
+      // A scoped grant that does not cover the actor's own record (team authority
+      // never does) must not leave it worse off than holding no grant.
+      if ((restricted.reason !== "deny_no_grant" && restricted.reason !== "deny_scope") || input.resource.type !== "agent" || input.resource.agentId !== actorAgentId) return restricted;
       return allow({ action: input.action, reason: "allow_self", explanation: "Own instruction content edit, subject to the responsible user's target edit access." });
     }
 

@@ -97,13 +97,27 @@ export function routineRoutes(
     }
   }
 
-  function assertCanManageCompanyRoutine(req: Request, companyId: string, assigneeAgentId?: string | null) {
+  // An agent manages its own routines, and those of agents it may configure
+  // (an `agents:configure` grant, e.g. one scoped to its reporting subtree).
+  async function assertAgentCanManageRoutineFor(req: Request, companyId: string, assigneeAgentId?: string | null) {
+    if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
+    if (assigneeAgentId === req.actor.agentId) return;
+    if (assigneeAgentId) {
+      const decision = await access.decide({
+        actor: req.actor,
+        action: "agent_config:update",
+        resource: { type: "agent", companyId, agentId: assigneeAgentId },
+        scope: { requiresChangeGrant: true },
+      });
+      if (decision.allowed) return;
+    }
+    throw forbidden("Agents can only manage routines assigned to themselves or to agents they manage (agents:configure)");
+  }
+
+  async function assertCanManageCompanyRoutine(req: Request, companyId: string, assigneeAgentId?: string | null) {
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") return;
-    if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
-    if (assigneeAgentId !== req.actor.agentId) {
-      throw forbidden("Agents can only manage routines assigned to themselves");
-    }
+    await assertAgentCanManageRoutineFor(req, companyId, assigneeAgentId);
   }
 
   async function assertCanManageExistingRoutine(req: Request, routineId: string) {
@@ -111,10 +125,7 @@ export function routineRoutes(
     if (!routine || !hasCompanyAccess(req, routine.companyId)) return null;
     assertCompanyAccess(req, routine.companyId);
     if (req.actor.type === "board") return routine;
-    if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
-    if (routine.assigneeAgentId !== req.actor.agentId) {
-      throw forbidden("Agents can only manage routines assigned to themselves");
-    }
+    await assertAgentCanManageRoutineFor(req, routine.companyId, routine.assigneeAgentId);
     return routine;
   }
 
@@ -169,7 +180,7 @@ export function routineRoutes(
   router.post("/companies/:companyId/routines", validate(createRoutineSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertBoardCanAssignTasks(req, companyId);
-    assertCanManageCompanyRoutine(req, companyId, req.body.assigneeAgentId);
+    await assertCanManageCompanyRoutine(req, companyId, req.body.assigneeAgentId);
     const created = await svc.create(companyId, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
       userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
@@ -391,12 +402,8 @@ export function routineRoutes(
     if (statusWillActivate) {
       await assertBoardCanAssignTasks(req, routine.companyId);
     }
-    if (
-      req.actor.type === "agent" &&
-      req.body.assigneeAgentId !== undefined &&
-      req.body.assigneeAgentId !== req.actor.agentId
-    ) {
-      throw forbidden("Agents can only assign routines to themselves");
+    if (req.actor.type === "agent" && req.body.assigneeAgentId !== undefined) {
+      await assertAgentCanManageRoutineFor(req, routine.companyId, req.body.assigneeAgentId);
     }
     const updated = await svc.update(routine.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,

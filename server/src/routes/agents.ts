@@ -1418,6 +1418,48 @@ export function agentRoutes(
     return actorAgent;
   }
 
+  // `role: "ceo"` unlocks CEO-only routes (permissions, team authority, hiring
+  // authority), and `reportsTo` decides whose team authority covers an agent.
+  // For agent keys, every writer of either field (PATCH, config rollback, hire,
+  // create) goes through this check:
+  //   - only the board makes a CEO;
+  //   - an agent never changes its own manager (it cannot leave the team
+  //     authority that covers it);
+  //   - another agent's manager may be set only to the actor or to an agent the
+  //     actor may configure (its own reporting line).
+  async function assertAgentActorMayAssignRoleAndManager(
+    req: Request,
+    input: {
+      companyId: string;
+      targetAgentId: string | null;
+      currentRole: string | null;
+      currentReportsTo: string | null;
+      nextRole?: unknown;
+      setsReportsTo: boolean;
+      nextReportsTo?: unknown;
+    },
+  ) {
+    if (req.actor.type !== "agent") return;
+    if (input.nextRole === "ceo" && input.currentRole !== "ceo") {
+      throw forbidden("Only the board can assign the CEO role");
+    }
+    if (!input.setsReportsTo || input.nextReportsTo === input.currentReportsTo) return;
+    if (input.targetAgentId !== null && input.targetAgentId === req.actor.agentId) {
+      throw forbidden("Only the board can change an agent's own manager");
+    }
+    const newManagerId = typeof input.nextReportsTo === "string" ? input.nextReportsTo : null;
+    const newManagerAllowed = newManagerId !== null && (
+      newManagerId === req.actor.agentId
+      || (await access.decide({
+        actor: req.actor,
+        action: "agent_config:update",
+        resource: { type: "agent", companyId: input.companyId, agentId: newManagerId },
+        scope: { requiresChangeGrant: true },
+      })).allowed
+    );
+    if (!newManagerAllowed) throw forbidden("Agents can only place an agent under themselves or an agent they manage");
+  }
+
   async function assertBoardCanManageAgentsForCompany(req: Request, companyId: string) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
@@ -4263,6 +4305,14 @@ export function agentRoutes(
     if (!rollbackConfig) {
       throw unprocessable("Invalid revision snapshot");
     }
+    await assertAgentActorMayAssignRoleAndManager(req, {
+      companyId: existing.companyId, targetAgentId: existing.id,
+      currentRole: existing.role, currentReportsTo: existing.reportsTo ?? null,
+      nextRole: rollbackConfig.role,
+      // configPatchFromSnapshot always writes reportsTo (null when absent).
+      setsReportsTo: true,
+      nextReportsTo: typeof rollbackConfig.reportsTo === "string" ? rollbackConfig.reportsTo : null,
+    });
     assertProviderTraceSettingTransition(
       req,
       rollbackConfig.runtimeConfig,
@@ -4395,6 +4445,10 @@ export function agentRoutes(
   const handleAgentHire = async (req: Request, res: Response) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    await assertAgentActorMayAssignRoleAndManager(req, {
+      companyId, targetAgentId: null, currentRole: null, currentReportsTo: null,
+      nextRole: req.body.role, setsReportsTo: req.body.reportsTo != null, nextReportsTo: req.body.reportsTo,
+    });
     const sourceIssueIds = parseSourceIssueIds(req.body);
     const {
       desiredSkills: requestedDesiredSkills,
@@ -4785,6 +4839,10 @@ export function agentRoutes(
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    await assertAgentActorMayAssignRoleAndManager(req, {
+      companyId, targetAgentId: null, currentRole: null, currentReportsTo: null,
+      nextRole: req.body.role, setsReportsTo: req.body.reportsTo != null, nextReportsTo: req.body.reportsTo,
+    });
 
     const company = await db
       .select()
@@ -5047,6 +5105,60 @@ export function agentRoutes(
     });
 
     res.json(await buildAgentDetail(agent));
+  });
+
+  // Team authority: `agents:configure` scoped to the agent's own reporting
+  // subtree, so a C-level can configure, pause, resume and terminate its
+  // reports (and manage their routines) but never a peer or its manager.
+  // A company-wide grant is never narrowed or removed through this route.
+  router.put("/agents/:id/team-authority", async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await getAccessibleResource(req, res, svc.getById(id), "Agent not found");
+    if (!existing) return;
+    const enabled = (req.body as { enabled?: unknown } | undefined)?.enabled;
+    if (typeof enabled !== "boolean") throw badRequest("enabled must be a boolean");
+
+    if (req.actor.type === "agent") {
+      const actorAgent = req.actor.agentId ? await svc.getById(req.actor.agentId) : null;
+      if (!actorAgent || actorAgent.companyId !== existing.companyId) throw forbidden("Forbidden");
+      if (actorAgent.role !== "ceo") throw forbidden("Only CEO can manage team authority");
+    } else {
+      await assertBoardCanManageAgentsForCompany(req, existing.companyId);
+    }
+    if (existing.status === "terminated") throw conflict("Cannot grant team authority to a terminated agent");
+
+    const teamScope = { managedSubtreeAgentIds: [existing.id] };
+    const current = (await access.listPrincipalGrants(existing.companyId, "agent", existing.id))
+      .find((grant) => grant.permissionKey === "agents:configure");
+    const currentIsTeamScope = Boolean(current) && JSON.stringify(current!.scope ?? null) === JSON.stringify(teamScope);
+    if (current && !currentIsTeamScope) {
+      throw conflict("Agent already holds a differently scoped agents:configure grant; change it explicitly");
+    }
+    if (enabled !== currentIsTeamScope) {
+      await access.setPrincipalPermission(
+        existing.companyId,
+        "agent",
+        existing.id,
+        "agents:configure",
+        enabled,
+        req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+        enabled ? teamScope : null,
+      );
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId: existing.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        agentApiKeyId: actor.agentApiKeyId,
+        action: enabled ? "agent.team_authority_granted" : "agent.team_authority_revoked",
+        entityType: "agent",
+        entityId: existing.id,
+        details: { permissionKey: "agents:configure", scope: teamScope },
+      });
+    }
+    res.json({ agentId: existing.id, enabled, changed: enabled !== currentIsTeamScope, scope: enabled ? teamScope : null });
   });
 
   router.patch("/agents/:id/instructions-path", validate(updateAgentInstructionsPathSchema), async (req, res) => {
@@ -5462,6 +5574,13 @@ export function agentRoutes(
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
       return;
     }
+    await assertAgentActorMayAssignRoleAndManager(req, {
+      companyId: existing.companyId, targetAgentId: existing.id,
+      currentRole: existing.role, currentReportsTo: existing.reportsTo ?? null,
+      nextRole: (req.body as { role?: unknown }).role,
+      setsReportsTo: hasOwn(req.body as object, "reportsTo"),
+      nextReportsTo: (req.body as { reportsTo?: unknown }).reportsTo,
+    });
 
     const runtimeSettings = req.body.runtimeSettings;
     if (runtimeSettings) await assertCanConfigureAgentSetup(req, existing);
@@ -5734,7 +5853,9 @@ export function agentRoutes(
       action: "agent.updated",
       entityType: "agent",
       entityId: agent.id,
-      details: summarizeAgentUpdateDetails(patchData),
+      // `status` was removed from patchData above; record the lifecycle
+      // command so a manager's pause/terminate of a report stays auditable.
+      details: { ...summarizeAgentUpdateDetails(patchData), ...(command ? { lifecycleCommand: command } : {}) },
     });
 
     res.json(redactAgentRowForResponse(agent));

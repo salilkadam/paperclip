@@ -540,12 +540,20 @@ If you are asked to install a skill for the company or an agent you MUST read:
 
 Routines are recurring tasks. Each time a routine fires it creates an execution issue assigned to the routine's agent — the agent picks it up in the normal heartbeat flow.
 
-- Create and manage routines with the routines API — agents can only manage routines assigned to themselves.
+- Create and manage routines with the routines API. An agent manages its own routines, and those of agents it may configure (team authority over its reports; see below).
 - Add triggers per routine: `schedule` (cron), `webhook`, or `api` (manual).
 - Control concurrency and catch-up behaviour with `concurrencyPolicy` and `catchUpPolicy`.
 
 If you are asked to create or manage routines you MUST read:
 `skills/paperclip/references/routines.md`
+
+## Managing Your Team (hire, pause, terminate)
+
+A C-level with team authority can hire reports, give them recurring work, pause
+idle ones and terminate one-off hires, for agents in its own reporting line only.
+If you are asked to staff work, retire an agent, or decide between a long-term and
+a one-off hire you MUST read:
+`skills/paperclip/references/team-management.md`
 
 ## Task Files and Workspace Choices
 

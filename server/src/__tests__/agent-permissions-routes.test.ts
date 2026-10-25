@@ -2365,6 +2365,155 @@ describe("agent permission routes", () => {
     expect(res.body.error).toBe("Heartbeat run not found");
     expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
   });
+
+  describe("agent keys and the CEO role / reporting line", () => {
+    const managerId = "33333333-3333-4333-8333-333333333333";
+    const outsiderId = "44444444-4444-4444-8444-444444444444";
+    const managerActor = { type: "agent", agentId: managerId, companyId, source: "agent_key" };
+    beforeEach(() => {
+      mockAgentService.getById.mockImplementation(async (id: string) =>
+        id === managerId ? { ...baseAgent, id: managerId, role: "cmo" } : { ...baseAgent, reportsTo: managerId });
+      // The manager may configure its report (agentId) but nobody else.
+      // Mirrors the real service: the report is in the manager's line; the
+      // manager's own record allows plain self edits (allow_self) only.
+      mockAccessService.decide.mockImplementation(async (input: { action?: string; resource?: { agentId?: string }; scope?: { requiresChangeGrant?: boolean } }) => {
+        const allowed = input.action === "agents:create" || input.resource?.agentId === agentId
+          || (input.resource?.agentId === managerId && !input.scope?.requiresChangeGrant);
+        return { allowed, reason: allowed ? "allow_direct_change" : "deny_scope", explanation: "test" };
+      });
+    });
+
+    it("refuses an agent making its report a CEO", async () => {
+      const app = await createApp(managerActor);
+      const res = await requestApp(app, (baseUrl) => request(baseUrl).patch(`/api/agents/${agentId}`).send({ role: "ceo" }));
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toBe("Only the board can assign the CEO role");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses an agent hiring or creating a CEO", async () => {
+      const app = await createApp(managerActor);
+      for (const path of ["agent-hires", "agents"]) {
+        const res = await requestApp(app, (baseUrl) => request(baseUrl)
+          .post(`/api/companies/${companyId}/${path}`)
+          .send({ name: "Boss", role: "ceo", adapterType: "process", adapterConfig: {} }));
+        expect(res.status, `${path}: ${JSON.stringify(res.body)}`).toBe(403);
+        expect(res.body.error).toBe("Only the board can assign the CEO role");
+      }
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+    });
+
+    it("refuses an agent changing its own manager", async () => {
+      const app = await createApp(managerActor);
+      const res = await requestApp(app, (baseUrl) => request(baseUrl).patch(`/api/agents/${managerId}`).send({ reportsTo: outsiderId }));
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toBe("Only the board can change an agent's own manager");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses a config rollback that would make a CEO or move a report out of the line", async () => {
+      const app = await createApp(managerActor);
+      const revisionId = "55555555-5555-4555-8555-555555555555";
+      for (const [afterConfig, error] of [
+        [{ role: "ceo", reportsTo: managerId }, "Only the board can assign the CEO role"],
+        [{ role: "engineer", reportsTo: outsiderId }, "Agents can only place an agent under themselves or an agent they manage"],
+        [{ role: "engineer" }, "Agents can only place an agent under themselves or an agent they manage"],
+      ] as const) {
+        mockAgentService.getConfigRevision.mockResolvedValue({ id: revisionId, agentId, afterConfig: { ...afterConfig, adapterType: "process", adapterConfig: {} } });
+        const res = await requestApp(app, (baseUrl) => request(baseUrl)
+          .post(`/api/agents/${agentId}/config-revisions/${revisionId}/rollback`).send({}));
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+        expect(res.body.error).toBe(error);
+      }
+      expect(mockAgentService.rollbackConfigRevision).not.toHaveBeenCalled();
+    });
+
+    it("refuses hiring under an agent outside the hirer's line", async () => {
+      const app = await createApp(managerActor);
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .post(`/api/companies/${companyId}/agent-hires`)
+        .send({ name: "Helper", role: "engineer", reportsTo: outsiderId, adapterType: "process", adapterConfig: {} }));
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toBe("Agents can only place an agent under themselves or an agent they manage");
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+    });
+
+    it("refuses moving a report under an agent outside the manager's line", async () => {
+      const app = await createApp(managerActor);
+      for (const reportsTo of [outsiderId, null]) {
+        const res = await requestApp(app, (baseUrl) => request(baseUrl).patch(`/api/agents/${agentId}`).send({ reportsTo }));
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+        expect(res.body.error).toBe("Agents can only place an agent under themselves or an agent they manage");
+      }
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("PUT /api/agents/:id/team-authority", () => {
+    const teamScope = { managedSubtreeAgentIds: [agentId] };
+    const boardActor = { type: "board", userId: "board-user", source: "session", isInstanceAdmin: false, companyIds: [companyId] };
+    const put = async (actor: Record<string, unknown>, body: unknown) => {
+      const app = await createApp(actor);
+      return requestApp(app, (baseUrl) => request(baseUrl).put(`/api/agents/${agentId}/team-authority`).send(body as object));
+    };
+
+    it("grants agents:configure scoped to the agent's own subtree and logs it", async () => {
+      const res = await put(boardActor, { enabled: true });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body).toMatchObject({ enabled: true, changed: true, scope: teamScope });
+      expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+        companyId, "agent", agentId, "agents:configure", true, "board-user", teamScope,
+      );
+      expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        action: "agent.team_authority_granted", entityId: agentId,
+      }));
+    });
+
+    it("is idempotent when the team grant already exists", async () => {
+      mockAccessService.listPrincipalGrants.mockResolvedValue([{ permissionKey: "agents:configure", scope: teamScope }]);
+
+      const res = await put(boardActor, { enabled: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body.changed).toBe(false);
+      expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+    });
+
+    it("never narrows or removes a company-wide agents:configure grant", async () => {
+      mockAccessService.listPrincipalGrants.mockResolvedValue([{ permissionKey: "agents:configure", scope: null }]);
+
+      for (const enabled of [true, false]) {
+        const res = await put(boardActor, { enabled });
+        expect(res.status, JSON.stringify(res.body)).toBe(409);
+      }
+      expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+    });
+
+    it("revokes only the team grant", async () => {
+      mockAccessService.listPrincipalGrants.mockResolvedValue([{ permissionKey: "agents:configure", scope: teamScope }]);
+
+      const res = await put(boardActor, { enabled: false });
+
+      expect(res.status).toBe(200);
+      expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+        companyId, "agent", agentId, "agents:configure", false, "board-user", null,
+      );
+    });
+
+    it("refuses a non-CEO agent and a malformed body", async () => {
+      const managerId = "33333333-3333-4333-8333-333333333333";
+      mockAgentService.getById.mockImplementation(async (id: string) =>
+        id === managerId ? { ...baseAgent, id: managerId, role: "cmo" } : baseAgent);
+
+      const asCmo = await put({ type: "agent", agentId: managerId, companyId, source: "agent_key" }, { enabled: true });
+      expect(asCmo.status).toBe(403);
+
+      const malformed = await put(boardActor, { enabled: "yes" });
+      expect(malformed.status).toBe(400);
+      expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+    });
+  });
 });
 
 vi.mock("../services/agent-lifecycle.js", async (importOriginal) => {
