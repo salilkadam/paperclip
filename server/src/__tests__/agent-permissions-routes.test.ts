@@ -2374,8 +2374,11 @@ describe("agent permission routes", () => {
       mockAgentService.getById.mockImplementation(async (id: string) =>
         id === managerId ? { ...baseAgent, id: managerId, role: "cmo" } : { ...baseAgent, reportsTo: managerId });
       // The manager may configure its report (agentId) but nobody else.
-      mockAccessService.decide.mockImplementation(async (input: { action?: string; resource?: { agentId?: string } }) => {
-        const allowed = input.action === "agents:create" || input.resource?.agentId === agentId;
+      // Mirrors the real service: the report is in the manager's line; the
+      // manager's own record allows plain self edits (allow_self) only.
+      mockAccessService.decide.mockImplementation(async (input: { action?: string; resource?: { agentId?: string }; scope?: { requiresChangeGrant?: boolean } }) => {
+        const allowed = input.action === "agents:create" || input.resource?.agentId === agentId
+          || (input.resource?.agentId === managerId && !input.scope?.requiresChangeGrant);
         return { allowed, reason: allowed ? "allow_direct_change" : "deny_scope", explanation: "test" };
       });
     });
@@ -2400,12 +2403,47 @@ describe("agent permission routes", () => {
       expect(mockAgentService.create).not.toHaveBeenCalled();
     });
 
+    it("refuses an agent changing its own manager", async () => {
+      const app = await createApp(managerActor);
+      const res = await requestApp(app, (baseUrl) => request(baseUrl).patch(`/api/agents/${managerId}`).send({ reportsTo: outsiderId }));
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toBe("Only the board can change an agent's own manager");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses a config rollback that would make a CEO or move a report out of the line", async () => {
+      const app = await createApp(managerActor);
+      const revisionId = "55555555-5555-4555-8555-555555555555";
+      for (const [afterConfig, error] of [
+        [{ role: "ceo", reportsTo: managerId }, "Only the board can assign the CEO role"],
+        [{ role: "engineer", reportsTo: outsiderId }, "Agents can only place an agent under themselves or an agent they manage"],
+        [{ role: "engineer" }, "Agents can only place an agent under themselves or an agent they manage"],
+      ] as const) {
+        mockAgentService.getConfigRevision.mockResolvedValue({ id: revisionId, agentId, afterConfig: { ...afterConfig, adapterType: "process", adapterConfig: {} } });
+        const res = await requestApp(app, (baseUrl) => request(baseUrl)
+          .post(`/api/agents/${agentId}/config-revisions/${revisionId}/rollback`).send({}));
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+        expect(res.body.error).toBe(error);
+      }
+      expect(mockAgentService.rollbackConfigRevision).not.toHaveBeenCalled();
+    });
+
+    it("refuses hiring under an agent outside the hirer's line", async () => {
+      const app = await createApp(managerActor);
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .post(`/api/companies/${companyId}/agent-hires`)
+        .send({ name: "Helper", role: "engineer", reportsTo: outsiderId, adapterType: "process", adapterConfig: {} }));
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toBe("Agents can only place an agent under themselves or an agent they manage");
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+    });
+
     it("refuses moving a report under an agent outside the manager's line", async () => {
       const app = await createApp(managerActor);
       for (const reportsTo of [outsiderId, null]) {
         const res = await requestApp(app, (baseUrl) => request(baseUrl).patch(`/api/agents/${agentId}`).send({ reportsTo }));
         expect(res.status, JSON.stringify(res.body)).toBe(403);
-        expect(res.body.error).toBe("Agents can only move a report under themselves or an agent they manage");
+        expect(res.body.error).toBe("Agents can only place an agent under themselves or an agent they manage");
       }
       expect(mockAgentService.update).not.toHaveBeenCalled();
     });

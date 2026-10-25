@@ -2119,12 +2119,14 @@ describe("TaskChatComposer", () => {
         takeover: {
           id: "tool-1", label: "Approve tool action", pendingCount: 3,
           content: <p>Publish the blog</p>, onDismiss: vi.fn(), onSkip: vi.fn(), onShowNext: vi.fn(),
-          approveAll: { count: 3, run },
+          approveAll: { count: 3, labels: ['gh_publish_post', 'update-post-tool', 'update-post-tool'], run },
         },
       });
 
       const approveAll = () => container.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-approve-all"]')!;
       expect(approveAll().textContent).toBe("Approve all 3");
+      expect(container.querySelector('[data-testid="task-chat-composer-approve-all-list"]')?.textContent)
+        .toBe("Approve all runs, in order: gh_publish_post → update-post-tool → update-post-tool");
       await act(async () => approveAll().click());
       expect(run).toHaveBeenCalledTimes(1);
       expect(container.textContent).not.toContain("Second action expired");

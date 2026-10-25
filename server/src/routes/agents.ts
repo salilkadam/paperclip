@@ -1419,12 +1419,45 @@ export function agentRoutes(
   }
 
   // `role: "ceo"` unlocks CEO-only routes (permissions, team authority, hiring
-  // authority). An agent key may never assign it, to itself or to anyone it
-  // hires or manages; only the board makes a CEO.
-  function assertAgentActorDoesNotAssignCeoRole(req: Request, role: unknown) {
-    if (req.actor.type === "agent" && role === "ceo") {
+  // authority), and `reportsTo` decides whose team authority covers an agent.
+  // For agent keys, every writer of either field (PATCH, config rollback, hire,
+  // create) goes through this check:
+  //   - only the board makes a CEO;
+  //   - an agent never changes its own manager (it cannot leave the team
+  //     authority that covers it);
+  //   - another agent's manager may be set only to the actor or to an agent the
+  //     actor may configure (its own reporting line).
+  async function assertAgentActorMayAssignRoleAndManager(
+    req: Request,
+    input: {
+      companyId: string;
+      targetAgentId: string | null;
+      currentRole: string | null;
+      currentReportsTo: string | null;
+      nextRole?: unknown;
+      setsReportsTo: boolean;
+      nextReportsTo?: unknown;
+    },
+  ) {
+    if (req.actor.type !== "agent") return;
+    if (input.nextRole === "ceo" && input.currentRole !== "ceo") {
       throw forbidden("Only the board can assign the CEO role");
     }
+    if (!input.setsReportsTo || input.nextReportsTo === input.currentReportsTo) return;
+    if (input.targetAgentId !== null && input.targetAgentId === req.actor.agentId) {
+      throw forbidden("Only the board can change an agent's own manager");
+    }
+    const newManagerId = typeof input.nextReportsTo === "string" ? input.nextReportsTo : null;
+    const newManagerAllowed = newManagerId !== null && (
+      newManagerId === req.actor.agentId
+      || (await access.decide({
+        actor: req.actor,
+        action: "agent_config:update",
+        resource: { type: "agent", companyId: input.companyId, agentId: newManagerId },
+        scope: { requiresChangeGrant: true },
+      })).allowed
+    );
+    if (!newManagerAllowed) throw forbidden("Agents can only place an agent under themselves or an agent they manage");
   }
 
   async function assertBoardCanManageAgentsForCompany(req: Request, companyId: string) {
@@ -4272,6 +4305,14 @@ export function agentRoutes(
     if (!rollbackConfig) {
       throw unprocessable("Invalid revision snapshot");
     }
+    await assertAgentActorMayAssignRoleAndManager(req, {
+      companyId: existing.companyId, targetAgentId: existing.id,
+      currentRole: existing.role, currentReportsTo: existing.reportsTo ?? null,
+      nextRole: rollbackConfig.role,
+      // configPatchFromSnapshot always writes reportsTo (null when absent).
+      setsReportsTo: true,
+      nextReportsTo: typeof rollbackConfig.reportsTo === "string" ? rollbackConfig.reportsTo : null,
+    });
     assertProviderTraceSettingTransition(
       req,
       rollbackConfig.runtimeConfig,
@@ -4404,7 +4445,10 @@ export function agentRoutes(
   const handleAgentHire = async (req: Request, res: Response) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
-    assertAgentActorDoesNotAssignCeoRole(req, req.body.role);
+    await assertAgentActorMayAssignRoleAndManager(req, {
+      companyId, targetAgentId: null, currentRole: null, currentReportsTo: null,
+      nextRole: req.body.role, setsReportsTo: req.body.reportsTo != null, nextReportsTo: req.body.reportsTo,
+    });
     const sourceIssueIds = parseSourceIssueIds(req.body);
     const {
       desiredSkills: requestedDesiredSkills,
@@ -4795,7 +4839,10 @@ export function agentRoutes(
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
-    assertAgentActorDoesNotAssignCeoRole(req, req.body.role);
+    await assertAgentActorMayAssignRoleAndManager(req, {
+      companyId, targetAgentId: null, currentRole: null, currentReportsTo: null,
+      nextRole: req.body.role, setsReportsTo: req.body.reportsTo != null, nextReportsTo: req.body.reportsTo,
+    });
 
     const company = await db
       .select()
@@ -5527,26 +5574,13 @@ export function agentRoutes(
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
       return;
     }
-    if (existing.role !== "ceo") assertAgentActorDoesNotAssignCeoRole(req, (req.body as { role?: unknown }).role);
-    // A manager may re-parent another agent only within its own reporting line:
-    // the new manager must be the actor or an agent the actor may configure.
-    const requestedReportsTo = (req.body as { reportsTo?: unknown }).reportsTo;
-    if (
-      req.actor.type === "agent" && hasOwn(req.body as object, "reportsTo")
-      && existing.id !== req.actor.agentId && requestedReportsTo !== existing.reportsTo
-    ) {
-      const newManagerId = typeof requestedReportsTo === "string" ? requestedReportsTo : null;
-      const newManagerAllowed = newManagerId !== null && (
-        newManagerId === req.actor.agentId
-        || (await access.decide({
-          actor: req.actor,
-          action: "agent_config:update",
-          resource: { type: "agent", companyId: existing.companyId, agentId: newManagerId },
-          scope: { requiresChangeGrant: true },
-        })).allowed
-      );
-      if (!newManagerAllowed) throw forbidden("Agents can only move a report under themselves or an agent they manage");
-    }
+    await assertAgentActorMayAssignRoleAndManager(req, {
+      companyId: existing.companyId, targetAgentId: existing.id,
+      currentRole: existing.role, currentReportsTo: existing.reportsTo ?? null,
+      nextRole: (req.body as { role?: unknown }).role,
+      setsReportsTo: hasOwn(req.body as object, "reportsTo"),
+      nextReportsTo: (req.body as { reportsTo?: unknown }).reportsTo,
+    });
 
     const runtimeSettings = req.body.runtimeSettings;
     if (runtimeSettings) await assertCanConfigureAgentSetup(req, existing);

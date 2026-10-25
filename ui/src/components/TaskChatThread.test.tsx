@@ -3278,6 +3278,8 @@ describe("TaskChatThread runtime transcript selection", () => {
 
     const approveAll = container.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-approve-all"]');
     expect(approveAll?.textContent).toBe("Approve all 2");
+    expect(container.querySelector('[data-testid="task-chat-composer-approve-all-list"]')?.textContent)
+      .toBe("Approve all runs, in order: gh_publish_post → update-post-tool");
     await act(async () => approveAll!.click());
     // Oldest first: the blog is published before its LinkedIn post is scheduled.
     expect(onAcceptInteraction.mock.calls.map(([interaction]) => interaction.id))

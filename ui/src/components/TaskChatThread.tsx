@@ -2877,6 +2877,8 @@ export function TaskChatThread(props: TaskChatThreadProps) {
     onAcceptInteraction && selectedIsToolAction && pendingToolActionInteractions.length > 1
       ? {
           count: pendingToolActionInteractions.length,
+          labels: pendingToolActionInteractions.map((interaction) =>
+            interaction.payload.toolAction?.toolDisplayName ?? interaction.title ?? "Tool action"),
           run: async () => {
             for (const interaction of pendingToolActionInteractions) {
               await onAcceptInteraction(interaction);

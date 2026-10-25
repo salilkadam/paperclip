@@ -89,7 +89,7 @@ export interface TaskChatComposerTakeover {
   /** Some decision surfaces already provide a non-accept path of their own. */
   hideSkip?: boolean;
   /** One decision for several pending tool-action approvals on this task. */
-  approveAll?: { count: number; run: () => Promise<void> };
+  approveAll?: { count: number; labels: string[]; run: () => Promise<void> };
 }
 
 interface TaskChatComposerProps {
@@ -1251,6 +1251,11 @@ export function TaskChatComposer({
               </Button>
             </div>
           </div>
+          {takeover.approveAll ? (
+            <p className="mb-2 text-xs text-muted-foreground" data-testid="task-chat-composer-approve-all-list">
+              Approve all runs, in order: {takeover.approveAll.labels.join(" → ")}
+            </p>
+          ) : null}
           <div className={takeover.hideLabel && takeover.pendingCount === 1 ? "pr-8" : "pr-1"}
             data-testid="task-chat-composer-takeover-body">
             <TaskChatComposerTakeoverActionsContext.Provider

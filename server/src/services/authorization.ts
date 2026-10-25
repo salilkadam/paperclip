@@ -1858,10 +1858,13 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
     const targetsActorItself =
       input.actor.type === "agent" && input.resource.type === "agent"
       && input.resource.agentId === input.actor.agentId;
-    const agentGrantScope =
-      input.resource.type === "agent" && input.resource.agentId && !targetsActorItself
-        ? { ...(input.scope ?? {}), targetAgentId: input.resource.agentId }
-        : input.scope;
+    const agentGrantScope = (() => {
+      if (input.resource.type !== "agent" || !input.resource.agentId) return input.scope;
+      if (!targetsActorItself) return { ...(input.scope ?? {}), targetAgentId: input.resource.agentId };
+      // Drop any caller-supplied target so no scoped grant can match the actor itself.
+      const { targetAgentId: _target, assigneeAgentId: _assignee, ...rest } = input.scope ?? {};
+      return input.scope ? rest : input.scope;
+    })();
 
     async function decideWithAgentConfigReadGrant(
       principalType: PrincipalType,
@@ -2596,7 +2599,9 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
       const restricted = await decideWithProtectedChangeGrants("agent", actorAgentId, {
         direct: "agents:configure", suggest: "agents:suggest-changes",
       });
-      if (restricted.reason !== "deny_no_grant" || input.resource.type !== "agent" || input.resource.agentId !== actorAgentId) return restricted;
+      // A scoped grant that does not cover the actor's own record (team authority
+      // never does) must not leave it worse off than holding no grant.
+      if ((restricted.reason !== "deny_no_grant" && restricted.reason !== "deny_scope") || input.resource.type !== "agent" || input.resource.agentId !== actorAgentId) return restricted;
       return allow({ action: input.action, reason: "allow_self", explanation: "Own instruction content edit, subject to the responsible user's target edit access." });
     }
 

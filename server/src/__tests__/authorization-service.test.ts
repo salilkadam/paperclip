@@ -340,6 +340,15 @@ describeEmbeddedPostgres("authorization service", () => {
     // The holder's own record is not a scoped target: no protected self change
     // (e.g. promoting itself to role "ceo") through its own team grant.
     await expect(decideFor(cmo.id)).resolves.toMatchObject({ allowed: false });
+    // ...not even when the caller supplies the target itself.
+    for (const scope of [{ targetAgentId: cmo.id }, { assigneeAgentId: marketer.id }]) {
+      await expect(authz.decide({
+        actor: { type: "agent", agentId: cmo.id, companyId: company.id, source: "agent_key" },
+        action: "agent_config:update",
+        resource: { type: "agent", companyId: company.id, agentId: cmo.id },
+        scope: { requiresChangeGrant: true, ...scope },
+      })).resolves.toMatchObject({ allowed: false });
+    }
   });
 
   it("enforces direct or consented suggest grants for agent configuration changes", async () => {
