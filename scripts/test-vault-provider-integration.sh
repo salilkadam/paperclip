@@ -4,7 +4,8 @@
 #
 # Starts hashicorp/vault in dev mode (KV v2 at secret/), installs a policy shaped
 # like production's app policy (managed prefix: create/read/update + metadata
-# read/update + soft delete; external path read-only; NO destroy, NO patch),
+# create/read/update -- `create` is required to set max_versions on a NEW key,
+# proven by this test on 2026-10-25 -- + soft delete; external path read-only; NO destroy, NO patch),
 # mints a token carrying only that policy, seeds an external fixture, and runs
 # server/src/__tests__/vault-provider.integration.test.ts.
 #
@@ -28,7 +29,7 @@ root vault status >/dev/null || { echo "Vault did not start" >&2; exit 1; }
 
 root vault policy write paperclip-secrets - >/dev/null <<'HCL'
 path "secret/data/t6-apps/bionic-org/paperclip/*" { capabilities = ["create", "read", "update"] }
-path "secret/metadata/t6-apps/bionic-org/paperclip/*" { capabilities = ["read", "update"] }
+path "secret/metadata/t6-apps/bionic-org/paperclip/*" { capabilities = ["create", "read", "update"] }
 path "secret/delete/t6-apps/bionic-org/paperclip/*" { capabilities = ["update"] }
 path "secret/data/t6-apps/bionic-org/sandbox" { capabilities = ["read"] }
 HCL
