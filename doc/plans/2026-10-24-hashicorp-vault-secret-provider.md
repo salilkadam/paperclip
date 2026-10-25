@@ -372,6 +372,22 @@ no SDK.
   deployments configured only through env would otherwise break. The UI no longer
   sends a bare family: the create dialog starts on the company default vault and
   sends its id.
+- **Behaviour changes for deployments that never set a company default** (review
+  F2, accepted as intended):
+  - Every site that hard-coded `local_encrypted` now uses the deployment provider
+    (`PAPERCLIP_SECRETS_PROVIDER`). This is identical when that is `local_encrypted`,
+    as in production.
+  - A request that names a family but no vault now lands in that family's
+    `isDefault` vault. Before, it used env configuration even when such a vault
+    existed.
+- **Backfill caveat** (review F1): `provider_config_id` is copied from the parent's
+  *current* vault. A secret rotated across two vaults of one provider before 0375
+  keeps the pre-existing behaviour of resolving old versions through the current
+  vault. Production had 0 provider vault rows (§2), so no row is affected.
+- The legacy OAuth backfill shares the routines limit (review F4): the provider write
+  happens before its per-connection transaction commits. A rolled-back connection
+  leaves an unreferenced provider entry under the company's own path. It is a
+  one-off job.
 - Routine webhook secrets did not get a `createInTransaction` variant. They resolve
   the company default, pick the secret id up front (Vault derives the path from it),
   write to the provider, then insert in the existing transaction, and remove the

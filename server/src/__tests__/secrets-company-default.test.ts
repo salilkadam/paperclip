@@ -29,6 +29,7 @@ import { awsSecretsManagerProvider } from "../secrets/aws-secrets-manager-provid
 import { localEncryptedProvider } from "../secrets/local-encrypted-provider.js";
 import { secretService } from "../services/secrets.js";
 import { writeConnectionCredential } from "../services/connection-credentials.js";
+import { logger } from "../middleware/logger.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -176,6 +177,26 @@ describeEmbeddedPostgres("company default secret provider", () => {
     expect(await svc.resolveWriteTarget(companyId, {})).toEqual({ provider: "local_encrypted", providerConfigId: null });
   });
 
+  it("refuses to make a vault the default if it was disabled after the pre-check", async () => {
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    const vault = await svc.createProviderConfig(companyId, {
+      provider: "aws_secrets_manager", displayName: "AWS", config: { region: "us-east-1" },
+    });
+    // Already disabled: the pre-check refuses.
+    await db.update(companySecretProviderConfigs).set({ status: "disabled" }).where(eq(companySecretProviderConfigs.id, vault.id));
+    await expect(svc.setCompanyDefaultProviderConfig(companyId, vault.id)).rejects.toThrow(/ready or warning/);
+    await db.update(companySecretProviderConfigs).set({ status: "ready" }).where(eq(companySecretProviderConfigs.id, vault.id));
+    const raced = db.update(companySecretProviderConfigs).set({ status: "disabled" }).where(eq(companySecretProviderConfigs.id, vault.id));
+    const originalTransaction = db.transaction.bind(db);
+    vi.spyOn(db, "transaction").mockImplementationOnce(async (fn: never) => {
+      await raced; // the vault is disabled between the pre-check and the update
+      return originalTransaction(fn);
+    });
+    await expect(svc.setCompanyDefaultProviderConfig(companyId, vault.id)).rejects.toThrow(/changed while setting/);
+    expect(await svc.getCompanyDefaultProviderConfig(companyId)).toBeNull();
+  });
+
   it("formerly hard-coded local sites follow the default: Claude OAuth definition and shared connection credentials", async () => {
     const companyId = await seedCompany();
     const vault = await awsCompanyDefault(companyId);
@@ -247,6 +268,23 @@ describeEmbeddedPostgres("company default secret provider", () => {
       context: expect.objectContaining({ secretId: secret.id }),
     }));
     expect(localDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("says so when a version's vault is disabled and its provider copy cannot be deleted", async () => {
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    const vault = await awsCompanyDefault(companyId);
+    vi.spyOn(awsSecretsManagerProvider, "createSecret").mockResolvedValue(awsPrepared("aws-1"));
+    const secret = await svc.create(companyId, { name: `stranded-${randomUUID()}`, value: "x" });
+    await svc.disableProviderConfig(vault.id);
+    const awsDelete = vi.spyOn(awsSecretsManagerProvider, "deleteOrArchive").mockResolvedValue();
+    const warn = vi.spyOn(logger, "warn");
+    await svc.remove(secret.id);
+    expect(awsDelete).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ secretId: secret.id, providerConfigId: vault.id }),
+      expect.stringMatching(/provider-side value was not deleted/),
+    );
   });
 
   it("the migration backfills each existing version's provider from its parent", async () => {

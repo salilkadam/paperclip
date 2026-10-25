@@ -3640,7 +3640,15 @@ export function secretService(db: Db | DbTransaction) {
         providerConfig && providerConfig.status !== "disabled" && providerConfig.status !== "coming_soon"
           ? toProviderVaultRuntimeConfig(providerConfig)
           : null;
-      if (group.providerConfigId && !providerRuntimeConfig) continue;
+      if (group.providerConfigId && !providerRuntimeConfig) {
+        // Disabled/coming-soon/removed vault: Paperclip cannot reach it, so the
+        // provider-side value is left in place. Say so instead of skipping silently.
+        logger.warn(
+          { secretId: secret.id, companyId: secret.companyId, provider: group.providerId, providerConfigId: group.providerConfigId },
+          "secret delete: provider vault is disabled or missing; provider-side value was not deleted",
+        );
+        continue;
+      }
       try {
         await provider.deleteOrArchive({
           material: group.versionRow?.material as Record<string, unknown> | undefined,
@@ -3874,12 +3882,25 @@ export function secretService(db: Db | DbTransaction) {
             eq(companySecretProviderConfigs.isCompanyDefault, true),
           ));
         if (!providerConfigId) return null;
-        return tx
+        // Re-check status in the same statement: a vault disabled since the
+        // pre-check above must not become the default.
+        const updated = await tx
           .update(companySecretProviderConfigs)
           .set({ isCompanyDefault: true, updatedAt: new Date() })
-          .where(eq(companySecretProviderConfigs.id, providerConfigId))
+          .where(and(
+            eq(companySecretProviderConfigs.id, providerConfigId),
+            eq(companySecretProviderConfigs.companyId, companyId),
+            inArray(companySecretProviderConfigs.status, ["ready", "warning"]),
+          ))
           .returning()
           .then((rows) => rows[0] ?? null);
+        if (!updated) throw conflict("Provider vault changed while setting the company default; retry");
+        return updated;
+      }).catch((error) => {
+        if (isUniqueConstraintViolation(error, "company_secret_provider_configs_company_default_uq")) {
+          throw conflict("Another company default was set concurrently; retry");
+        }
+        throw error;
       });
     },
 

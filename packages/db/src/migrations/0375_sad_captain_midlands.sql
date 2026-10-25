@@ -3,8 +3,12 @@ ALTER TABLE "company_secret_versions" ADD COLUMN "provider" text;--> statement-b
 ALTER TABLE "company_secret_versions" ADD COLUMN "provider_config_id" uuid;--> statement-breakpoint
 ALTER TABLE "company_secret_versions" ADD CONSTRAINT "company_secret_versions_provider_config_id_company_secret_provider_configs_id_fk" FOREIGN KEY ("provider_config_id") REFERENCES "public"."company_secret_provider_configs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "company_secret_provider_configs_company_default_uq" ON "company_secret_provider_configs" USING btree ("company_id") WHERE "company_secret_provider_configs"."is_company_default" = true;--> statement-breakpoint
--- Backfill: every existing version was written through its parent's provider and
--- provider vault (company_secrets.provider is immutable before this change).
+-- Backfill from the parent. company_secrets.provider was immutable before this
+-- change, so the provider is exact. provider_config_id is the parent's CURRENT
+-- vault: a secret rotated into another vault of the same provider before this
+-- migration gets that vault on its older versions too, as resolution already
+-- assumed. Production had no provider vault rows when this shipped (all local,
+-- whose material is self-contained), so no row is affected there.
 UPDATE "company_secret_versions" AS v
 SET "provider" = s."provider", "provider_config_id" = s."provider_config_id"
 FROM "company_secrets" AS s
