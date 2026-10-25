@@ -102,7 +102,11 @@ describe.skipIf(!run)("vault provider against a real Vault 1.21", () => {
   it("passes its health check (canary written metadata-first and read back)", async () => {
     const provider = createVaultProvider({ config: config() });
     const health = await provider.healthCheck();
-    expect(health.status, health.message).toBe("ok");
+    // The throwaway Vault speaks plain http on 127.0.0.1, which the provider
+    // rightly warns about; anything else would be a real health problem.
+    expect(health.status, health.message).not.toBe("error");
+    expect(health.message).toMatch(/can write, read and cap versions/);
+    expect(health.warnings ?? []).toEqual([expect.stringMatching(/plain http outside the cluster network/)]);
   });
 
   it("maps an unreachable Vault to provider_unavailable", async () => {
