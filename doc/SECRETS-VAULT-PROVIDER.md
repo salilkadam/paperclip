@@ -87,6 +87,42 @@ family but no vault uses that family's default vault if one exists.
   `DELETE /api/companies/:companyId/secret-provider-configs/company-default`. Both are
   recorded in the activity log.
 
+## Moving existing secrets between providers
+
+```
+paperclip secrets migrate-provider --company <id> --dry-run            # to the company default
+paperclip secrets migrate-provider --company <id> --to-vault <configId>
+paperclip secrets migrate-provider --company <id> --to-provider local_encrypted   # rollback
+paperclip secrets migrate-provider --company <id> --secret <id> [--secret <id>]   # a subset
+```
+
+(API: `POST /api/companies/:companyId/secrets/migrate-provider` with `targetProviderConfigId`,
+`targetProvider`, `dryRun`, `secretIds`. **Instance admin only.**)
+
+For each active, Paperclip-managed secret (company, user and instance scope; user
+values first, the most-rotated last):
+
+1. Read the current version through the provider it lives in, and check that its value
+   hashes to the version's recorded `value_sha256`.
+2. **Dry run stops here.** Nothing is written.
+3. Write the value to the target as the next version. If the secret was stored in the
+   target before (e.g. after a rollback), add a version to that entry instead of
+   creating a new one.
+4. Read the value back from the target and compare digests.
+5. Commit in one transaction:
+   `UPDATE company_secrets SET latest_version=N+1, provider=…, provider_config_id=… WHERE id=? AND latest_version=N`,
+   plus the version insert. If anything rotated the secret meanwhile (including an OAuth
+   refresh in another process), the UPDATE matches nothing: the target write is removed
+   and that secret reports a 409 conflict. Re-run to pick it up.
+6. A user-secret definition moves to the target once all its live values have moved, so
+   new values for that definition follow.
+
+Older versions stay where they were written and keep resolving there. External
+references are refused: Paperclip does not own those values. Each read is an access
+event (`consumer_type = secret_migration`), and each migration is in the activity log.
+The output gives a status per secret (`migrated`, `already_on_target`, `dry_run`,
+`failed` with a code). The CLI exits 1 if any secret failed.
+
 ## Deployment configuration (server env)
 
 | Variable | Required | Meaning |
