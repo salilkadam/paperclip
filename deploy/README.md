@@ -379,6 +379,24 @@ enabled Drive/Gmail/Calendar/People there; E2E proof then passed green:
 `deploy/scripts/run-gws-drive-list-probe.sh` to probe upstream directly
 (`gw_list_files` args are only `tenant_id`/`account`/`query`/`max_results`).
 
+### Operations notes (2026-10-25, after the upstream sync)
+
+- **GitHub Actions is disabled on this fork** (repository setting). The
+  upstream sync brought upstream's workflows, which need upstream's runners
+  and secrets and failed on every push. Re-enable only after the workflows are
+  adapted for this repo: `gh api -X PUT repos/salilkadam/paperclip/actions/permissions -F enabled=true`.
+- **Budget policies block unpriced usage by default.** Migration 0312 added
+  `budget_policies.unpriced_usage_policy` with default `block`. The
+  self-hosted gateway models are unpriced, so any budget policy created for a
+  company whose agents use them **must** set `unpriced_usage_policy=allow`, or
+  those agents stop.
+- **Build images on the gpu node, not in the devcontainer:** a sandbox
+  checkout of clean `main` on `ssh gpu`, then `deploy/scripts/build-and-push.sh`
+  there. About 10 minutes, against 30+ minutes unfinished in the devcontainer.
+- **New hires stay on the legacy runner:** `/paperclip/adapter-settings.json`
+  (on the PVC) disables `paperclip_runner`, so the fork's central model access
+  (`PAPERCLIP_OPENCODE_PROVIDERS`) applies to new opencode agents.
+
 ### Ops access to Vault (since 2026-10-24: no static token)
 
 History: `t6-apps/bionic-org/config` used to hold a `vault_token`. ESO mirrored it
