@@ -64,8 +64,10 @@ export async function writeConnectionCredential(
     // connection removal uses. A linked secret (e.g. a Vault external reference
     // attached via credentialSecretIds) is not ours to overwrite: a new value
     // gets a fresh owned secret below and the ref is swapped.
-    const ownedCompanySecret = existing?.scope === "company" &&
-      existing.key.startsWith("tool_app.") && existing.managedMode === "paperclip_managed";
+    // Owned keys: `tool_app.` (this function) and `tool-connection/<id>/oauth/`
+    // (tool-oauth-legacy-backfill.ts).
+    const ownedCompanySecret = existing?.scope === "company" && existing.managedMode === "paperclip_managed" &&
+      (existing.key.startsWith("tool_app.") || existing.key.startsWith("tool-connection/"));
     if (existing?.status === "active" && (input.ownerUserId
       ? existing.scope === "user" && Boolean(existing.userSecretDefinitionId)
       : ownedCompanySecret)) {

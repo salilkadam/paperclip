@@ -3738,9 +3738,15 @@ export function toolAccessService(
           ));
           for (const grant of orgGrants) {
             const refs = grant.credentialSecretRefs ?? [];
-            if (!refs.some((ref) => replacedByPath.has(ref.configPath))) continue;
+            const present = new Set(refs.map((ref) => ref.configPath));
+            // Replace mirrored paths and append a field supplied for the first time.
+            const next = [
+              ...refs.map((ref) => replacedByPath.get(ref.configPath) ?? ref),
+              ...[...replacedByPath.values()].filter((ref) => !present.has(ref.configPath)),
+            ];
+            if (JSON.stringify(next) === JSON.stringify(refs)) continue;
             await tx.update(connectionGrants)
-              .set({ credentialSecretRefs: refs.map((ref) => replacedByPath.get(ref.configPath) ?? ref), updatedAt })
+              .set({ credentialSecretRefs: next, updatedAt })
               .where(eq(connectionGrants.id, grant.id));
           }
         }
