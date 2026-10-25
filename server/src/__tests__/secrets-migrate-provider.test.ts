@@ -239,9 +239,15 @@ describeEmbeddedPostgres("secret provider migration", () => {
     const vault = await awsVault(companyId);
     fakeAws();
 
+    // One of two user values moved: the definition stays where it was.
+    const [firstUserValue] = await db.select().from(companySecrets).where(eq(companySecrets.ownerUserId, "user-1"));
+    await svc.migrateProvider(firstUserValue!.id, { targetProviderConfigId: vault.id });
+    const [partial] = await db.select().from(userSecretDefinitions).where(eq(userSecretDefinitions.id, definition.id));
+    expect(partial).toMatchObject({ provider: "local_encrypted", providerConfigId: null });
+
     const run = await svc.migrateCompanyProvider(companyId, { targetProviderConfigId: vault.id }, { userId: "admin" });
     expect(run.total).toBe(4);
-    expect(run.counts).toEqual({ migrated: 3, failed: 1 });
+    expect(run.counts).toEqual({ already_on_target: 1, migrated: 2, failed: 1 });
     const order = run.results.map((result) => result.secretId);
     const scopes = await db.select().from(companySecrets).where(eq(companySecrets.companyId, companyId));
     const scopeOf = new Map(scopes.map((row) => [row.id, row.scope]));
