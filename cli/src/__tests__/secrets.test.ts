@@ -350,7 +350,9 @@ async function runSecretCommand(args: string[]): Promise<void> {
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
   registerSecretCommands(program);
-  await program.parseAsync([...args, "--api-base", "http://localhost:3100", "--api-key", "board-token"], { from: "user" });
+  // --context points nowhere so a developer's real ~/.paperclip context cannot
+  // supply a company and mask a missing -C.
+  await program.parseAsync([...args, "--api-base", "http://localhost:3100", "--api-key", "board-token", "--context", "/nonexistent/paperclip-context.json"], { from: "user" });
 }
 
 function jsonResponse(body: unknown = { ok: true }, init: ResponseInit = { status: 200 }): Response {

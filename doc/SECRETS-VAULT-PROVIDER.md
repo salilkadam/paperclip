@@ -67,7 +67,9 @@ Vault unless a secret is explicitly created against a Vault provider vault.
 Each company can mark one `ready`/`warning` provider vault as its **company default**
 (Secrets → Provider vaults → *Make company default*, or
 `paperclip secrets provider-config:company-default <configId>`; clear with
-`paperclip secrets provider-config:clear-company-default --company-id <id>`). New secrets that don't name a
+`paperclip secrets provider-config:clear-company-default [--company-id <id>]`; without
+`--company-id` it uses the CLI context's company. `company-default` takes the company from
+the provider vault itself). New secrets that don't name a
 provider are stored there. That covers the create dialog's starting selection,
 connection and OAuth credentials, AI connections, chat and email channels, adapter
 config secrets, routine webhook secrets, the Claude Code login, imports and the CLI.
