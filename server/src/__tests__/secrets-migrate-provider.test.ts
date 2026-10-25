@@ -269,6 +269,24 @@ describeEmbeddedPostgres("secret provider migration", () => {
       .rejects.toMatchObject({ details: expect.objectContaining({ code: "secret_external_reference" }) });
   });
 
+  it("migrating a definition's last active value moves the definition even with an archived sibling", async () => {
+    const companyId = await seedCompany();
+    await db.insert(companyMemberships).values([
+      { companyId, principalType: "user", principalId: "user-1", status: "active", membershipRole: "owner" },
+      { companyId, principalType: "user", principalId: "user-2", status: "active", membershipRole: "member" },
+    ]);
+    const svc = secretService(db);
+    const definition = await svc.createUserSecretDefinition(companyId, { key: "tok", name: "Token", provider: "local_encrypted" });
+    const live = await svc.createCurrentUserSecretValue(companyId, "user-1", { definitionId: definition.id, value: "live" });
+    const archived = await svc.createCurrentUserSecretValue(companyId, "user-2", { definitionId: definition.id, value: "old" });
+    await db.update(companySecrets).set({ status: "archived" }).where(eq(companySecrets.id, archived.id));
+    const vault = await awsVault(companyId);
+    fakeAws();
+    await svc.migrateProvider(live.id, { targetProviderConfigId: vault.id });
+    const [moved] = await db.select().from(userSecretDefinitions).where(eq(userSecretDefinitions.id, definition.id));
+    expect(moved).toMatchObject({ provider: "aws_secrets_manager", providerConfigId: vault.id });
+  });
+
   it("a company run migrates user values first, records failures per secret, and moves a definition once all its values moved", async () => {
     const companyId = await seedCompany();
     await db.insert(companyMemberships).values([
