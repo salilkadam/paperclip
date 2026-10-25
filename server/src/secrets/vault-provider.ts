@@ -27,7 +27,10 @@ import { SecretProviderClientError } from "./types.js";
  * secret UUID as leaf, one KV version per Paperclip version):
  *   <prefix>/companies/<companyId>/company/<secretId>
  *   <prefix>/companies/<companyId>/users/<ownerUserId>/<secretId>
- *   <prefix>/companies/<companyId>/{agents,projects,plugins}/<ownerId>/<secretId>
+ *   <prefix>/companies/<companyId>/{agents,projects}/<ownerId>/<secretId>
+ * An instance-scoped secret is filed under its owning agent or project (every
+ * instance owner today names one; the plugin id is kept in the DB row, and
+ * `plugins/<id>` is only a fallback for an owner with neither).
  *
  * Material is self-describing (mount, path, KV version), and every managed
  * read checks the path lies inside the requesting company's subtree.
@@ -41,6 +44,12 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_VERSIONS = 100;
 const HEALTH_CANARY_MAX_VERSIONS = 5;
 const RENEW_AT_FRACTION = 2 / 3;
+/** The Secrets page polls provider health every 60 s; the probe writes, so it is cached. */
+const HEALTH_CACHE_OK_MS = 5 * 60_000;
+const HEALTH_CACHE_ERROR_MS = 60_000;
+/** A 403 forces at most one fresh login per auth identity in this window. */
+const FORCED_LOGIN_MIN_INTERVAL_MS = 30_000;
+const NAMESPACE_RE = /^[A-Za-z0-9_.\/-]{1,160}$/;
 const SEGMENT_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const PATH_RE = /^[A-Za-z0-9_./-]{1,512}$/;
 
@@ -59,6 +68,8 @@ export interface VaultProviderConfig {
   timeoutMs: number;
   maxVersions: number;
   externalPrefixes: string[];
+  /** Namespaces a provider vault may select besides `namespace` (PAPERCLIP_SECRETS_VAULT_ALLOWED_NAMESPACES). */
+  allowedNamespaces?: string[];
 }
 
 interface VaultMaterial extends StoredSecretVersionMaterial {
@@ -152,7 +163,7 @@ export function loadVaultProviderConfig(): VaultProviderConfig {
   }
   return {
     address: normalizeAddress(env("PAPERCLIP_SECRETS_VAULT_ADDR")!),
-    namespace: env("PAPERCLIP_SECRETS_VAULT_NAMESPACE"),
+    namespace: env("PAPERCLIP_SECRETS_VAULT_NAMESPACE") ? cleanPath(env("PAPERCLIP_SECRETS_VAULT_NAMESPACE")!) : null,
     mount,
     prefix,
     authMethod: (env("PAPERCLIP_SECRETS_VAULT_AUTH_METHOD") ?? "kubernetes") as VaultAuthMethod,
@@ -163,6 +174,10 @@ export function loadVaultProviderConfig(): VaultProviderConfig {
     timeoutMs: positiveInt(env("PAPERCLIP_SECRETS_VAULT_TIMEOUT_MS"), DEFAULT_TIMEOUT_MS, "PAPERCLIP_SECRETS_VAULT_TIMEOUT_MS"),
     maxVersions: positiveInt(env("PAPERCLIP_SECRETS_VAULT_MAX_VERSIONS"), DEFAULT_MAX_VERSIONS, "PAPERCLIP_SECRETS_VAULT_MAX_VERSIONS"),
     externalPrefixes,
+    allowedNamespaces: (env("PAPERCLIP_SECRETS_VAULT_ALLOWED_NAMESPACES") ?? "")
+      .split(",")
+      .map((value) => cleanPath(value.trim()))
+      .filter(Boolean),
   };
 }
 
@@ -183,11 +198,21 @@ function applyProviderVaultConfig(
   for (const key of ["address", "mountPath", "secretPathPrefix"]) {
     const value = config[key];
     if (value !== undefined && value !== null && value !== "") {
-      throw unprocessable(`Provider vault config field "${key}" is set by the deployment, not per company`);
+      throw unprocessable(
+        `Provider vault config field "${key}" is set by the deployment, not per company; edit the provider vault to clear it`,
+      );
     }
   }
-  const namespace = typeof config.namespace === "string" && config.namespace.trim() ? config.namespace.trim() : null;
-  return namespace ? { ...base, namespace } : base;
+  const namespace = typeof config.namespace === "string" && config.namespace.trim() ? cleanPath(config.namespace.trim()) : null;
+  if (!namespace || namespace === (base.namespace ? cleanPath(base.namespace) : null)) return base;
+  // The namespace picks which auth mount receives the server's ServiceAccount
+  // JWT, so a company may only choose one the deployment has allowed.
+  if (!NAMESPACE_RE.test(namespace) || !(base.allowedNamespaces ?? []).map(cleanPath).includes(namespace)) {
+    throw unprocessable(
+      "This Vault namespace is not allowed by the deployment (PAPERCLIP_SECRETS_VAULT_ALLOWED_NAMESPACES)",
+    );
+  }
+  return { ...base, namespace };
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +271,8 @@ function parseExternalRef(config: VaultProviderConfig, externalRef: string): { p
   if (isWithin(path, config.prefix)) {
     throw unprocessable("External references cannot point inside the Paperclip-managed Vault prefix");
   }
-  if (!config.externalPrefixes.some((allowed) => (allowed.endsWith("/") ? path.startsWith(allowed) : isWithin(path, allowed)))) {
+  // "a/b/" allows the subtree under a/b; "a/b" allows exactly that KV entry.
+  if (!config.externalPrefixes.some((allowed) => (allowed.endsWith("/") ? path.startsWith(allowed) : path === cleanPath(allowed)))) {
     throw unprocessable("This Vault path is not in the deployment's allowed external paths (PAPERCLIP_SECRETS_VAULT_EXTERNAL_PATHS)");
   }
   return { path, field };
@@ -317,7 +343,14 @@ interface CachedToken {
   accessor: string | null;
 }
 
-const loginCache = new Map<string, { cached: CachedToken | null; pending: Promise<CachedToken> | null }>();
+interface LoginEntry {
+  config: VaultProviderConfig;
+  cached: CachedToken | null;
+  pending: Promise<CachedToken> | null;
+  lastForcedLoginAt: number;
+}
+
+const loginCache = new Map<string, LoginEntry>();
 
 function authKey(config: VaultProviderConfig) {
   return [config.address, config.namespace ?? "", config.authMethod, config.k8sMount, config.k8sRole ?? "", config.tokenFile ?? ""].join("|");
@@ -383,10 +416,18 @@ export class VaultHttpGateway implements VaultKvGateway {
     };
   }
 
-  private async token(forceLogin = false): Promise<string> {
+  private entry(): LoginEntry {
     const key = authKey(this.config);
-    const entry = loginCache.get(key) ?? { cached: null, pending: null };
-    loginCache.set(key, entry);
+    let entry = loginCache.get(key);
+    if (!entry) {
+      entry = { config: this.config, cached: null, pending: null, lastForcedLoginAt: 0 };
+      loginCache.set(key, entry);
+    }
+    return entry;
+  }
+
+  private async token(forceLogin = false): Promise<string> {
+    const entry = this.entry();
     if (!forceLogin && entry.cached && Date.now() < entry.cached.renewAt) return entry.cached.token;
     if (!forceLogin && entry.cached?.renewable) {
       const renewed = await this.raw("renew", "POST", "auth/token/renew-self", {}, entry.cached.token);
@@ -405,11 +446,29 @@ export class VaultHttpGateway implements VaultKvGateway {
     return entry.cached.token;
   }
 
-  /** Authenticated request; one fresh login and retry on 403 (expired or revoked token). */
+  /**
+   * Authenticated request; on 403 one fresh login (Kubernetes) or token-file
+   * re-read and a retry, because the token may have expired, been revoked or
+   * been rotated. A 403 from a policy gap would otherwise mint a new token per
+   * failing call, so a forced login happens only if nobody has replaced the
+   * failing token yet and at most once per FORCED_LOGIN_MIN_INTERVAL_MS.
+   */
   private async request(operation: string, method: string, path: string, body?: unknown) {
-    let result = await this.raw(operation, method, path, body, await this.token());
-    if (result.status === 403 && this.config.authMethod === "kubernetes") {
-      result = await this.raw(operation, method, path, body, await this.token(true));
+    const used = await this.token();
+    let result = await this.raw(operation, method, path, body, used);
+    if (result.status !== 403) return result;
+    const entry = this.entry();
+    let retryToken: string | null = null;
+    if (entry.pending) {
+      retryToken = (await entry.pending).token; // a concurrent caller is re-authenticating; share it
+    } else if (entry.cached && entry.cached.token !== used) {
+      retryToken = entry.cached.token; // a concurrent caller already re-authenticated
+    } else if (Date.now() - entry.lastForcedLoginAt >= FORCED_LOGIN_MIN_INTERVAL_MS) {
+      entry.lastForcedLoginAt = Date.now();
+      retryToken = await this.token(true);
+    }
+    if (retryToken && retryToken !== used) {
+      result = await this.raw(operation, method, path, body, retryToken);
     }
     return result;
   }
@@ -462,8 +521,9 @@ export class VaultHttpGateway implements VaultKvGateway {
   async revokeSelf(): Promise<boolean> {
     const entry = loginCache.get(authKey(this.config));
     if (!entry?.cached || this.config.authMethod !== "kubernetes") return false;
-    const result = await this.raw("revokeSelf", "POST", "auth/token/revoke-self", {}, entry.cached.token);
+    const token = entry.cached.token;
     entry.cached = null;
+    const result = await this.raw("revokeSelf", "POST", "auth/token/revoke-self", {}, token);
     return result.status === 204 || result.status === 200;
   }
 }
@@ -480,14 +540,26 @@ function errorText(json: Record<string, unknown> | null, text: string): string {
  * crashed-or-replaced pod's token from outliving the pod.
  */
 export async function revokeVaultLoginForShutdown(timeoutMs = 5_000): Promise<"revoked" | "none" | "failed"> {
-  if (!getVaultConfigReadiness().ready) return "none";
-  try {
-    const gateway = new VaultHttpGateway({ ...loadVaultProviderConfig(), timeoutMs });
-    return (await gateway.revokeSelf()) ? "revoked" : "none";
-  } catch {
-    return "failed";
-  }
+  // Let in-flight logins land first so their tokens are revoked too.
+  await Promise.allSettled([...loginCache.values()].map((entry) => entry.pending).filter(Boolean));
+  // Every cached login (one per allowed namespace), not just the env default.
+  const entries = [...loginCache.values()].filter((entry) => entry.cached && entry.config.authMethod === "kubernetes");
+  if (entries.length === 0) return "none";
+  const results = await Promise.all(
+    entries.map((entry) =>
+      new VaultHttpGateway({ ...entry.config, timeoutMs }).revokeSelf().catch(() => false),
+    ),
+  );
+  return results.every(Boolean) ? "revoked" : "failed";
 }
+
+/** Test hook: forget cached logins and health results. */
+export function resetVaultProviderCachesForTests() {
+  loginCache.clear();
+  healthCache.clear();
+}
+
+const healthCache = new Map<string, { result: SecretProviderHealthCheck; expiresAt: number }>();
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -525,7 +597,8 @@ export function createVaultProvider(options?: {
     if (material.mount !== config.mount || !isWithin(material.path, config.prefix)) {
       throw unprocessable("Managed Vault secret path is outside the deployment's managed prefix");
     }
-    if (companyId && !isWithin(material.path, companyRoot(config, companyId))) {
+    // Fail closed: a managed read or delete without a company is never allowed.
+    if (!companyId || !isWithin(material.path, companyRoot(config, companyId))) {
       throw unprocessable("Managed Vault secret path does not belong to this company");
     }
   }
@@ -606,9 +679,13 @@ export function createVaultProvider(options?: {
         },
       };
     }
+    let cacheKey: string | null = null;
     try {
       const validation = await validateConfig(input);
       const config = resolveConfig(input?.providerConfig);
+      cacheKey = [authKey(config), config.mount, config.prefix].join("|");
+      const hit = healthCache.get(cacheKey);
+      if (hit && Date.now() < hit.expiresAt) return hit.result;
       const gateway = resolveGateway(config);
       // Canary written exactly like a managed secret (metadata first), then
       // read back: proves login, write, read and the version cap together.
@@ -622,7 +699,7 @@ export function createVaultProvider(options?: {
       if (metadata?.maxVersions !== HEALTH_CANARY_MAX_VERSIONS) {
         throw vaultError("healthCheck", 500, "canary max_versions was not applied; the Vault role may lack metadata update");
       }
-      return {
+      const result: SecretProviderHealthCheck = {
         provider: "vault",
         status: validation.warnings.length > 0 ? "warn" : "ok",
         message: "HashiCorp Vault is reachable; the server's Vault role can write, read and cap versions under the managed prefix.",
@@ -635,15 +712,18 @@ export function createVaultProvider(options?: {
           authMethod: config.authMethod,
           maxVersions: config.maxVersions,
           externalPaths: config.externalPrefixes,
+          probedAt: new Date().toISOString(), // results are cached; this is when Vault was actually probed
         },
         backupGuidance: [
           "Back up Vault (its storage) as well as the Paperclip database: Vault holds the only copy of managed values.",
           "Restoring access requires the same Vault mount, prefix and a Kubernetes auth role bound to the server's ServiceAccount.",
         ],
       };
+      healthCache.set(cacheKey, { result, expiresAt: Date.now() + HEALTH_CACHE_OK_MS });
+      return result;
     } catch (error) {
       const message = error instanceof SecretProviderClientError ? error.message : error instanceof Error ? error.message : String(error);
-      return {
+      const result: SecretProviderHealthCheck = {
         provider: "vault",
         status: "error",
         message: `HashiCorp Vault health check failed: ${message}`,
@@ -651,8 +731,11 @@ export function createVaultProvider(options?: {
         details: {
           code: error instanceof SecretProviderClientError ? error.code : "provider_error",
           operation: error instanceof SecretProviderClientError ? error.operation : null,
+          probedAt: new Date().toISOString(),
         },
       };
+      if (cacheKey) healthCache.set(cacheKey, { result, expiresAt: Date.now() + HEALTH_CACHE_ERROR_MS });
+      return result;
     }
   }
 
@@ -718,8 +801,9 @@ export function createVaultProvider(options?: {
       const config = resolveConfig(input.providerConfig);
       assertCompanyPath(config, material, input.context?.companyId);
       const gateway = resolveGateway(config);
-      // Soft delete only: Paperclip never destroys Vault history. Deleted
-      // versions stay recoverable with `vault kv undelete` until an operator purges.
+      // Soft delete only: Paperclip never calls destroy. Deleted versions stay
+      // recoverable with `vault kv undelete` until an operator purges them or
+      // they fall out of the max_versions window (Vault prunes the oldest).
       if (input.mode === "archive") {
         if (material.kvVersion) await gateway.softDeleteVersions(material.path, [material.kvVersion]);
         return;

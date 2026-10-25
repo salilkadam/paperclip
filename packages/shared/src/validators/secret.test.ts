@@ -142,6 +142,14 @@ describe("secret validators", () => {
     ).not.toThrow();
   });
 
+  it("rejects a Vault namespace that is not a plain header-safe path", () => {
+    for (const namespace of ["admin\r\nx-vault-token: t", "admin bionic", "ns\u00e9"]) {
+      expect(secretProviderConfigPayloadSchema.safeParse({ provider: "vault", config: { namespace } }).success).toBe(false);
+    }
+    expect(secretProviderConfigPayloadSchema.safeParse({ provider: "vault", config: { namespace: "admin/bionic-org_1.x" } }).success).toBe(true);
+    expect(secretProviderConfigPayloadSchema.safeParse({ provider: "vault", config: { namespace: "" } }).success).toBe(true);
+  });
+
   it("accepts a Vault provider vault that only names a namespace", () => {
     const parsed = secretProviderConfigPayloadSchema.parse({ provider: "vault", config: { namespace: "admin" } });
     expect(parsed.provider).toBe("vault");

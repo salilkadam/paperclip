@@ -307,7 +307,9 @@ function rejectUnsafeVaultAddress(value: unknown, ctx: z.RefinementCtx) {
 // Only the Vault Enterprise namespace may be set per provider vault.
 export const vaultProviderConfigSchema = z.object({
   address: z.unknown().optional(),
-  namespace: optionalSafeShortText,
+  // Becomes the X-Vault-Namespace header; the server further requires it to be
+  // the deployment namespace or in PAPERCLIP_SECRETS_VAULT_ALLOWED_NAMESPACES.
+  namespace: z.string().trim().regex(/^[A-Za-z0-9_.\/-]{1,160}$/, "Vault namespace may use letters, digits, _ . / - only").optional().nullable().or(z.literal("")),
   mountPath: z.unknown().optional(),
   secretPathPrefix: z.unknown().optional(),
 }).strict().superRefine((value, ctx) => {

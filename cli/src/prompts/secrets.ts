@@ -42,7 +42,7 @@ export async function promptSecrets(current?: SecretsConfig): Promise<SecretsCon
       {
         value: "vault" as const,
         label: "HashiCorp Vault",
-        hint: "requires external adapter integration",
+        hint: "requires PAPERCLIP_SECRETS_VAULT_* env and a Vault Kubernetes auth role",
       },
     ],
     initialValue: base.provider,
