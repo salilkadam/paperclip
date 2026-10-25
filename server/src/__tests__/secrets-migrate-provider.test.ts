@@ -13,6 +13,7 @@ import {
   activityLog,
   agents,
   companies,
+  plugins,
   companyMemberships,
   companySecretBindings,
   companySecretProviderConfigs,
@@ -60,6 +61,7 @@ describeEmbeddedPostgres("secret provider migration", () => {
     await db.delete(companySecretProviderConfigs);
     await db.delete(companyMemberships);
     await db.delete(agents);
+    await db.delete(plugins);
     await db.delete(companies);
   });
 
@@ -263,10 +265,12 @@ describeEmbeddedPostgres("secret provider migration", () => {
     const svc = secretService(db);
     const agentId = randomUUID();
     await db.insert(agents).values({ id: agentId, companyId, name: "a", role: "engineer", adapterType: "codex_local", adapterConfig: {}, status: "idle" });
+    const pluginId = randomUUID();
+    await db.insert(plugins).values({ id: pluginId, pluginKey: pluginId, packageName: "fixture-migrate", version: "1.0.0", status: "ready", manifestJson: {} as never });
     const company = await svc.create(companyId, { name: "api_token", key: "api_token", provider: "local_encrypted", value: "company-value" });
     const local = await localEncryptedProvider.createSecret({ value: "instance-value", externalRef: null });
     const [instance] = await db.insert(companySecrets).values({
-      companyId, scope: "instance", ownerAgentId: agentId, key: "api_token", name: "api_token (agent)", provider: "local_encrypted",
+      companyId, scope: "instance", ownerAgentId: agentId, ownerPluginId: pluginId, key: "api_token", name: "api_token (agent)", provider: "local_encrypted",
       status: "active", latestVersion: 1,
     }).returning();
     await db.insert(companySecretVersions).values({
