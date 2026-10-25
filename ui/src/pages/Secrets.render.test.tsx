@@ -981,6 +981,28 @@ describe("Secrets page layout", () => {
     });
   });
 
+  it("lets a HashiCorp Vault provider vault be Ready while GCP stays coming soon", async () => {
+    const root = await renderSecrets(container);
+    await openAwsVaultDialog();
+    const providerSelect = document.getElementById("vault-provider") as HTMLSelectElement | null;
+    expect(providerSelect).not.toBeNull();
+    const statusOption = (value: string) =>
+      document.querySelector(`#vault-status option[value="${value}"]`) as HTMLOptionElement | null;
+
+    await act(async () => setSelectValue(providerSelect!, "vault"));
+    await flushReact();
+    expect((document.getElementById("vault-status") as HTMLSelectElement).value).toBe("ready");
+    expect(statusOption("ready")?.disabled).toBe(false);
+    expect(statusOption("warning")?.disabled).toBe(false);
+    expect(document.body.textContent).not.toContain("until the provider module is implemented");
+
+    await act(async () => setSelectValue(providerSelect!, "gcp_secret_manager"));
+    await flushReact();
+    expect(statusOption("ready")?.disabled).toBe(true);
+    expect(document.body.textContent).toContain("until the provider module is implemented");
+    await act(async () => root.unmount());
+  });
+
   it("discovers AWS provider vault candidates and applies selected values as prefill", async () => {
     mockSecretsApi.providerConfigDiscoveryPreview.mockResolvedValueOnce(makeDiscoveryPreview());
     const root = await renderSecrets(container);

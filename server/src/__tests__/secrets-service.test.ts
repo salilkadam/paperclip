@@ -3004,6 +3004,84 @@ describeEmbeddedPostgres("secretService", () => {
     expect(JSON.stringify(resolveSpy.mock.calls[0]?.[0])).not.toContain("resolved-secret");
   });
 
+  it("drops deployment-owned fields from a legacy Vault provider vault on a status-only update", async () => {
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    // Rows saved while Vault was "coming soon" could carry address/mount/prefix.
+    const [legacy] = await db
+      .insert(companySecretProviderConfigs)
+      .values({
+        companyId,
+        provider: "vault",
+        displayName: "Legacy Vault",
+        status: "coming_soon",
+        isDefault: false,
+        config: { address: "https://vault.example", mountPath: "secret", secretPathPrefix: "old", namespace: "admin" },
+      })
+      .returning();
+    const updated = await svc.updateProviderConfig(legacy!.id, { status: "ready" });
+    expect(updated?.config).toEqual({ namespace: "admin" });
+  });
+
+  it("hands providers the secret's identity and ownership on create, rotate and user values", async () => {
+    // Ownership-placed providers (HashiCorp Vault) derive the storage path from
+    // these fields, so each write path must pass the reserved row's identity.
+    const companyId = await seedCompany();
+    await seedCompanyMember(companyId, "user-1", "owner");
+    const svc = secretService(db);
+    const awsVault = await svc.createProviderConfig(companyId, awsVaultInput());
+    const createSpy = vi.spyOn(awsSecretsManagerProvider, "createSecret").mockResolvedValue(preparedAwsVersion("arn:aws:secretsmanager:us-east-1:123456789012:secret:paperclip/prod-use1/company/identity", "aws-version-1", "value-sha-1", "fingerprint-sha-1"));
+    const createVersionSpy = vi.spyOn(awsSecretsManagerProvider, "createVersion").mockResolvedValue(preparedAwsVersion("arn:aws:secretsmanager:us-east-1:123456789012:secret:paperclip/prod-use1/company/identity", "aws-version-2", "value-sha-2", "fingerprint-sha-2"));
+
+    const secret = await svc.create(companyId, {
+      name: `identity-${randomUUID()}`,
+      provider: "aws_secrets_manager",
+      providerConfigId: awsVault.id,
+      value: "v1",
+    });
+    expect(createSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      context: expect.objectContaining({
+        companyId,
+        secretId: secret.id,
+        scope: "company",
+        ownerUserId: null,
+        ownerAgentId: null,
+        ownerProjectId: null,
+        ownerPluginId: null,
+        version: 1,
+      }),
+    }));
+
+    await svc.rotate(secret.id, { value: "v2" });
+    expect(createVersionSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ companyId, secretId: secret.id, scope: "company", version: 2 }),
+    }));
+
+    const definition = await svc.createUserSecretDefinition(companyId, {
+      key: "github_token",
+      name: "GitHub token",
+      provider: "aws_secrets_manager",
+      providerConfigId: awsVault.id,
+    });
+    await svc.createCurrentUserSecretValue(companyId, "user-1", {
+      definitionId: definition.id,
+      value: "user-secret",
+    });
+    const [userRow] = await db
+      .select()
+      .from(companySecrets)
+      .where(and(eq(companySecrets.companyId, companyId), eq(companySecrets.ownerUserId, "user-1")));
+    expect(userRow).toBeTruthy();
+    expect(createSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      context: expect.objectContaining({
+        companyId,
+        secretId: userRow!.id,
+        scope: "user",
+        ownerUserId: "user-1",
+      }),
+    }));
+  });
+
   it("cleans up managed provider secrets when create persistence fails", async () => {
     const companyId = await seedCompany();
     const svc = secretService(db);
