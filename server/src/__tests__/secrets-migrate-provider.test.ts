@@ -302,7 +302,7 @@ describeEmbeddedPostgres("secret provider migration", () => {
     expect(run.counts).toEqual({ already_on_target: 1, migrated: 4, failed: 1 });
     expect(run.results.filter((result) => result.kind === "definition").map((result) => result.status).sort())
       .toEqual(["migrated", "migrated"]);
-    const order = run.results.map((result) => result.secretId);
+    const order = run.results.filter((result) => result.kind !== "definition").map((result) => result.secretId);
     const scopes = await db.select().from(companySecrets).where(eq(companySecrets.companyId, companyId));
     const scopeOf = new Map(scopes.map((row) => [row.id, row.scope]));
     expect(order.slice(0, 2).every((id) => scopeOf.get(id) === "user")).toBe(true);
