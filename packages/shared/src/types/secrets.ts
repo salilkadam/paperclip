@@ -180,6 +180,8 @@ export interface CompanySecretProviderConfig {
   displayName: string;
   status: SecretProviderConfigStatus;
   isDefault: boolean;
+  /** Where secrets created without an explicit provider choice are stored (one per company). */
+  isCompanyDefault: boolean;
   config: SecretProviderConfigPayload;
   healthStatus: SecretProviderConfigHealthStatus | null;
   healthCheckedAt: Date | null;

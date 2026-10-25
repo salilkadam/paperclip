@@ -62,6 +62,31 @@ Vault unless a secret is explicitly created against a Vault provider vault.
   unreachable / sealed / 5xx gateway → `provider_unavailable`, else `provider_error`.
   A missing value is never returned as an empty string.
 
+## Company default provider
+
+Each company can mark one `ready`/`warning` provider vault as its **company default**
+(Secrets → Provider vaults → *Make company default*). New secrets that don't name a
+provider are stored there. That covers the create dialog's starting selection,
+connection and OAuth credentials, AI connections, chat and email channels, adapter
+config secrets, routine webhook secrets, the Claude Code login, imports and the CLI.
+Without a company default, new secrets use the deployment provider
+(`PAPERCLIP_SECRETS_PROVIDER`, default `local_encrypted`). This includes the
+credential flows that used to force local storage. A request that names a provider
+family but no vault uses that family's default vault if one exists.
+
+- Changing the default affects **new** secrets only. Moving existing ones is a
+  separate migration (PR-C).
+- Each secret version records the provider and provider vault it was written to and
+  resolves through them. A pinned old version keeps working after its secret moves.
+- Deleting a secret deletes in every provider its versions live in.
+- Deleting a secret whose versions live in a disabled or removed vault leaves the
+  provider-side value in place and logs a warning (Paperclip can no longer reach it).
+- Disabling the company-default vault clears the default. New secrets then fall back
+  to the deployment provider; the Provider vaults tab shows which default applies.
+- API: `POST /api/secret-provider-configs/:id/company-default`,
+  `DELETE /api/companies/:companyId/secret-provider-configs/company-default`. Both are
+  recorded in the activity log.
+
 ## Deployment configuration (server env)
 
 | Variable | Required | Meaning |

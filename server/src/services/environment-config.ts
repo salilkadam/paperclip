@@ -213,7 +213,8 @@ async function createEnvironmentSecret(input: {
   environmentName: string;
   driver: EnvironmentDriver;
   field: string;
-  provider: SecretProvider;
+  /** Omit to follow the company default provider. */
+  provider?: SecretProvider;
   value: string;
   actor?: { userId?: string | null; agentId?: string | null };
 }) {
@@ -258,7 +259,7 @@ async function persistConfigSecretRefs(input: {
   companyId: string;
   environmentName: string;
   driver: EnvironmentDriver;
-  secretProvider: SecretProvider;
+  secretProvider?: SecretProvider;
   config: Record<string, unknown>;
   schema: Record<string, unknown> | null;
   actor?: { userId?: string | null; agentId?: string | null };
@@ -569,7 +570,7 @@ export async function normalizeEnvironmentConfigForPersistence(input: {
   companyId: string;
   environmentName: string;
   driver: EnvironmentDriver;
-  secretProvider: SecretProvider;
+  secretProvider?: SecretProvider;
   config: Record<string, unknown> | null | undefined;
   actor?: { userId?: string | null; agentId?: string | null };
   pluginWorkerManager?: PluginWorkerManager;

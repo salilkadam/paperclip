@@ -217,7 +217,6 @@ export function emailConnectionService(
         );
       const secret = await secrets.create(companyId, {
         name: `AgentMail ${identity.scope_type === "inbox" ? "inbox" : "account"} API key ${randomUUID().slice(0, 8)}`,
-        provider: "local_encrypted",
         value: input.apiKey,
       });
       const app = await tools.createApplication(companyId, {

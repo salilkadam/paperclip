@@ -323,7 +323,7 @@ async function migrateInlineEnv(opts: SecretMigrateInlineEnvOptions): Promise<vo
 
     const created = await ctx.api.post<CompanySecret>(apiPath`/api/companies/${companyId}/secrets`, {
       name: candidate.secretName,
-      provider: "local_encrypted",
+      // No provider: the server stores it where the company default points.
       value,
       description: `Migrated from agent ${candidate.agentId} env ${candidate.envKey}`,
     });

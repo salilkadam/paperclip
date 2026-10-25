@@ -967,7 +967,7 @@ async function buildEnvironmentSecretMetadataForLeaseFingerprint(input: {
       envKey: null,
       secretId: secret.id,
       version: resolvedVersion,
-      provider: secret.provider,
+      provider: versionRow?.provider ?? secret.provider,
       providerVersionRef: versionRow?.providerVersionRef ?? null,
       outcome: versionRow ? "success" : "failure",
     });

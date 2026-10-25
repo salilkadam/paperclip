@@ -109,7 +109,7 @@ export function grokRoutineService(db: Db, deliver: Delivery = deliverGrokRoutin
       // One fresh immutable secret version prevents partial URL/key replacement.
       const stored = await secretService(database).create(input.companyId, {
         name: `Grok routine ${binding.id} revision ${revision}`, key: `GROK_ROUTINE_${binding.id.replaceAll("-", "_").toUpperCase()}_${revision}`,
-        provider: "local_encrypted", value: JSON.stringify(secret), description: "Grok routine sender credential; never provider-visible",
+        value: JSON.stringify(secret), description: "Grok routine sender credential; never provider-visible",
       }, { userId: input.operatorId });
       const values = { companyId: input.companyId, agentId: input.agentId, bindingId: binding.id, bindingGeneration: binding.generation,
         botName, secretId: stored.id, secretVersion: stored.latestVersion, revision,

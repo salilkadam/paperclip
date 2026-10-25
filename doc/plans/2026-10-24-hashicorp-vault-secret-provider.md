@@ -361,6 +361,41 @@ no SDK.
    - Test: warm the cache, revoke the version, and the next resolve fails.
    - Decision 7.6.
 
+**As built in PR-B (2026-10-25), deviations from the text above:**
+- The company default is a flag, `company_secret_provider_configs.is_company_default`,
+  with a partial unique index (one per company), not a `companies` column. A
+  `companies` FK would make the two tables reference each other. The flag also
+  clears itself when its vault is deleted, and is cleared when the vault is
+  disabled or set back to coming soon.
+- An explicit non-local family with no vault of that family keeps today's behaviour:
+  it uses the deployment's env configuration for that provider, instead of 422. AWS
+  deployments configured only through env would otherwise break. The UI no longer
+  sends a bare family: the create dialog starts on the company default vault and
+  sends its id.
+- **Behaviour changes for deployments that never set a company default** (review
+  F2, accepted as intended):
+  - Every site that hard-coded `local_encrypted` now uses the deployment provider
+    (`PAPERCLIP_SECRETS_PROVIDER`). This is identical when that is `local_encrypted`,
+    as in production.
+  - A request that names a family but no vault now lands in that family's
+    `isDefault` vault. Before, it used env configuration even when such a vault
+    existed.
+- **Backfill caveat** (review F1): `provider_config_id` is copied from the parent's
+  *current* vault. A secret rotated across two vaults of one provider before 0375
+  keeps the pre-existing behaviour of resolving old versions through the current
+  vault. Production had 0 provider vault rows (§2), so no row is affected.
+- The legacy OAuth backfill shares the routines limit (review F4): the provider write
+  happens before its per-connection transaction commits. A rolled-back connection
+  leaves an unreferenced provider entry under the company's own path. It is a
+  one-off job.
+- Routine webhook secrets did not get a `createInTransaction` variant. They resolve
+  the company default, pick the secret id up front (Vault derives the path from it),
+  write to the provider, then insert in the existing transaction, and remove the
+  provider write if that insert fails. **Known limit:** when a caller passes its own
+  transaction (`executor`) and rolls it back *after* `createWebhookSecret` returns,
+  the provider-side value is orphaned. Under Vault that is an unreferenced entry
+  under the company's own path; under `local_encrypted` nothing is left behind.
+
 ### 3.6 Deployment changes
 
 - Helm configmap: add the `PAPERCLIP_SECRETS_VAULT_*` variables. Remove `VAULT_ADDR`

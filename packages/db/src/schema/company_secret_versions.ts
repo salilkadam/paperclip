@@ -1,6 +1,7 @@
 import { pgTable, uuid, text, timestamp, integer, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { companySecrets } from "./company_secrets.js";
+import { companySecretProviderConfigs } from "./company_secret_provider_configs.js";
 
 export const companySecretVersions = pgTable(
   "company_secret_versions",
@@ -11,6 +12,14 @@ export const companySecretVersions = pgTable(
     material: jsonb("material").$type<Record<string, unknown>>().notNull(),
     valueSha256: text("value_sha256").notNull(),
     providerVersionRef: text("provider_version_ref"),
+    /**
+     * The provider (and provider vault) this version's material was written to.
+     * Resolution uses these, not the parent's current provider, so a pinned old
+     * version keeps resolving after the secret moves to another provider.
+     * Null only on rows written before the column existed (backfilled).
+     */
+    provider: text("provider"),
+    providerConfigId: uuid("provider_config_id").references(() => companySecretProviderConfigs.id, { onDelete: "set null" }),
     status: text("status").notNull().default("current"),
     fingerprintSha256: text("fingerprint_sha256").notNull(),
     rotationJobId: text("rotation_job_id"),

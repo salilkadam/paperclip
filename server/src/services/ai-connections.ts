@@ -693,7 +693,6 @@ export function aiConnectionService(db: Db) {
           {
             key: `ai_${grantId.replaceAll("-", "_")}`,
             name: input.name,
-            provider: "local_encrypted",
           },
           { userId },
         );
@@ -710,7 +709,6 @@ export function aiConnectionService(db: Db) {
             companyId,
             {
               name: `ai-${grantId}`,
-              provider: "local_encrypted",
               value: verifiedCredential,
             },
             { userId },

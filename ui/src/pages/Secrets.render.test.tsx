@@ -146,6 +146,7 @@ const providerConfigs = [
     displayName: "Local default",
     status: "ready",
     isDefault: true,
+    isCompanyDefault: false,
     healthStatus: "ready",
     healthCheckedAt: null,
     healthMessage: null,
@@ -157,6 +158,7 @@ const providerConfigs = [
     displayName: "AWS production",
     status: "ready",
     isDefault: false,
+    isCompanyDefault: false,
     healthStatus: null,
     healthCheckedAt: null,
     healthMessage: null,
@@ -463,6 +465,53 @@ describe("Secrets page layout", () => {
     await act(async () => {
       vaultRoot.unmount();
     });
+  });
+
+  it("shows the company default and lets a ready vault become it", async () => {
+    const onSetCompanyDefault = vi.fn();
+    const onClearCompanyDefault = vi.fn();
+    const configs = [
+      { ...providerConfigs[0], isCompanyDefault: false },
+      { ...providerConfigs[1], isCompanyDefault: true },
+    ] as CompanySecretProviderConfig[];
+    const vaultRoot = createRoot(container);
+    await act(async () => {
+      vaultRoot.render(
+        <ProviderVaultsTab
+          providers={providers}
+          providerConfigs={configs}
+          loading={false}
+          error={null}
+          onRetry={vi.fn()}
+          onCreate={vi.fn()}
+          onEdit={vi.fn()}
+          onDisable={vi.fn()}
+          onRemove={vi.fn()}
+          onSetDefault={vi.fn()}
+          onSetCompanyDefault={onSetCompanyDefault}
+          onClearCompanyDefault={onClearCompanyDefault}
+          onHealthCheck={vi.fn()}
+          onImportSecrets={vi.fn()}
+          pendingActionId={null}
+        />,
+      );
+    });
+    await flushReact();
+
+    const notice = container.querySelector('[data-testid="company-default-provider-notice"]');
+    expect(notice?.textContent).toContain("AWS production");
+    expect(container.querySelector('[data-testid="provider-vault-company-default-vault-aws"]')).not.toBeNull();
+    const makeAws = container.querySelector('[data-testid="provider-vault-make-company-default-vault-aws"]') as HTMLButtonElement;
+    expect(makeAws.disabled).toBe(true); // already the company default
+    const makeLocal = container.querySelector('[data-testid="provider-vault-make-company-default-vault-local"]') as HTMLButtonElement;
+    expect(makeLocal.disabled).toBe(false);
+    await act(async () => makeLocal.click());
+    expect(onSetCompanyDefault).toHaveBeenCalledWith(expect.objectContaining({ id: "vault-local" }));
+    const clear = [...(notice?.querySelectorAll("button") ?? [])].find((button) => button.textContent?.includes("Use deployment default"));
+    await act(async () => clear?.click());
+    expect(onClearCompanyDefault).toHaveBeenCalledTimes(1);
+
+    await act(async () => vaultRoot.unmount());
   });
 
   it("refreshes existing AWS secrets from a provider vault card", async () => {

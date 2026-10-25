@@ -94,7 +94,6 @@ import { projectService } from "./projects.js";
 import { workProductService } from "./work-products.js";
 import { routineService } from "./routines.js";
 import { secretService } from "./secrets.js";
-import { getConfiguredSecretProvider } from "../secrets/configured-provider.js";
 import {
   PORTABLE_CATALOG_PROVENANCE_STRING_KEYS,
   readCatalogStringList,
@@ -3581,7 +3580,6 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
   const documentsSvc = documentService(db);
   const workProductsSvc = workProductService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
-  const defaultSecretProvider = getConfiguredSecretProvider();
 
   async function applyImportedAgentPermissionGrants(
     companyId: string,
@@ -3741,7 +3739,6 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         {
           name: `Imported ${label} ${suffix}`,
           key: importSecretKey(input, suffix),
-          provider: defaultSecretProvider,
           value,
           description: input.description ?? `Imported ${input.key} for ${label}.`,
         },

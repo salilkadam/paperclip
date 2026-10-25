@@ -116,7 +116,7 @@ export function agentObservabilityService(db: Db) {
             if (!secretId) {
               const suffix = randomUUID();
               const secret = await secrets.create(companyId, { name: `agent-observability.${suffix}`, key: `AGENT_OBSERVABILITY_HEADERS_${suffix.replaceAll("-", "_")}`,
-                provider: "local_encrypted", managedMode: "paperclip_managed", value }, { userId });
+                managedMode: "paperclip_managed", value }, { userId });
               secretId = secret.id;
             }
           } else secretId = null;

@@ -584,7 +584,8 @@ export function createSecretProposalsService(db: Db) {
     if (providerConfigId && (!providerConfig || providerConfig.companyId !== proposal.companyId)) {
       throw notFound("Provider vault not found");
     }
-    const provider = (providerConfig?.provider ?? "local_encrypted") as SecretProvider;
+    // No override: the approved secret follows the company default provider.
+    const provider = (providerConfig?.provider ?? undefined) as SecretProvider | undefined;
     const created = await secrets.create(
       proposal.companyId,
       {
