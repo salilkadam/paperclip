@@ -154,3 +154,55 @@ describe("ensurePaperclipSkillSymlink with an unmanaged copy at the target", () 
     expect(await readlink(target)).toBe(source);
   });
 });
+
+describe("ensurePaperclipSkillSymlink with a link to another existing copy", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  // Production after rev 65: ~/.claude/skills/trypost -> a company-skill copy
+  // imported before trypost was bundled. The old code skipped any link whose
+  // target still existed, so agents kept the pre-fix gateway header.
+  async function setup(oldContent: string) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-skill-relink-"));
+    roots.push(root);
+    const source = path.join(root, "app", "skills", "trypost");
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, "SKILL.md"), "X-Paperclip-Tool-Gateway-Token\n");
+    const old = path.join(root, "instances", "skills", "company-a", "trypost");
+    await mkdir(old, { recursive: true });
+    await writeFile(path.join(old, "SKILL.md"), oldContent);
+    const skillsHome = path.join(root, "home", ".claude", "skills");
+    await mkdir(skillsHome, { recursive: true });
+    const target = path.join(skillsHome, "trypost");
+    await symlink(old, target);
+    return { root, source, old, skillsHome, target };
+  }
+
+  it("re-points a link whose target differs from the source and keeps the old copy", async () => {
+    const { source, old, skillsHome, target } = await setup("Authorization: Bearer <sessionToken>\n");
+    await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("repaired");
+    expect(await readlink(target)).toBe(source);
+    expect(await readFile(path.join(old, "SKILL.md"), "utf8")).toBe("Authorization: Bearer <sessionToken>\n");
+    expect(await readdir(skillsHome)).toEqual(["trypost"]);
+    await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("skipped");
+  });
+
+  it("leaves a link to an identical copy alone", async () => {
+    const { source, old, target } = await setup("X-Paperclip-Tool-Gateway-Token\n");
+    await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("skipped");
+    expect(await readlink(target)).toBe(old);
+  });
+
+  it("keeps the original link when the new link cannot be made", async () => {
+    const { source, old, root, target } = await setup("stale\n");
+    const failingLink = async () => {
+      throw Object.assign(new Error("symlinks unavailable"), { code: "EPERM" });
+    };
+    await expect(ensurePaperclipSkillSymlink(source, target, failingLink)).rejects.toThrow("symlinks unavailable");
+    expect(await readlink(target)).toBe(old);
+    const staging = await readdir(path.join(root, "home", ".claude", "skills-replaced")).catch(() => []);
+    expect(staging.filter((name) => name.includes(".link-"))).toEqual([]);
+  });
+});

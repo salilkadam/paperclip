@@ -4389,11 +4389,51 @@ export async function ensurePaperclipSkillSymlink(
     .then(() => true)
     .catch(() => false);
   if (linkedPathExists) {
-    return "skipped";
+    return await repointStaleSkillSymlink(source, target, resolvedLinkedPath, linkSkill);
   }
 
   await fs.unlink(target);
   await linkSkill(source, target);
+  return "repaired";
+}
+
+/**
+ * A link at a managed skill's runtime name that points at some OTHER existing
+ * copy shadows the configured source just like a real directory does.
+ * Production hit this after rev 65: the shared home's `trypost` linked to a
+ * company-skill copy imported on 2026-10-16, before the skill was bundled, so
+ * agents kept reading the pre-fix gateway header.
+ *
+ * Re-point it when the linked content differs from the source. Nothing is
+ * deleted: the old copy stays where it is, only the link moves. Identical
+ * content (another company's pinned copy of the same version) is left alone,
+ * so agents that share the home do not flip the link back and forth. The new
+ * link is built beside the backups and renamed over the old one, which is
+ * atomic, so a concurrent run never sees the name missing.
+ */
+async function repointStaleSkillSymlink(
+  source: string,
+  target: string,
+  linkedPath: string,
+  linkSkill: (source: string, target: string) => Promise<void>,
+): Promise<"repaired" | "skipped"> {
+  if (!(await fs.lstat(source).catch(() => null))) return "skipped";
+  const [linkedHash, sourceHash] = await Promise.all([
+    hashSkillDirectory(linkedPath),
+    hashSkillDirectory(source),
+  ]);
+  if (linkedHash === sourceHash) return "skipped";
+
+  const stagingRoot = path.join(path.dirname(path.dirname(target)), "skills-replaced");
+  await fs.mkdir(stagingRoot, { recursive: true });
+  const staged = path.join(stagingRoot, `.${path.basename(target)}.link-${randomUUID().slice(0, 8)}`);
+  await linkSkill(source, staged);
+  try {
+    await fs.rename(staged, target);
+  } catch (err) {
+    await fs.rm(staged, { force: true }).catch(() => {});
+    throw err;
+  }
   return "repaired";
 }
 
