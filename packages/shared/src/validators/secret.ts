@@ -115,6 +115,19 @@ export const rotateSecretSchema = z.object({
 
 export type RotateSecret = z.infer<typeof rotateSecretSchema>;
 
+/**
+ * Move managed secrets to another provider / provider vault. With neither
+ * target field, the company default is the target. `secretIds` limits the run.
+ */
+export const migrateSecretProviderSchema = z.object({
+  targetProviderConfigId: z.string().guid().optional().nullable(),
+  targetProvider: z.enum(SECRET_PROVIDERS).optional().nullable(),
+  dryRun: z.boolean().optional(),
+  secretIds: z.array(z.string().guid()).max(1000).optional(),
+}).strict();
+
+export type MigrateSecretProvider = z.infer<typeof migrateSecretProviderSchema>;
+
 export const updateSecretSchema = z.object({
   name: z.string().min(1).optional(),
   key: secretKeySchema.optional(),

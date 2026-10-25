@@ -87,6 +87,67 @@ family but no vault uses that family's default vault if one exists.
   `DELETE /api/companies/:companyId/secret-provider-configs/company-default`. Both are
   recorded in the activity log.
 
+## Moving existing secrets between providers
+
+```
+paperclip secrets migrate-provider --company-id <id> --dry-run            # to the company default
+paperclip secrets migrate-provider --company-id <id> --to-vault <configId>
+paperclip secrets migrate-provider --company-id <id> --to-provider local_encrypted   # rollback
+paperclip secrets migrate-provider --company-id <id> --secret <id> [--secret <id>]   # a subset
+```
+
+(API: `POST /api/companies/:companyId/secrets/migrate-provider` with `targetProviderConfigId`,
+`targetProvider`, `dryRun`, `secretIds`. Requires an instance admin who also has access
+to that company.)
+
+For each active, Paperclip-managed secret (company, user and instance scope; user
+values first, the most-rotated last):
+
+1. Read the current version through the provider it lives in, and check that its value
+   hashes to the version's recorded `value_sha256`.
+2. **Dry run stops here.** Nothing is written.
+3. Write the value to the target as the next version. If the secret was stored in the
+   target before (e.g. after a rollback), add a version to that entry instead of
+   creating a new one.
+4. Read the value back from the target and compare digests.
+5. Commit in one transaction:
+   `UPDATE company_secrets SET latest_version=N+1, provider=…, provider_config_id=… WHERE id=? AND latest_version=N`,
+   plus the version insert. If anything rotated the secret meanwhile (including an OAuth
+   refresh in another process), the UPDATE matches nothing: the target write is removed
+   and that secret reports a 409 conflict. Re-run to pick it up.
+6. A user-secret definition moves to the target once all its **active** values have
+   moved, so new values for that definition follow. A full company run (no `--secret`)
+   also moves definitions that have no values yet. Each definition gets its own result
+   row (`kind: "definition"`).
+
+**Re-running after a failure.** A failed attempt archives the version it wrote.
+- **HashiCorp Vault.** The KV version is soft-deleted and the entry kept. Vault paths
+  end in the secret's id, so a re-run safely adds a version to that leftover entry. If
+  an operator removed an entry that rows still point at, it is re-created.
+- **AWS Secrets Manager.** Entry names come from the secret's key, which other secrets
+  can share (instance-scoped plugin secrets, company vs instance scope). So a
+  migration never writes into an existing AWS entry it did not create in this
+  attempt: a collision fails with `secret_migration_target_entry_exists`.
+  - A failed *first* write to AWS can leave the created entry with its value
+    (archiving only removes Paperclip's pending label). A re-run then reports that
+    code. Remove the entry in AWS, then re-run.
+  - On AWS, only the current and the latest pending version stay readable. Older
+    pinned versions are not kept there (pre-existing; this deployment uses Vault).
+
+**Limits.**
+- The source vault must be usable. Re-enable a disabled vault before migrating away
+  from it, and disable it afterwards.
+- A company run is a single HTTP request. Behind a proxy with a short timeout, the CLI
+  can report an error while the server finishes the run. Re-running is safe (secrets
+  already moved report `already_on_target`), or split the work with `--secret`.
+
+Older versions stay where they were written and keep resolving there (on Vault and
+local storage; see the AWS note above). External
+references are refused: Paperclip does not own those values. Each read is an access
+event (`consumer_type = secret_migration`), and each migration is in the activity log.
+The output gives a status per secret (`migrated`, `already_on_target`, `dry_run`,
+`failed` with a code). The CLI exits 1 if any secret failed.
+
 ## Deployment configuration (server env)
 
 | Variable | Required | Meaning |

@@ -50,6 +50,13 @@ interface SecretRotateOptions extends BaseClientOptions {
   valueEnv?: string;
 }
 
+interface SecretMigrateProviderOptions extends BaseClientOptions {
+  toVault?: string;
+  toProvider?: string;
+  secret?: string[];
+  dryRun?: boolean;
+}
+
 interface SecretDeleteOptions extends BaseClientOptions {
   yes?: boolean;
   confirm?: string;
@@ -495,6 +502,34 @@ export function registerSecretCommands(program: Command): void {
         try {
           const ctx = resolveCommandContext(opts);
           printOutput(await ctx.api.post(apiPath`/api/secrets/${secretId}/rotate`, { value: readValueFromOptions(opts) }), { json: ctx.json });
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+  );
+
+  addCommonClientOptions(
+    secrets
+      .command("migrate-provider")
+      .description(
+        "Move a company's managed secrets to another provider vault (default: the company default). Instance admin. Run with --dry-run first.",
+      )
+      .option("--to-vault <providerConfigId>", "Target provider vault id")
+      .option("--to-provider <provider>", "Target provider family, e.g. local_encrypted for a rollback")
+      .option("--secret <secretId...>", "Only these secrets")
+      .option("--dry-run", "Verify every source value resolves and matches its digest; write nothing")
+      .action(async (opts: SecretMigrateProviderOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts, { requireCompany: true });
+          const outcome = await ctx.api.post(apiPath`/api/companies/${ctx.companyId!}/secrets/migrate-provider`, {
+            ...(opts.toVault ? { targetProviderConfigId: opts.toVault } : {}),
+            ...(opts.toProvider ? { targetProvider: opts.toProvider } : {}),
+            ...(opts.secret?.length ? { secretIds: opts.secret } : {}),
+            dryRun: Boolean(opts.dryRun),
+          });
+          printOutput(outcome, { json: ctx.json });
+          const failed = (outcome as { counts?: Record<string, number> } | null)?.counts?.failed ?? 0;
+          if (failed > 0) process.exitCode = 1;
         } catch (err) {
           handleCommandError(err);
         }

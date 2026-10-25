@@ -40,6 +40,9 @@ const mockSecretService = vi.hoisted(() => ({
   listAccessEvents: vi.fn(),
   listAgentSecretAccess: vi.fn(),
   resolveSecretValueForAgentAccess: vi.fn(),
+  migrateCompanyProvider: vi.fn(),
+  getCompanyDefaultProviderConfig: vi.fn(),
+  setCompanyDefaultProviderConfig: vi.fn(),
 }));
 const mockLogActivity = vi.hoisted(() => vi.fn());
 const mockAccessService = vi.hoisted(() => ({
@@ -970,6 +973,47 @@ describe("secret routes", () => {
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "Secret not found" });
     expect(mockSecretService.listBindingReferences).not.toHaveBeenCalled();
+  });
+
+  it("provider migration is instance-admin only, company-scoped, and passes the request through", async () => {
+    const member = createApp({
+      type: "board", userId: "u", source: "session", companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", status: "active", membershipRole: "admin" }], isInstanceAdmin: false,
+    });
+    const denied = await request(member).post("/api/companies/company-1/secrets/migrate-provider").send({ dryRun: true });
+    expect(denied.status).toBe(403);
+    expect(mockSecretService.migrateCompanyProvider).not.toHaveBeenCalled();
+
+    const admin = createApp({
+      type: "board", userId: "root", source: "session", companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", status: "active", membershipRole: "admin" }], isInstanceAdmin: true,
+    });
+    const otherCompany = await request(admin).post("/api/companies/company-2/secrets/migrate-provider").send({ dryRun: true });
+    expect(otherCompany.status).toBe(403);
+
+    const bad = await request(admin).post("/api/companies/company-1/secrets/migrate-provider").send({ targetProviderConfigId: "not-a-uuid" });
+    expect(bad.status).toBe(400);
+
+    mockSecretService.migrateCompanyProvider.mockResolvedValue({ dryRun: true, total: 0, counts: {}, results: [] });
+    const target = "77777777-7777-4777-8777-777777777777";
+    const ok = await request(admin).post("/api/companies/company-1/secrets/migrate-provider").send({ targetProviderConfigId: target, dryRun: true });
+    expect(ok.status).toBe(200);
+    expect(mockSecretService.migrateCompanyProvider).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({ targetProviderConfigId: target, dryRun: true }),
+      expect.objectContaining({ userId: "root" }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "secret.provider_migration_dry_run" }));
+  });
+
+  it("company default endpoints require company access", async () => {
+    const outsider = createApp({
+      type: "board", userId: "m", source: "session", companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", status: "active", membershipRole: "admin" }], isInstanceAdmin: false,
+    });
+    const res = await request(outsider).delete("/api/companies/company-2/secret-provider-configs/company-default");
+    expect(res.status).toBe(403);
+    expect(mockSecretService.setCompanyDefaultProviderConfig).not.toHaveBeenCalled();
   });
 
   it("returns 404 for missing GET /secrets/:id/usage with identical response shape", async () => {

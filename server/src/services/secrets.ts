@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, like, ne, notInArray, notLike, or, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, desc, eq, inArray, isNull, like, ne, notInArray, notLike, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -634,7 +634,7 @@ type CanonicalEnvBinding =
       allowMissingOverride: boolean;
     };
 
-type SecretAccessConsumerType = SecretBindingTargetType | "agent_api" | "plugin_worker";
+type SecretAccessConsumerType = SecretBindingTargetType | "agent_api" | "plugin_worker" | "secret_migration";
 
 type SecretConsumerContext = {
   consumerType: SecretAccessConsumerType;
@@ -741,6 +741,7 @@ export type MissingRuntimeBinding = {
 function missingRuntimeConsumerType(consumerType: SecretAccessConsumerType): SecretBindingTargetType {
   if (consumerType === "plugin_worker") return "plugin";
   if (consumerType === "agent_api") return "agent";
+  if (consumerType === "secret_migration") return "system";
   return consumerType;
 }
 
@@ -2719,6 +2720,297 @@ export function secretService(db: Db | DbTransaction) {
             ))
             .catch(() => undefined);
         }
+      }
+      throw error;
+    }
+  }
+
+  type MigrateProviderResult = {
+    secretId: string;
+    status: "migrated" | "already_on_target" | "dry_run";
+    fromProvider: SecretProvider;
+    fromProviderConfigId: string | null;
+    toProvider: SecretProvider;
+    toProviderConfigId: string | null;
+    fromVersion: number;
+    toVersion: number | null;
+  };
+
+  /**
+   * Move a managed secret's current value to another provider (or provider
+   * vault) as a new version. The guarantee is the database compare-and-set,
+   * not the lock: the commit is one UPDATE matching the version this run read,
+   * in the same transaction as the version insert. A rotation that lands
+   * first (including an unguarded OAuth refresh) makes it match 0 rows; the
+   * target write is then archived and the call fails with 409.
+   *
+   * Before committing it proves agreement: the value read from the source
+   * must hash to the version's stored value_sha256, and the value read back
+   * from the target must hash to the same. Older versions stay where they
+   * were written and keep resolving there (per-version provider). The reverse
+   * direction is the same call with the old target.
+   */
+  async function migrateProviderUnlocked(
+    secretId: string,
+    input: { targetProviderConfigId?: string | null; targetProvider?: SecretProvider | null; dryRun?: boolean },
+    actor?: { userId?: string | null; agentId?: string | null },
+  ): Promise<MigrateProviderResult> {
+    const secret = await getById(secretId);
+    if (!secret || secret.status === "deleted") throw notFound("Secret not found");
+    if (secret.status !== "active") {
+      throw unprocessable("Only active secrets can be migrated", { code: "secret_inactive" });
+    }
+    if (secret.managedMode !== "paperclip_managed") {
+      throw unprocessable("External reference secrets point at a value Paperclip does not own; relink them instead", {
+        code: "secret_external_reference",
+      });
+    }
+    const target = await resolveWriteTarget(secret.companyId, {
+      provider: input.targetProvider,
+      providerConfigId: input.targetProviderConfigId,
+    });
+    const fromVersion = secret.latestVersion;
+    const current = await getSecretVersion(secret.id, fromVersion);
+    if (!current) throw new HttpError(404, "Secret version not found", { code: "version_missing" });
+    const fromProvider = (current.provider ?? secret.provider) as SecretProvider;
+    const fromProviderConfigId = current.provider ? current.providerConfigId : secret.providerConfigId;
+    const base = {
+      secretId: secret.id,
+      fromProvider,
+      fromProviderConfigId,
+      toProvider: target.provider,
+      toProviderConfigId: target.providerConfigId,
+      fromVersion,
+    };
+    if (
+      fromProvider === target.provider && fromProviderConfigId === target.providerConfigId &&
+      secret.provider === target.provider && secret.providerConfigId === target.providerConfigId
+    ) {
+      return { ...base, status: "already_on_target", toVersion: null };
+    }
+
+    const sourceConfig = await getSelectableRuntimeProviderConfig({
+      companyId: secret.companyId,
+      provider: fromProvider,
+      providerConfigId: fromProviderConfigId,
+    });
+    const targetConfig = await getSelectableRuntimeProviderConfig({
+      companyId: secret.companyId,
+      provider: target.provider,
+      providerConfigId: target.providerConfigId,
+    });
+    const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+    const value = await getSecretProvider(fromProvider).resolveVersion({
+      material: current.material as Record<string, unknown>,
+      externalRef: secret.externalRef,
+      providerVersionRef: current.providerVersionRef,
+      providerConfig: sourceConfig,
+      context: { companyId: secret.companyId, secretId: secret.id, secretKey: secret.key, version: fromVersion },
+    });
+    await recordAccessEvent({
+      companyId: secret.companyId,
+      secretId: secret.id,
+      userSecretDefinitionId: secret.userSecretDefinitionId ?? null,
+      secretScope: secret.scope,
+      version: fromVersion,
+      provider: fromProvider,
+      context: {
+        consumerType: "secret_migration",
+        consumerId: secret.id,
+        actorType: actor?.userId ? "user" : actor?.agentId ? "agent" : "system",
+        actorId: actor?.userId ?? actor?.agentId ?? null,
+      },
+      credentialOwnerUserId: secret.ownerUserId ?? null,
+      credentialSubjectType: secret.scope === "user" ? "user" : null,
+      credentialSubjectId: secret.ownerUserId ?? null,
+      outcome: "success",
+    }).catch(() => undefined);
+    if (sha(value) !== current.valueSha256) {
+      throw unprocessable("The source value does not match its recorded digest; refusing to migrate", {
+        code: "secret_migration_source_mismatch",
+      });
+    }
+    if (input.dryRun) return { ...base, status: "dry_run", toVersion: fromVersion + 1 };
+
+    const toVersion = fromVersion + 1;
+    const targetProvider = getSecretProvider(target.provider);
+    const writeContext: SecretProviderWriteContext = {
+      companyId: secret.companyId,
+      secretKey: secret.key,
+      secretName: secret.name,
+      version: toVersion,
+      secretId: secret.id,
+      scope: secret.scope as SecretProviderWriteContext["scope"],
+      ownerUserId: secret.ownerUserId,
+      ownerAgentId: secret.ownerAgentId,
+      ownerProjectId: secret.ownerProjectId,
+      ownerPluginId: secret.ownerPluginId,
+    };
+    // A secret that lived in the target before (e.g. a rollback) already has
+    // a provider-side entry there: add a version instead of creating it again.
+    const priorOnTarget = await db
+      .select({ id: companySecretVersions.id })
+      .from(companySecretVersions)
+      .where(and(
+        eq(companySecretVersions.secretId, secret.id),
+        eq(companySecretVersions.provider, target.provider),
+        target.providerConfigId
+          ? eq(companySecretVersions.providerConfigId, target.providerConfigId)
+          : sql`${companySecretVersions.providerConfigId} is null`,
+      ))
+      .limit(1)
+      .then((rows) => rows.length > 0);
+    // The database's view can be stale either way: a rolled-back earlier attempt
+    // leaves a provider-side entry with no version row, and an operator can
+    // remove an entry a row still points at. So fall back once:
+    //  - add-a-version that finds nothing -> create (safe for any provider);
+    //  - create that collides -> add a version, ONLY where the provider-side
+    //    entry is derived from this secret's id (HashiCorp Vault paths end in
+    //    the secret id), so a collision can only be this secret's own leftover.
+    //    AWS names derive from the key, which other secrets (instance scope,
+    //    company vs instance) can share; appending there would merge two
+    //    secrets into one entry, so a collision fails loudly instead.
+    const writeArgs = { value, externalRef: null, providerConfig: targetConfig, context: writeContext };
+    const isCode = (error: unknown, code: string) => isSecretProviderClientError(error) && error.code === code;
+    let prepared: PreparedSecretVersion;
+    try {
+      if (priorOnTarget) {
+        prepared = await targetProvider.createVersion(writeArgs).catch((error) => {
+          if (isCode(error, "not_found")) return targetProvider.createSecret(writeArgs);
+          throw error;
+        });
+      } else {
+        prepared = await targetProvider.createSecret(writeArgs).catch((error) => {
+          if (isCode(error, "conflict") && target.provider === "vault") return targetProvider.createVersion(writeArgs);
+          if (isCode(error, "conflict")) {
+            throw conflict(
+              "The target provider already has an entry with this secret's name (another secret with the same key, or a leftover from a failed attempt); resolve it in the provider, then re-run",
+              { code: "secret_migration_target_entry_exists", provider: target.provider },
+            );
+          }
+          throw error;
+        });
+      }
+    } catch (error) {
+      throw remoteProviderWriteHttpError(error, {
+        companyId: secret.companyId,
+        provider: target.provider,
+        providerConfigId: target.providerConfigId,
+        providerConfig: targetConfig,
+        operation: "secret.migrate_provider",
+      });
+    }
+    // Always archive just this version (Vault: soft-delete this KV version;
+    // AWS: drop its pending stage). Deleting the whole entry would block a
+    // retry (Vault cas, AWS deletion window) for no gain.
+    const undoTargetWrite = (operation: string) =>
+      cleanupPreparedProviderWrite({
+        provider: targetProvider,
+        prepared,
+        providerConfig: targetConfig,
+        context: writeContext,
+        mode: "archive",
+        operation,
+      });
+
+    try {
+      const readBack = await targetProvider.resolveVersion({
+        material: prepared.material,
+        externalRef: prepared.externalRef,
+        providerVersionRef: prepared.providerVersionRef ?? null,
+        providerConfig: targetConfig,
+        context: { companyId: secret.companyId, secretId: secret.id, secretKey: secret.key, version: toVersion },
+      });
+      if (sha(readBack) !== current.valueSha256) {
+        throw unprocessable("The value read back from the target does not match the source; nothing was changed", {
+          code: "secret_migration_readback_mismatch",
+        });
+      }
+      let definitionMoved = false;
+      const migrated = await db.transaction(async (tx) => {
+        // Parent row first (same lock order as rotate), as one compare-and-set.
+        const updated = await tx
+          .update(companySecrets)
+          .set({
+            latestVersion: toVersion,
+            provider: target.provider,
+            providerConfigId: target.providerConfigId,
+            externalRef: prepared.externalRef,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(companySecrets.id, secret.id), eq(companySecrets.latestVersion, fromVersion)))
+          .returning()
+          .then((rows) => rows[0] ?? null);
+        if (!updated) throw conflict(SECRET_VERSION_STALE_CONFLICT);
+        await tx
+          .update(companySecretVersions)
+          .set({ status: "previous" })
+          .where(eq(companySecretVersions.secretId, secret.id));
+        await tx.insert(companySecretVersions).values({
+          secretId: secret.id,
+          version: toVersion,
+          material: prepared.material,
+          valueSha256: prepared.valueSha256,
+          fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
+          providerVersionRef: prepared.providerVersionRef ?? null,
+          provider: target.provider,
+          providerConfigId: target.providerConfigId,
+          status: "current",
+          createdByAgentId: actor?.agentId ?? null,
+          createdByUserId: actor?.userId ?? null,
+        });
+        // A user value's definition decides where NEW values go. Move it once
+        // every active value of the definition is on the target.
+        if (secret.scope === "user" && secret.userSecretDefinitionId) {
+          const stragglers = await tx
+            .select({ id: companySecrets.id })
+            .from(companySecrets)
+            .where(and(
+              eq(companySecrets.userSecretDefinitionId, secret.userSecretDefinitionId),
+              // Archived/disabled values keep resolving through their own
+              // versions' providers; only active values decide.
+              eq(companySecrets.status, "active"),
+              or(
+                ne(companySecrets.provider, target.provider),
+                target.providerConfigId
+                  ? or(sql`${companySecrets.providerConfigId} is null`, ne(companySecrets.providerConfigId, target.providerConfigId))
+                  : sql`${companySecrets.providerConfigId} is not null`,
+              ),
+            ))
+            .limit(1);
+          if (stragglers.length === 0) {
+            definitionMoved = true;
+            await tx
+              .update(userSecretDefinitions)
+              .set({ provider: target.provider, providerConfigId: target.providerConfigId, updatedAt: new Date() })
+              .where(eq(userSecretDefinitions.id, secret.userSecretDefinitionId));
+          }
+        }
+        return updated;
+      });
+      await logActivity(db as Db, {
+        companyId: secret.companyId,
+        actorType: actor?.userId ? "user" : actor?.agentId ? "agent" : "system",
+        actorId: actor?.userId ?? actor?.agentId ?? "system",
+        action: "secret.provider_migrated",
+        entityType: "secret",
+        entityId: migrated.id,
+        details: {
+          ...base,
+          toVersion,
+          ...(definitionMoved ? { userSecretDefinitionMoved: secret.userSecretDefinitionId } : {}),
+        },
+      }).catch((error) => {
+        logger.warn({ err: error, secretId: secret.id }, "secret provider migration committed but its activity log entry failed");
+      });
+      return { ...base, status: "migrated", toVersion };
+    } catch (error) {
+      const cleaned = await undoTargetWrite("migrate_provider.rollback");
+      if (!cleaned) {
+        logger.warn(
+          { secretId: secret.id, provider: target.provider, providerConfigId: target.providerConfigId },
+          "secret provider migration failed and its target write could not be removed",
+        );
       }
       throw error;
     }
@@ -5002,6 +5294,169 @@ export function secretService(db: Db | DbTransaction) {
         }
         return rotateUnlocked(secretId, input, actor);
       });
+    },
+
+    /**
+     * Migrate a company's managed secrets (every scope) one by one. Order:
+     * user-scoped first, then by ascending rotation count, so the busiest
+     * credential goes last. A failure is recorded per secret and the run goes
+     * on; a stale-version conflict is reported, not retried.
+     */
+    migrateCompanyProvider: async (
+      companyId: string,
+      input: {
+        targetProviderConfigId?: string | null;
+        targetProvider?: SecretProvider | null;
+        dryRun?: boolean;
+        secretIds?: string[];
+      },
+      actor?: { userId?: string | null; agentId?: string | null },
+    ) => {
+      const rows = await db
+        .select()
+        .from(companySecrets)
+        .where(and(
+          eq(companySecrets.companyId, companyId),
+          eq(companySecrets.status, "active"),
+          eq(companySecrets.managedMode, "paperclip_managed"),
+          input.secretIds?.length ? inArray(companySecrets.id, input.secretIds) : undefined,
+        ));
+      if (input.secretIds?.length) {
+        const found = new Set(rows.map((row) => row.id));
+        const missing = input.secretIds.filter((id) => !found.has(id));
+        if (missing.length) throw unprocessable("Some secrets are not active managed secrets of this company", { missing });
+      }
+      rows.sort((a, b) =>
+        (a.scope === "user" ? 0 : 1) - (b.scope === "user" ? 0 : 1) || a.latestVersion - b.latestVersion);
+      // Resolve the target once, so a company-default change mid-run cannot
+      // split the run between two targets.
+      const target = await resolveWriteTarget(companyId, {
+        provider: input.targetProvider,
+        providerConfigId: input.targetProviderConfigId,
+      });
+      const perSecretInput = {
+        targetProvider: target.provider,
+        targetProviderConfigId: target.providerConfigId,
+        dryRun: input.dryRun,
+      };
+      // `secretId` is the definition id for `kind: "definition"` rows.
+      const results: Array<(MigrateProviderResult | { secretId: string; status: "failed"; error: string; code: string | null }) & { kind?: "definition" }> = [];
+      for (const row of rows) {
+        try {
+          results.push(await withAccountHomeSecretMutationLock(undefined, companyId, () =>
+            migrateProviderUnlocked(row.id, perSecretInput, actor)));
+        } catch (error) {
+          const details = error instanceof HttpError ? error.details as { code?: string } | undefined : undefined;
+          results.push({
+            secretId: row.id,
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+            code: details?.code ?? (error instanceof HttpError ? String(error.status) : null),
+          });
+        }
+      }
+      // Definitions decide where NEW user values go. Move every managed
+      // definition whose active values are all on the target, including
+      // definitions with no values yet (never visited by the loop above).
+      // Values this run moved, or (dry run) would move / already on target,
+      // count as on the target for the definitions pass.
+      const settled = results
+        .filter((result) => result.status === "migrated" || result.status === "dry_run" || result.status === "already_on_target")
+        .map((result) => result.secretId);
+      if (!input.secretIds?.length) {
+        const definitions = await db
+          .select()
+          .from(userSecretDefinitions)
+          .where(and(
+            eq(userSecretDefinitions.companyId, companyId),
+            eq(userSecretDefinitions.managedMode, "paperclip_managed"),
+            isNull(userSecretDefinitions.deletedAt),
+          ));
+        for (const definition of definitions) {
+          const onTarget = definition.provider === target.provider &&
+            (definition.providerConfigId ?? null) === target.providerConfigId;
+          if (onTarget) continue;
+          const offTarget = await db
+            .select({ id: companySecrets.id })
+            .from(companySecrets)
+            .where(and(
+              eq(companySecrets.userSecretDefinitionId, definition.id),
+              eq(companySecrets.status, "active"),
+              settled.length ? notInArray(companySecrets.id, settled) : undefined,
+              or(
+                ne(companySecrets.provider, target.provider),
+                target.providerConfigId
+                  ? or(sql`${companySecrets.providerConfigId} is null`, ne(companySecrets.providerConfigId, target.providerConfigId))
+                  : sql`${companySecrets.providerConfigId} is not null`,
+              ),
+            ))
+            .limit(1);
+          if (offTarget.length > 0) {
+            results.push({ secretId: definition.id, kind: "definition", status: "failed", error: "Some active values of this definition are not on the target yet", code: "definition_values_pending" });
+            continue;
+          }
+          if (!input.dryRun) {
+            await db
+              .update(userSecretDefinitions)
+              .set({ provider: target.provider, providerConfigId: target.providerConfigId, updatedAt: new Date() })
+              .where(eq(userSecretDefinitions.id, definition.id));
+            await logActivity(db as Db, {
+              companyId,
+              actorType: actor?.userId ? "user" : actor?.agentId ? "agent" : "system",
+              actorId: actor?.userId ?? actor?.agentId ?? "system",
+              action: "user_secret_definition.provider_migrated",
+              entityType: "user_secret_definition",
+              entityId: definition.id,
+              details: {
+                fromProvider: definition.provider,
+                fromProviderConfigId: definition.providerConfigId ?? null,
+                toProvider: target.provider,
+                toProviderConfigId: target.providerConfigId,
+              },
+            }).catch((error) => {
+              logger.warn({ err: error, definitionId: definition.id }, "definition provider migration committed but its activity log entry failed");
+            });
+          }
+          results.push({
+            secretId: definition.id,
+            kind: "definition",
+            status: input.dryRun ? "dry_run" : "migrated",
+            fromProvider: definition.provider as SecretProvider,
+            fromProviderConfigId: definition.providerConfigId ?? null,
+            toProvider: target.provider,
+            toProviderConfigId: target.providerConfigId,
+            fromVersion: 0,
+            toVersion: null,
+          });
+        }
+      }
+      return {
+        dryRun: Boolean(input.dryRun),
+        total: results.length,
+        counts: results.reduce<Record<string, number>>((acc, result) => {
+          acc[result.status] = (acc[result.status] ?? 0) + 1;
+          return acc;
+        }, {}),
+        results,
+      };
+    },
+
+    /**
+     * Move a managed secret's current value to another provider or provider
+     * vault (default: the company default). See migrateProviderUnlocked.
+     * The lock serialises it with in-process writes; the database
+     * compare-and-set is what guarantees no rotation is reverted.
+     */
+    migrateProvider: async (
+      secretId: string,
+      input: { targetProviderConfigId?: string | null; targetProvider?: SecretProvider | null; dryRun?: boolean },
+      actor?: { userId?: string | null; agentId?: string | null },
+    ) => {
+      const preCheckSecret = await getById(secretId);
+      if (!preCheckSecret) throw notFound("Secret not found");
+      return withAccountHomeSecretMutationLock(undefined, preCheckSecret.companyId, () =>
+        migrateProviderUnlocked(secretId, input, actor),
+      );
     },
 
     // A patch can rename a secret (`patch.name`) or move it out of the

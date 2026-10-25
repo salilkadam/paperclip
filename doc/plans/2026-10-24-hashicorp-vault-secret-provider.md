@@ -396,6 +396,18 @@ no SDK.
   the provider-side value is orphaned. Under Vault that is an unreferenced entry
   under the company's own path; under `local_encrypted` nothing is left behind.
 
+**As built in PR-C (2026-10-25):**
+- `migrateProvider` follows 3.5.5. In addition, `migrateCompanyProvider` (route
+  `POST /companies/:companyId/secrets/migrate-provider`, instance admin, CLI
+  `secrets migrate-provider`) runs it per secret in the phase-6 order and reports a
+  result per secret instead of stopping at the first failure.
+- The source value is checked against its recorded `value_sha256` before anything is
+  written, as well as on read-back. A tampered or corrupted source is refused.
+- A user-secret definition moves only once every live value of it is on the target.
+  Moving it with the first value would send other users' new values to the target
+  while their existing values were still on the source. That is harmless, but it
+  would contradict the definition's meaning.
+
 ### 3.6 Deployment changes
 
 - Helm configmap: add the `PAPERCLIP_SECRETS_VAULT_*` variables. Remove `VAULT_ADDR`
