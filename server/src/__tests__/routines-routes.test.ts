@@ -127,6 +127,7 @@ const mockAnnotationService = vi.hoisted(() => ({
 
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
+  decide: vi.fn(),
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
@@ -227,6 +228,7 @@ describe("routine routes", () => {
       status: "issue_created",
     });
     mockAccessService.canUser.mockResolvedValue(false);
+    mockAccessService.decide.mockResolvedValue({ allowed: false, reason: "deny_no_grant", explanation: "Missing permission" });
     mockLogActivity.mockResolvedValue(undefined);
     mockRoutineService.getDescriptionDocument.mockResolvedValue({
       id: "99999999-9999-4999-8999-999999999999",
@@ -504,6 +506,47 @@ describe("routine routes", () => {
 
     expect(res.status).toBe(403);
     expect(mockRoutineService.listRevisions).not.toHaveBeenCalled();
+  });
+
+  it("lets a manager holding agents:configure over the assignee manage that agent's routine", async () => {
+    mockAccessService.decide.mockResolvedValue({ allowed: true, reason: "allow_direct_change", explanation: "ok" });
+    const app = await createApp({ type: "agent", agentId: otherAgentId, companyId });
+
+    const res = await request(app).get(`/api/routines/${routineId}/revisions`);
+
+    expect(res.status).toBe(200);
+    expect(mockAccessService.decide).toHaveBeenCalledWith(expect.objectContaining({
+      action: "agent_config:update",
+      resource: { type: "agent", companyId, agentId },
+      scope: { requiresChangeGrant: true },
+    }));
+  });
+
+  it("lets a manager create a routine for a managed agent and refuses one it does not manage", async () => {
+    const app = await createApp({ type: "agent", agentId: otherAgentId, companyId });
+    const body = { title: "Daily blog to LinkedIn", assigneeAgentId: agentId, projectId };
+
+    const denied = await request(app).post(`/api/companies/${companyId}/routines`).send(body);
+    expect(denied.status).toBe(403);
+    expect(mockRoutineService.create).not.toHaveBeenCalled();
+
+    mockAccessService.decide.mockResolvedValue({ allowed: true, reason: "allow_direct_change", explanation: "ok" });
+    const allowed = await request(app).post(`/api/companies/${companyId}/routines`).send(body);
+    expect(allowed.status).toBe(201);
+    expect(mockRoutineService.create).toHaveBeenCalled();
+  });
+
+  it("checks the new assignee, not the current one, when an agent retargets a routine", async () => {
+    mockAccessService.decide.mockImplementation(async (input: { resource: { agentId?: string } }) =>
+      input.resource.agentId === otherAgentId
+        ? { allowed: false, reason: "deny_scope", explanation: "out of subtree" }
+        : { allowed: true, reason: "allow_direct_change", explanation: "ok" });
+    const app = await createApp({ type: "agent", agentId: "99999999-9999-4999-8999-999999999990", companyId });
+
+    const res = await request(app).patch(`/api/routines/${routineId}`).send({ assigneeAgentId: otherAgentId });
+
+    expect(res.status).toBe(403);
+    expect(mockRoutineService.update).not.toHaveBeenCalled();
   });
 
   it("restores routine revisions with existing routine-management permissions", async () => {

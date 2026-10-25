@@ -2365,6 +2365,72 @@ describe("agent permission routes", () => {
     expect(res.body.error).toBe("Heartbeat run not found");
     expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
   });
+
+  describe("PUT /api/agents/:id/team-authority", () => {
+    const teamScope = { managedSubtreeAgentIds: [agentId] };
+    const boardActor = { type: "board", userId: "board-user", source: "session", isInstanceAdmin: false, companyIds: [companyId] };
+    const put = async (actor: Record<string, unknown>, body: unknown) => {
+      const app = await createApp(actor);
+      return requestApp(app, (baseUrl) => request(baseUrl).put(`/api/agents/${agentId}/team-authority`).send(body as object));
+    };
+
+    it("grants agents:configure scoped to the agent's own subtree and logs it", async () => {
+      const res = await put(boardActor, { enabled: true });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body).toMatchObject({ enabled: true, changed: true, scope: teamScope });
+      expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+        companyId, "agent", agentId, "agents:configure", true, "board-user", teamScope,
+      );
+      expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        action: "agent.team_authority_granted", entityId: agentId,
+      }));
+    });
+
+    it("is idempotent when the team grant already exists", async () => {
+      mockAccessService.listPrincipalGrants.mockResolvedValue([{ permissionKey: "agents:configure", scope: teamScope }]);
+
+      const res = await put(boardActor, { enabled: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body.changed).toBe(false);
+      expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+    });
+
+    it("never narrows or removes a company-wide agents:configure grant", async () => {
+      mockAccessService.listPrincipalGrants.mockResolvedValue([{ permissionKey: "agents:configure", scope: null }]);
+
+      for (const enabled of [true, false]) {
+        const res = await put(boardActor, { enabled });
+        expect(res.status, JSON.stringify(res.body)).toBe(409);
+      }
+      expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+    });
+
+    it("revokes only the team grant", async () => {
+      mockAccessService.listPrincipalGrants.mockResolvedValue([{ permissionKey: "agents:configure", scope: teamScope }]);
+
+      const res = await put(boardActor, { enabled: false });
+
+      expect(res.status).toBe(200);
+      expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+        companyId, "agent", agentId, "agents:configure", false, "board-user", null,
+      );
+    });
+
+    it("refuses a non-CEO agent and a malformed body", async () => {
+      const managerId = "33333333-3333-4333-8333-333333333333";
+      mockAgentService.getById.mockImplementation(async (id: string) =>
+        id === managerId ? { ...baseAgent, id: managerId, role: "cmo" } : baseAgent);
+
+      const asCmo = await put({ type: "agent", agentId: managerId, companyId, source: "agent_key" }, { enabled: true });
+      expect(asCmo.status).toBe(403);
+
+      const malformed = await put(boardActor, { enabled: "yes" });
+      expect(malformed.status).toBe(400);
+      expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+    });
+  });
 });
 
 vi.mock("../services/agent-lifecycle.js", async (importOriginal) => {

@@ -3239,6 +3239,48 @@ describe("TaskChatThread runtime transcript selection", () => {
     },
   );
 
+  it("approves every pending tool action on the task with one Approve all", async () => {
+    const toolActionInteraction = (id: string, toolName: string, createdAt: string): IssueThreadInteraction => {
+      const base = planReviewInteraction();
+      return {
+        ...base,
+        id,
+        title: "Approve tool action",
+        resolverPolicy: "human_only",
+        createdAt: new Date(createdAt),
+        updatedAt: new Date(createdAt),
+        payload: {
+          version: 1,
+          prompt: `Approve ${toolName}?`,
+          target: { type: "custom", key: `tool-action:${id}`, revisionId: "hash", label: toolName },
+          toolAction: {
+            version: 1, actionRequestId: `ar-${id}`, invocationId: `inv-${id}`, toolName, toolDisplayName: toolName,
+            connectionId: null, applicationId: null, appDisplayName: null, risk: "write",
+            previewMarkdown: `Run ${toolName}`, argumentsSummaryJson: "{}", argumentsHash: "hash",
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          },
+        },
+      };
+    };
+    const onAcceptInteraction = vi.fn().mockResolvedValue(undefined);
+    renderThread({
+      comments: [],
+      interactions: [
+        toolActionInteraction("publish-blog", "gh_publish_post", "2026-08-25T18:00:01.000Z"),
+        toolActionInteraction("schedule-company", "update-post-tool", "2026-08-25T18:00:02.000Z"),
+      ],
+      onAdd: async () => {},
+      onAcceptInteraction,
+      issueStatus: "in_review",
+    });
+
+    const approveAll = container.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-approve-all"]');
+    expect(approveAll?.textContent).toBe("Approve all 2");
+    await act(async () => approveAll!.click());
+    expect(onAcceptInteraction.mock.calls.map(([interaction]) => interaction.id).sort())
+      .toEqual(["publish-blog", "schedule-company"]);
+  });
+
   it.each(DIRECT_ADAPTER_TYPES)(
     "keeps durable questions usable for an active %s run without runner controls",
     (adapterType) => {

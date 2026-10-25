@@ -1849,6 +1849,14 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
       return broadDecision;
     }
 
+    // Agent-config grants are checked against the target agent, so a grant
+    // scoped to a manager's subtree (`subtree:<managerId>`) covers exactly that
+    // manager's reports. Without the target, a scoped grant could never match.
+    const agentGrantScope =
+      input.resource.type === "agent" && input.resource.agentId
+        ? { ...(input.scope ?? {}), targetAgentId: input.resource.agentId }
+        : input.scope;
+
     async function decideWithAgentConfigReadGrant(
       principalType: PrincipalType,
       principalId: string,
@@ -1859,7 +1867,7 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         principalId,
         action: input.action,
         permissionKey: "agents:configure",
-        scope: input.scope,
+        scope: agentGrantScope,
       });
       if (configureDecision.allowed || configureDecision.reason === "deny_missing_membership") {
         return configureDecision;
@@ -1871,7 +1879,7 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         principalId,
         action: input.action,
         permissionKey: "agents:suggest-changes",
-        scope: input.scope,
+        scope: agentGrantScope,
       });
       if (suggestDecision.allowed || suggestDecision.reason === "deny_missing_grant") {
         return suggestDecision;
@@ -1890,7 +1898,7 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         principalId,
         action: input.action,
         permissionKey: keys.direct,
-        scope: input.scope,
+        scope: agentGrantScope,
       });
       if (directDecision.allowed) {
         return allow({
@@ -1908,7 +1916,7 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         principalId,
         action: input.action,
         permissionKey: keys.suggest,
-        scope: input.scope,
+        scope: agentGrantScope,
       });
       if (suggestDecision.allowed) {
         if (scopeBoolean(input.scope, "consentedChange")) {

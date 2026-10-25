@@ -5049,6 +5049,60 @@ export function agentRoutes(
     res.json(await buildAgentDetail(agent));
   });
 
+  // Team authority: `agents:configure` scoped to the agent's own reporting
+  // subtree, so a C-level can configure, pause, resume and terminate its
+  // reports (and manage their routines) but never a peer or its manager.
+  // A company-wide grant is never narrowed or removed through this route.
+  router.put("/agents/:id/team-authority", async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await getAccessibleResource(req, res, svc.getById(id), "Agent not found");
+    if (!existing) return;
+    const enabled = (req.body as { enabled?: unknown } | undefined)?.enabled;
+    if (typeof enabled !== "boolean") throw badRequest("enabled must be a boolean");
+
+    if (req.actor.type === "agent") {
+      const actorAgent = req.actor.agentId ? await svc.getById(req.actor.agentId) : null;
+      if (!actorAgent || actorAgent.companyId !== existing.companyId) throw forbidden("Forbidden");
+      if (actorAgent.role !== "ceo") throw forbidden("Only CEO can manage team authority");
+    } else {
+      await assertBoardCanManageAgentsForCompany(req, existing.companyId);
+    }
+    if (existing.status === "terminated") throw conflict("Cannot grant team authority to a terminated agent");
+
+    const teamScope = { managedSubtreeAgentIds: [existing.id] };
+    const current = (await access.listPrincipalGrants(existing.companyId, "agent", existing.id))
+      .find((grant) => grant.permissionKey === "agents:configure");
+    const currentIsTeamScope = Boolean(current) && JSON.stringify(current!.scope ?? null) === JSON.stringify(teamScope);
+    if (current && !currentIsTeamScope) {
+      throw conflict("Agent already holds a differently scoped agents:configure grant; change it explicitly");
+    }
+    if (enabled !== currentIsTeamScope) {
+      await access.setPrincipalPermission(
+        existing.companyId,
+        "agent",
+        existing.id,
+        "agents:configure",
+        enabled,
+        req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+        enabled ? teamScope : null,
+      );
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId: existing.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        agentApiKeyId: actor.agentApiKeyId,
+        action: enabled ? "agent.team_authority_granted" : "agent.team_authority_revoked",
+        entityType: "agent",
+        entityId: existing.id,
+        details: { permissionKey: "agents:configure", scope: teamScope },
+      });
+    }
+    res.json({ agentId: existing.id, enabled, changed: enabled !== currentIsTeamScope, scope: enabled ? teamScope : null });
+  });
+
   router.patch("/agents/:id/instructions-path", validate(updateAgentInstructionsPathSchema), async (req, res) => {
     if (req.actor.type !== "board") {
       throw forbidden("Only board-authenticated callers can manage instructions path or bundle configuration");
@@ -5734,7 +5788,9 @@ export function agentRoutes(
       action: "agent.updated",
       entityType: "agent",
       entityId: agent.id,
-      details: summarizeAgentUpdateDetails(patchData),
+      // `status` was removed from patchData above; record the lifecycle
+      // command so a manager's pause/terminate of a report stays auditable.
+      details: { ...summarizeAgentUpdateDetails(patchData), ...(command ? { lifecycleCommand: command } : {}) },
     });
 
     res.json(redactAgentRowForResponse(agent));

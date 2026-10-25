@@ -313,6 +313,32 @@ describeEmbeddedPostgres("authorization service", () => {
     });
   });
 
+  it("scopes an agents:configure grant to the manager's reporting subtree", async () => {
+    const company = await createCompany(db, "AgentConfigureSubtree");
+    const ceo = await createAgent(db, company.id, { role: "ceo" });
+    const cmo = await createAgent(db, company.id, { role: "cmo", reportsTo: ceo.id });
+    const marketer = await createAgent(db, company.id, { reportsTo: cmo.id });
+    const contractor = await createAgent(db, company.id, { reportsTo: marketer.id });
+    const peer = await createAgent(db, company.id, { reportsTo: ceo.id });
+    await grantAgentPermission(db, company.id, cmo.id, "agents:configure", { managedSubtreeAgentIds: [cmo.id] });
+
+    const authz = authorizationService(db);
+    const decideFor = (targetAgentId: string, action: "agent_config:update" | "agent_config:read" = "agent_config:update") =>
+      authz.decide({
+        actor: { type: "agent", agentId: cmo.id, companyId: company.id, source: "agent_key" },
+        action,
+        resource: { type: "agent", companyId: company.id, agentId: targetAgentId },
+        ...(action === "agent_config:update" ? { scope: { requiresChangeGrant: true } } : {}),
+      });
+
+    await expect(decideFor(marketer.id)).resolves.toMatchObject({ allowed: true, reason: "allow_direct_change" });
+    await expect(decideFor(contractor.id)).resolves.toMatchObject({ allowed: true, reason: "allow_direct_change" });
+    await expect(decideFor(marketer.id, "agent_config:read")).resolves.toMatchObject({ allowed: true });
+    await expect(decideFor(peer.id)).resolves.toMatchObject({ allowed: false, reason: "deny_scope" });
+    await expect(decideFor(ceo.id)).resolves.toMatchObject({ allowed: false, reason: "deny_scope" });
+    await expect(decideFor(peer.id, "agent_config:read")).resolves.toMatchObject({ allowed: false });
+  });
+
   it("enforces direct or consented suggest grants for agent configuration changes", async () => {
     const company = await createCompany(db, "AgentChangeGrant");
     const directAgent = await createAgent(db, company.id);

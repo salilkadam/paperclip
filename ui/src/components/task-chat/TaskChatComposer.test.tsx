@@ -2111,6 +2111,38 @@ describe("TaskChatComposer", () => {
       expect(container.querySelector('[data-testid="task-chat-composer-takeover"]')).not.toBeNull();
     });
 
+    it("approves every pending tool action in one step and reports a failure", async () => {
+      const run = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("Second action expired"));
+      renderComposer({
+        onAdd: vi.fn(),
+        workMode: "standard",
+        takeover: {
+          id: "tool-1", label: "Approve tool action", pendingCount: 3,
+          content: <p>Publish the blog</p>, onDismiss: vi.fn(), onSkip: vi.fn(), onShowNext: vi.fn(),
+          approveAll: { count: 3, run },
+        },
+      });
+
+      const approveAll = () => container.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-approve-all"]')!;
+      expect(approveAll().textContent).toBe("Approve all 3");
+      await act(async () => approveAll().click());
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(container.textContent).not.toContain("Second action expired");
+
+      await act(async () => approveAll().click());
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(container.textContent).toContain("Second action expired");
+    });
+
+    it("offers no Approve all without a bulk tool-action decision", () => {
+      renderComposer({
+        onAdd: vi.fn(),
+        workMode: "standard",
+        takeover: { id: "q", label: "Question", pendingCount: 2, content: <p>Which?</p>, onDismiss: vi.fn(), onSkip: vi.fn() },
+      });
+      expect(container.querySelector('[data-testid="task-chat-composer-approve-all"]')).toBeNull();
+    });
+
     it("shows a separate card above a usable editor and exposes Skip", async () => {
       const onSkip = vi.fn().mockResolvedValue(undefined);
       renderComposer({

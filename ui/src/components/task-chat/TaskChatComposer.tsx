@@ -88,6 +88,8 @@ export interface TaskChatComposerTakeover {
   hideLabel?: boolean;
   /** Some decision surfaces already provide a non-accept path of their own. */
   hideSkip?: boolean;
+  /** One decision for several pending tool-action approvals on this task. */
+  approveAll?: { count: number; run: () => Promise<void> };
 }
 
 interface TaskChatComposerProps {
@@ -1221,6 +1223,22 @@ export function TaskChatComposer({
               />
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
+              {takeover.approveAll ? (
+                <Button type="button" size="sm" variant="outline" className="h-7 px-2" disabled={takeoverBusy}
+                  data-testid="task-chat-composer-approve-all"
+                  onClick={() => {
+                    const approveAll = takeover.approveAll;
+                    if (!approveAll) return;
+                    setTakeoverBusy(true);
+                    setTakeoverError(null);
+                    void approveAll.run()
+                      .catch((error: unknown) => setTakeoverError(
+                        error instanceof Error ? error.message : "Unable to approve every pending action. Try again."))
+                      .finally(() => setTakeoverBusy(false));
+                  }}>
+                  Approve all {takeover.approveAll.count}
+                </Button>
+              ) : null}
               {takeover.pendingCount > 1 ? (
                 <Button type="button" size="sm" variant="ghost" className="h-7 px-2" onClick={takeover.onShowNext}>
                   {takeover.pendingCount} pending

@@ -2856,9 +2856,31 @@ export function TaskChatThread(props: TaskChatThreadProps) {
       />
     )
   ) : null;
+  // Several pending tool-action approvals on one task (e.g. publish the blog
+  // and schedule its LinkedIn posts) can be decided in one step. Each is
+  // accepted exactly as its own card's "Approve" would; a failure stops the
+  // sequence so nothing after it is approved silently.
+  const pendingToolActionInteractions = pendingReminderInputs.flatMap((input) =>
+    input.kind === "durable" &&
+    input.interaction.kind === "request_confirmation" &&
+    input.interaction.payload.toolAction
+      ? [input.interaction]
+      : []);
+  const approveAllToolActions =
+    onAcceptInteraction && pendingToolActionInteractions.length > 1
+      ? {
+          count: pendingToolActionInteractions.length,
+          run: async () => {
+            for (const interaction of pendingToolActionInteractions) {
+              await onAcceptInteraction(interaction);
+            }
+          },
+        }
+      : undefined;
   const composerTakeover =
     takeoverMode === "open" && selectedPendingInput && takeoverContent
       ? {
+          approveAll: approveAllToolActions,
           id: selectedPendingInput.key,
           label: selectedPendingInput.label,
           hideLabel:
