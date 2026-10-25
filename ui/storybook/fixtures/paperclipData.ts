@@ -1383,6 +1383,7 @@ export const storybookSecretProviderConfigs: CompanySecretProviderConfig[] = [
     displayName: "Local encrypted default",
     status: "ready",
     isDefault: true,
+    isCompanyDefault: false,
     config: { backupReminderAcknowledged: true },
     healthStatus: "ready",
     healthCheckedAt: recent(45),
@@ -1401,6 +1402,7 @@ export const storybookSecretProviderConfigs: CompanySecretProviderConfig[] = [
     displayName: "AWS production",
     status: "warning",
     isDefault: false,
+    isCompanyDefault: false,
     config: {
       region: "us-east-1",
       namespace: "prod-use1",
@@ -1430,6 +1432,7 @@ export const storybookSecretProviderConfigs: CompanySecretProviderConfig[] = [
     displayName: "AWS staging blocked",
     status: "ready",
     isDefault: false,
+    isCompanyDefault: false,
     config: {
       region: "us-west-2",
       namespace: "staging",

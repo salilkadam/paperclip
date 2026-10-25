@@ -12,6 +12,12 @@ export const companySecretProviderConfigs = pgTable(
     displayName: text("display_name").notNull(),
     status: text("status").notNull().default("ready"),
     isDefault: boolean("is_default").notNull().default(false),
+    /**
+     * The company's default provider vault: secrets created without an explicit
+     * provider choice land here. At most one per company (partial unique index);
+     * deleting the vault clears the default with it.
+     */
+    isCompanyDefault: boolean("is_company_default").notNull().default(false),
     config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
     healthStatus: text("health_status"),
     healthCheckedAt: timestamp("health_checked_at", { withTimezone: true }),
@@ -29,5 +35,8 @@ export const companySecretProviderConfigs = pgTable(
     companyDefaultProviderUq: uniqueIndex("company_secret_provider_configs_default_uq")
       .on(table.companyId, table.provider)
       .where(sql`${table.isDefault} = true`),
+    companyDefaultUq: uniqueIndex("company_secret_provider_configs_company_default_uq")
+      .on(table.companyId)
+      .where(sql`${table.isCompanyDefault} = true`),
   }),
 );

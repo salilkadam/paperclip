@@ -44,6 +44,7 @@ const awsVault: CompanySecretProviderConfig = {
   displayName: "AWS production",
   status: "ready",
   isDefault: true,
+  isCompanyDefault: false,
   config: { region: "us-east-1" },
   healthStatus: null,
   healthCheckedAt: null,

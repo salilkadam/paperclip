@@ -262,7 +262,6 @@ export function emailChannelService(db: Db, options: EmailChannelOptions) {
   async function vault(endpoint: Endpoint, key: string, value: string) {
     const secret = await secrets.create(endpoint.companyId, {
       name: `AgentMail ${endpoint.id} ${key} ${randomUUID()}`,
-      provider: "local_encrypted",
       value,
     });
     await bindSecret(endpoint, key, secret.id);

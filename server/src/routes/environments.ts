@@ -53,7 +53,6 @@ import {
   listReadyPluginEnvironmentDrivers,
   type ReadyPluginWorkerRecovery,
 } from "../services/plugin-environment-driver.js";
-import { getConfiguredSecretProvider } from "../secrets/configured-provider.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
@@ -1042,7 +1041,6 @@ export function environmentRoutes(
         companyId,
         environmentName: req.body.name,
         driver: req.body.driver,
-        secretProvider: getConfiguredSecretProvider(),
         config: req.body.config,
         actor: {
           agentId: actor.agentId,
@@ -1202,7 +1200,6 @@ export function environmentRoutes(
               companyId: companyIdForSecrets!,
               environmentName: nextName,
               driver: nextDriver,
-              secretProvider: getConfiguredSecretProvider(),
               config: configSource,
               actor: {
                 agentId: actor.agentId,

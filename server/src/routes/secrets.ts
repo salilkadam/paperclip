@@ -19,7 +19,6 @@ import { validate } from "../middleware/validate.js";
 import { assertBoard, assertBoardOrAgent, assertCompanyAccess, getAccessibleResource } from "./authz.js";
 import { logActivity, secretService } from "../services/index.js";
 import { createSecretProposalsService } from "../services/secret-proposals.js";
-import { getConfiguredSecretProvider } from "../secrets/configured-provider.js";
 import { forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
 import { authorizationDeniedDetails } from "../services/authorization.js";
 import { accessService } from "../services/access.js";
@@ -114,7 +113,6 @@ export function secretRoutes(db: Db, deps: SecretRoutesDeps = {}) {
   const issues = deps.issues ?? issueService(db);
   const heartbeat = deps.heartbeat ?? heartbeatService(db);
   const runRedactions = createRunSecretRedactionRegistry(db);
-  const defaultProvider = getConfiguredSecretProvider();
 
   async function assertSecretCatalogReadAllowed(req: Parameters<typeof assertBoard>[0], companyId: string) {
     const decision = await access.decide({
@@ -550,6 +548,61 @@ export function secretRoutes(db: Db, deps: SecretRoutesDeps = {}) {
     res.json(updated);
   });
 
+  // Company default provider vault: where secrets created without an explicit
+  // provider choice are stored. Affects new secrets only.
+  router.post("/secret-provider-configs/:id/company-default", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const existing = await getAccessibleResource(req, res, svc.getProviderConfigById(id), "Provider vault not found");
+    if (!existing) return;
+
+    const previous = await svc.getCompanyDefaultProviderConfig(existing.companyId);
+    const updated = await svc.setCompanyDefaultProviderConfig(existing.companyId, id);
+    if (!updated) {
+      res.status(404).json({ error: "Provider vault not found" });
+      return;
+    }
+
+    await logActivity(db, {
+      companyId: updated.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "secret_provider_config.company_default_set",
+      entityType: "secret_provider_config",
+      entityId: updated.id,
+      details: {
+        provider: updated.provider,
+        displayName: updated.displayName,
+        previousProviderConfigId: previous?.id ?? null,
+        previousProvider: previous?.provider ?? null,
+      },
+    });
+
+    res.json(updated);
+  });
+
+  router.delete("/companies/:companyId/secret-provider-configs/company-default", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+
+    const previous = await svc.getCompanyDefaultProviderConfig(companyId);
+    await svc.setCompanyDefaultProviderConfig(companyId, null);
+    if (previous) {
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId ?? "board",
+        action: "secret_provider_config.company_default_cleared",
+        entityType: "secret_provider_config",
+        entityId: previous.id,
+        details: { provider: previous.provider, displayName: previous.displayName },
+      });
+    }
+
+    res.json({ cleared: Boolean(previous) });
+  });
+
   router.post("/secret-provider-configs/:id/health", async (req, res) => {
     assertBoard(req);
     const id = req.params.id as string;
@@ -619,7 +672,7 @@ export function secretRoutes(db: Db, deps: SecretRoutesDeps = {}) {
           name: req.body.name,
           description: req.body.description,
           status: req.body.status,
-          provider: req.body.provider ?? defaultProvider,
+          provider: req.body.provider,
           providerConfigId: req.body.providerConfigId,
           managedMode: req.body.managedMode,
           providerMetadata: req.body.providerMetadata,
@@ -893,7 +946,7 @@ export function secretRoutes(db: Db, deps: SecretRoutesDeps = {}) {
       {
         name: req.body.name,
         key: req.body.key,
-        provider: req.body.provider ?? defaultProvider,
+        provider: req.body.provider,
         providerConfigId: req.body.providerConfigId,
         managedMode: req.body.managedMode,
         value: req.body.value,

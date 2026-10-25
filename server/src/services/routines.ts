@@ -63,7 +63,6 @@ import { trackRoutineRun } from "@paperclipai/shared/telemetry";
 import { conflict, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { getTelemetryClient } from "../telemetry.js";
-import { getConfiguredSecretProvider } from "../secrets/configured-provider.js";
 import { issueService } from "./issues.js";
 import { assertAssignableAgent } from "./agent-assignability.js";
 import { visibleIssueCondition } from "./issue-visibility.js";
@@ -1607,33 +1606,48 @@ export function routineService(
     executor?: Db,
   ) {
     const secretValue = crypto.randomBytes(24).toString("hex");
-    const providerId = getConfiguredSecretProvider();
+    // Webhook secrets follow the company default provider like every other
+    // new secret. The id is chosen up front because ownership-placed providers
+    // (HashiCorp Vault) derive the storage path from it.
+    const target = await secretsSvc.resolveWriteTarget(companyId, {});
+    const providerConfig = await secretsSvc.getSelectableRuntimeProviderConfig({
+      companyId,
+      provider: target.provider,
+      providerConfigId: target.providerConfigId,
+    });
+    const secretId = crypto.randomUUID();
     const input = {
       name: `routine-${routineId}-${crypto.randomBytes(6).toString("hex")}`,
-      provider: providerId,
+      provider: target.provider,
       value: secretValue,
       description: `Webhook auth for routine ${routineId}`,
     };
     const provider = getSecretProvider(input.provider);
+    const writeContext = {
+      companyId,
+      secretKey: input.name,
+      secretName: input.name,
+      version: 1,
+      secretId,
+      scope: "company" as const,
+    };
     const prepared = await provider.createSecret({
       value: input.value,
       externalRef: null,
-      context: {
-        companyId,
-        secretKey: input.name,
-        secretName: input.name,
-        version: 1,
-      },
+      providerConfig,
+      context: writeContext,
     });
 
     const insertSecret = async (secretDb: Db) => {
       const secret = await secretDb
         .insert(companySecrets)
         .values({
+          id: secretId,
           companyId,
           key: input.name,
           name: input.name,
           provider: input.provider,
+          providerConfigId: target.providerConfigId,
           status: "active",
           managedMode: "paperclip_managed",
           externalRef: prepared.externalRef,
@@ -1654,6 +1668,8 @@ export function routineService(
         valueSha256: prepared.valueSha256,
         fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
         providerVersionRef: prepared.providerVersionRef ?? null,
+        provider: input.provider,
+        providerConfigId: target.providerConfigId,
         status: "current",
         createdByAgentId: actor.agentId ?? null,
         createdByUserId: actor.userId ?? null,
@@ -1670,10 +1686,26 @@ export function routineService(
       return secret;
     };
 
-    const secret = executor
-      ? await insertSecret(executor)
-      : await db.transaction(async (tx) => insertSecret(tx as unknown as Db));
-    return { secret, secretValue };
+    try {
+      const secret = executor
+        ? await insertSecret(executor)
+        : await db.transaction(async (tx) => insertSecret(tx as unknown as Db));
+      return { secret, secretValue };
+    } catch (error) {
+      // The rows never committed: remove the provider-side value so an
+      // external store (Vault) is not left holding an orphan.
+      await provider.deleteOrArchive({
+        material: prepared.material,
+        externalRef: prepared.externalRef,
+        providerConfig,
+        context: writeContext,
+        mode: "delete",
+      }).catch((cleanupError) => {
+        logger.warn({ err: cleanupError, companyId, routineId, provider: input.provider },
+          "routine webhook secret: provider cleanup after failed insert did not complete");
+      });
+      throw error;
+    }
   }
 
   async function resolveTriggerSecret(trigger: typeof routineTriggers.$inferSelect, companyId: string) {

@@ -548,6 +548,19 @@ export function getSelectableProviderConfig(
   );
 }
 
+/**
+ * Where a new secret goes when the user does not choose: the company default
+ * provider vault (if usable), otherwise local encrypted storage.
+ */
+export function getCompanyDefaultCreateTarget(configs: CompanySecretProviderConfig[]): {
+  provider: SecretProvider;
+  providerConfigId: string;
+} {
+  const companyDefault = configs.find((config) => config.isCompanyDefault && !getProviderConfigBlockReason(config));
+  if (companyDefault) return { provider: companyDefault.provider, providerConfigId: companyDefault.id };
+  return { provider: "local_encrypted", providerConfigId: getDefaultProviderConfigId(configs, "local_encrypted") };
+}
+
 export function getDefaultProviderConfigId(
   configs: CompanySecretProviderConfig[],
   provider: SecretProvider,
@@ -1042,8 +1055,7 @@ export function Secrets() {
       description: "",
       usageGuidance: "",
       externalRef: "",
-      provider: "local_encrypted",
-      providerConfigId: getDefaultProviderConfigId(providerConfigs, "local_encrypted"),
+      ...getCompanyDefaultCreateTarget(providerConfigs),
     });
     setCreateOpen(true);
   }
@@ -1346,6 +1358,24 @@ export function Secrets() {
     onError: (error) => {
       pushToast({
         title: "Default update failed",
+        body: error instanceof Error ? error.message : "Try again",
+        tone: "error",
+      });
+    },
+  });
+
+  const companyDefaultVaultMutation = useMutation({
+    mutationFn: async (input: { id: string } | { clearCompanyId: string }) => {
+      if ("id" in input) await secretsApi.setCompanyDefaultProviderConfig(input.id);
+      else await secretsApi.clearCompanyDefaultProviderConfig(input.clearCompanyId);
+    },
+    onSuccess: () => {
+      pushToast({ title: "Company default updated", body: "Applies to new secrets only.", tone: "success" });
+      invalidateAll();
+    },
+    onError: (error) => {
+      pushToast({
+        title: "Company default update failed",
         body: error instanceof Error ? error.message : "Try again",
         tone: "error",
       });
@@ -2215,6 +2245,8 @@ export function Secrets() {
             onDisable={(config) => disableVaultMutation.mutate(config.id)}
             onRemove={(config) => setRemoveVaultConfirm(config)}
             onSetDefault={(config) => defaultVaultMutation.mutate(config.id)}
+            onSetCompanyDefault={(config) => companyDefaultVaultMutation.mutate({ id: config.id })}
+            onClearCompanyDefault={() => selectedCompanyId && companyDefaultVaultMutation.mutate({ clearCompanyId: selectedCompanyId })}
             onHealthCheck={(config) => healthVaultMutation.mutate(config.id)}
             onImportSecrets={openImportFromVault}
             pendingActionId={
@@ -3527,6 +3559,8 @@ export function ProviderVaultsTab({
   onDisable,
   onRemove,
   onSetDefault,
+  onSetCompanyDefault,
+  onClearCompanyDefault,
   onHealthCheck,
   onImportSecrets,
   pendingActionId,
@@ -3541,6 +3575,8 @@ export function ProviderVaultsTab({
   onDisable: (config: CompanySecretProviderConfig) => void;
   onRemove: (config: CompanySecretProviderConfig) => void;
   onSetDefault: (config: CompanySecretProviderConfig) => void;
+  onSetCompanyDefault?: (config: CompanySecretProviderConfig) => void;
+  onClearCompanyDefault?: () => void;
   onHealthCheck: (config: CompanySecretProviderConfig) => void;
   onImportSecrets: (config: CompanySecretProviderConfig) => void;
   pendingActionId: string | null;
@@ -3592,6 +3628,11 @@ export function ProviderVaultsTab({
       </aside>
 
       <div className="min-w-0 flex-1 space-y-6">
+        <CompanyDefaultProviderNotice
+          providers={providers}
+          providerConfigs={providerConfigs}
+          onClear={onClearCompanyDefault}
+        />
         {providerRows.map(({ id, provider, Icon, isComingSoonFamily, configs }) => (
           <section key={id} id={`provider-vaults-${id}`} className={cn("scroll-mt-6 space-y-2", isComingSoonFamily && "opacity-50")}>
             <div className="flex flex-wrap items-center gap-2">
@@ -3623,6 +3664,7 @@ export function ProviderVaultsTab({
                     onDisable={() => onDisable(config)}
                     onRemove={() => onRemove(config)}
                     onSetDefault={() => onSetDefault(config)}
+                    onSetCompanyDefault={onSetCompanyDefault ? () => onSetCompanyDefault(config) : undefined}
                     onHealthCheck={() => onHealthCheck(config)}
                     onImportSecrets={() => onImportSecrets(config)}
                   />
@@ -3643,6 +3685,7 @@ function ProviderVaultCard({
   onDisable,
   onRemove,
   onSetDefault,
+  onSetCompanyDefault,
   onHealthCheck,
   onImportSecrets,
 }: {
@@ -3652,6 +3695,7 @@ function ProviderVaultCard({
   onDisable: () => void;
   onRemove: () => void;
   onSetDefault: () => void;
+  onSetCompanyDefault?: () => void;
   onHealthCheck: () => void;
   onImportSecrets: () => void;
 }) {
@@ -3668,6 +3712,11 @@ function ProviderVaultCard({
                 <Star className="h-3 w-3 fill-current" />
                 Default
               </span>
+            ) : null}
+            {config.isCompanyDefault ? (
+              <Badge variant="outline" className="font-medium" data-testid={`provider-vault-company-default-${config.id}`}>
+                Company default
+              </Badge>
             ) : null}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -3730,6 +3779,18 @@ function ProviderVaultCard({
           <Star className="h-3.5 w-3.5 mr-1" />
           Make default
         </Button>
+        {onSetCompanyDefault ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onSetCompanyDefault}
+            disabled={pending || Boolean(blockReason) || config.isCompanyDefault || (config.status !== "ready" && config.status !== "warning")}
+            title="New secrets that don't pick a provider are stored here. Existing secrets stay where they are."
+            data-testid={`provider-vault-make-company-default-${config.id}`}
+          >
+            Make company default
+          </Button>
+        ) : null}
         <Button
           variant="outline"
           size="sm"
@@ -3751,6 +3812,37 @@ function ProviderVaultCard({
           Remove
         </Button>
       </div>
+    </div>
+  );
+}
+
+function CompanyDefaultProviderNotice({
+  providers,
+  providerConfigs,
+  onClear,
+}: {
+  providers: SecretProviderDescriptor[];
+  providerConfigs: CompanySecretProviderConfig[];
+  onClear?: () => void;
+}) {
+  const companyDefault = providerConfigs.find((config) => config.isCompanyDefault) ?? null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/20 p-3 text-sm" data-testid="company-default-provider-notice">
+      <span className="text-muted-foreground">Company default for new secrets:</span>
+      {companyDefault ? (
+        <>
+          <span className="font-medium">
+            {companyDefault.displayName} ({providerLabel(providers, companyDefault.provider)})
+          </span>
+          {onClear ? (
+            <Button variant="ghost" size="sm" onClick={onClear}>
+              Use deployment default
+            </Button>
+          ) : null}
+        </>
+      ) : (
+        <span className="font-medium">Deployment default provider</span>
+      )}
     </div>
   );
 }

@@ -173,6 +173,10 @@ export const secretsApi = {
     api.delete<CompanySecretProviderConfig>(`/secret-provider-configs/${id}`),
   setDefaultProviderConfig: (id: string) =>
     api.post<CompanySecretProviderConfig>(`/secret-provider-configs/${id}/default`, {}),
+  setCompanyDefaultProviderConfig: (id: string) =>
+    api.post<CompanySecretProviderConfig>(`/secret-provider-configs/${id}/company-default`, {}),
+  clearCompanyDefaultProviderConfig: (companyId: string) =>
+    api.delete<{ cleared: boolean }>(`/companies/${companyId}/secret-provider-configs/company-default`),
   checkProviderConfigHealth: (id: string) =>
     api.post<SecretProviderConfigHealthResponse>(`/secret-provider-configs/${id}/health`, {}),
   create: (companyId: string, data: CreateSecretInput) =>

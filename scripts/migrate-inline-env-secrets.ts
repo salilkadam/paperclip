@@ -74,7 +74,6 @@ async function main() {
             agent.companyId,
             {
               name,
-              provider: "local_encrypted",
               value: plain,
               description: `Migrated from agent ${agent.id} env ${key}`,
             },

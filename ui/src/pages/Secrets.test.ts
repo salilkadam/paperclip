@@ -37,6 +37,7 @@ function providerConfig(
     displayName: overrides.id,
     status: "ready",
     isDefault: false,
+    isCompanyDefault: false,
     config: {},
     healthStatus: null,
     healthCheckedAt: null,

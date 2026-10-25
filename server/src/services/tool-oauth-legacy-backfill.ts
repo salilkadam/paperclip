@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -10,6 +11,7 @@ import {
 import type { McpConnectionCredentialRef, SecretProvider, ToolCredentialSecretRef } from "@paperclipai/shared";
 import { getSecretProvider } from "../secrets/provider-registry.js";
 import type { SecretProviderVaultRuntimeConfig } from "../secrets/types.js";
+import { secretService } from "./secrets.js";
 
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
@@ -171,14 +173,33 @@ async function upsertTokenSecret(
     ))
     .then((rows) => rows[0] ?? null);
   const nextVersion = existing ? existing.latestVersion + 1 : 1;
-  const providerId = (existing?.provider ?? "local_encrypted") as SecretProvider;
+  // A new secret follows the company default provider; an existing one keeps
+  // its own. The id is chosen up front for ownership-placed providers (Vault).
+  const secrets = secretService(tx);
+  const target = existing
+    ? { provider: existing.provider as SecretProvider, providerConfigId: existing.providerConfigId }
+    : await secrets.resolveWriteTarget(connection.companyId, {});
+  const providerId = target.provider;
   const provider = getSecretProvider(providerId);
-  const providerConfig = existing ? await runtimeProviderConfigForExistingSecret(tx, existing) : null;
+  const providerConfig = existing
+    ? await runtimeProviderConfigForExistingSecret(tx, existing)
+    : await secrets.getSelectableRuntimeProviderConfig({
+      companyId: connection.companyId,
+      provider: target.provider,
+      providerConfigId: target.providerConfigId,
+    });
+  const secretId = existing?.id ?? randomUUID();
   const providerWriteContext = {
     companyId: connection.companyId,
     secretKey: key,
     secretName: existing?.name ?? name,
     version: nextVersion,
+    secretId,
+    scope: (existing?.scope ?? "company") as "company" | "user" | "instance",
+    ownerUserId: existing?.ownerUserId ?? null,
+    ownerAgentId: existing?.ownerAgentId ?? null,
+    ownerProjectId: existing?.ownerProjectId ?? null,
+    ownerPluginId: existing?.ownerPluginId ?? null,
   };
   const prepared = existing ? await provider.createVersion({
     value: token.value,
@@ -188,7 +209,7 @@ async function upsertTokenSecret(
   }) : await provider.createSecret({
     value: token.value,
     externalRef: null,
-    providerConfig: null,
+    providerConfig,
     context: providerWriteContext,
   });
 
@@ -196,11 +217,12 @@ async function upsertTokenSecret(
   const secret = existing ?? await tx
     .insert(companySecrets)
     .values({
+      id: secretId,
       companyId: connection.companyId,
       key,
       name,
-      provider: "local_encrypted",
-      providerConfigId: null,
+      provider: target.provider,
+      providerConfigId: target.providerConfigId,
       status: "active",
       managedMode: "paperclip_managed",
       externalRef: null,
@@ -221,6 +243,8 @@ async function upsertTokenSecret(
     valueSha256: prepared.valueSha256,
     fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
     providerVersionRef: prepared.providerVersionRef ?? null,
+    provider: providerId,
+    providerConfigId: providerConfig?.id ?? null,
     status: existing ? "disabled" : "current",
     createdByUserId: "migration",
   });

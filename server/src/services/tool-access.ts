@@ -2355,7 +2355,6 @@ export function toolAccessService(
           {
             name: `${name} OAuth client secret ${randomUUID().slice(0, 8)}`,
             key: `tool_app.${randomUUID()}.oauth_client_secret`,
-            provider: "local_encrypted",
             value: input.oauthClient.clientSecret,
             description: `OAuth client secret for ${name}.`,
           },

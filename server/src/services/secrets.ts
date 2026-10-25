@@ -63,6 +63,7 @@ import type {
   SecretProviderWriteContext,
 } from "../secrets/types.js";
 import { isSecretProviderClientError } from "../secrets/types.js";
+import { getConfiguredSecretProvider } from "../secrets/configured-provider.js";
 import { authorizationDeniedDetails, authorizationService } from "./authorization.js";
 import { findActiveServerAdapter } from "../adapters/index.js";
 import { logActivity } from "./activity-log.js";
@@ -117,12 +118,12 @@ const SECRET_VERSION_STALE_CONFLICT = "The secret version is stale. Reload and c
 
 // The fixed Claude Code OAuth user-secret definition. The Claude login flow owns
 // only this compile-time key and these fixed properties. A caller never selects
-// the key, the name, the provider, the mode, or the status.
+// the key, the name, the mode, or the status. The provider is the company
+// default at creation time (resolveWriteTarget), never caller-chosen.
 const CLAUDE_CODE_OAUTH_TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
 const CLAUDE_CODE_OAUTH_DEFINITION = {
   key: CLAUDE_CODE_OAUTH_TOKEN_KEY,
   name: "Claude Code OAuth token",
-  provider: "local_encrypted",
   managedMode: "paperclip_managed",
   status: "active",
 } as const;
@@ -1289,6 +1290,57 @@ export function secretService(db: Db | DbTransaction) {
     return toProviderVaultRuntimeConfig(providerConfig);
   }
 
+  /**
+   * Where a new secret (or user-secret definition) is stored. Order:
+   *   1. an explicit provider vault (`providerConfigId`) - validated for company and status;
+   *   2. an explicit provider family - the company default if it is that family,
+   *      else that family's `isDefault` vault, else the family with no vault
+   *      (deployment env config, the pre-provider-vault behaviour);
+   *   3. nothing chosen - the company default vault, else the deployment
+   *      provider (`PAPERCLIP_SECRETS_PROVIDER`, default `local_encrypted`).
+   * Callers that used to hard-code `local_encrypted` pass nothing, so they follow
+   * the company default.
+   */
+  async function resolveWriteTarget(
+    companyId: string,
+    input: { provider?: SecretProvider | null; providerConfigId?: string | null },
+  ): Promise<{ provider: SecretProvider; providerConfigId: string | null }> {
+    if (input.providerConfigId) {
+      const config = await getProviderConfigById(input.providerConfigId);
+      if (!config) throw notFound("Provider vault not found");
+      assertSelectableProviderConfig(config, companyId, (input.provider ?? config.provider) as SecretProvider);
+      return { provider: config.provider as SecretProvider, providerConfigId: config.id };
+    }
+    const usable = (status: string) => status === "ready" || status === "warning";
+    const companyDefault = await db
+      .select()
+      .from(companySecretProviderConfigs)
+      .where(and(
+        eq(companySecretProviderConfigs.companyId, companyId),
+        eq(companySecretProviderConfigs.isCompanyDefault, true),
+      ))
+      .then((rows) => rows.find((row) => usable(row.status)) ?? null);
+    if (!input.provider) {
+      if (companyDefault) {
+        return { provider: companyDefault.provider as SecretProvider, providerConfigId: companyDefault.id };
+      }
+      return { provider: getConfiguredSecretProvider(), providerConfigId: null };
+    }
+    if (companyDefault?.provider === input.provider) {
+      return { provider: input.provider, providerConfigId: companyDefault.id };
+    }
+    const familyDefault = await db
+      .select()
+      .from(companySecretProviderConfigs)
+      .where(and(
+        eq(companySecretProviderConfigs.companyId, companyId),
+        eq(companySecretProviderConfigs.provider, input.provider),
+        eq(companySecretProviderConfigs.isDefault, true),
+      ))
+      .then((rows) => rows.find((row) => usable(row.status)) ?? null);
+    return { provider: input.provider, providerConfigId: familyDefault?.id ?? null };
+  }
+
   function validateProviderConfigPayload(
     provider: SecretProvider,
     config: Record<string, unknown>,
@@ -1393,7 +1445,8 @@ export function secretService(db: Db | DbTransaction) {
       });
     }
     const resolvedVersion = version === "latest" ? secret.latestVersion : version;
-    const providerId = secret.provider as SecretProvider;
+    // Reassigned to the version's own provider once the version row is read.
+    let providerId = secret.provider as SecretProvider;
     const configPath = accessContext?.configPath ?? null;
     try {
       if (secret.status === "deleted") {
@@ -1408,11 +1461,15 @@ export function secretService(db: Db | DbTransaction) {
       if (versionRow.status === "disabled" || versionRow.status === "destroyed" || versionRow.revokedAt) {
         throw unprocessable("Secret version is not active", { code: "version_inactive" });
       }
+      // A version resolves through the provider it was written to, so a pinned
+      // old version keeps working after the secret moves to another provider.
+      // Rows from before per-version providers fall back to the parent's.
+      if (versionRow.provider) providerId = versionRow.provider as SecretProvider;
       const provider = getSecretProvider(providerId);
       const providerConfig = await getSelectableRuntimeProviderConfig({
         companyId,
         provider: providerId,
-        providerConfigId: secret.providerConfigId,
+        providerConfigId: versionRow.provider ? versionRow.providerConfigId : secret.providerConfigId,
       });
       const value = await provider.resolveVersion({
         material: versionRow.material as Record<string, unknown>,
@@ -2052,7 +2109,8 @@ export function secretService(db: Db | DbTransaction) {
     };
   }
 
-  // Every `local_encrypted` secret this function creates runs under
+  // Every secret this function creates (company default provider, historically
+  // always `local_encrypted`) runs under
   // `withAccountHomeSecretMutationLock`, so its write can never commit inside
   // the window a Codex account-home cleanup already used to decide no secret
   // claims the directory it is about to delete. A create queued behind the
@@ -2101,26 +2159,22 @@ export function secretService(db: Db | DbTransaction) {
       .then((rows) => rows[0] ?? null);
     if (duplicateKey) throw conflict(`Secret key already exists: ${key}`);
 
-    const provider = getSecretProvider("local_encrypted");
+    // Follows the company default provider like every other new secret.
+    const target = await resolveWriteTarget(companyId, {});
+    const provider = getSecretProvider(target.provider);
     const providerConfig = await getSelectableRuntimeProviderConfig({
       companyId,
-      provider: "local_encrypted",
-      providerConfigId: null,
+      provider: target.provider,
+      providerConfigId: target.providerConfigId,
     });
-    const providerWriteContext = {
-      companyId,
-      secretKey: key,
-      secretName: input.name,
-      version: 1,
-    };
     const reservedSecret = await db
       .insert(companySecrets)
       .values({
         companyId,
         key,
         name: input.name,
-        provider: "local_encrypted",
-        providerConfigId: null,
+        provider: target.provider,
+        providerConfigId: target.providerConfigId,
         status: "archived",
         managedMode: "paperclip_managed",
         externalRef: null,
@@ -2132,6 +2186,14 @@ export function secretService(db: Db | DbTransaction) {
       })
       .returning()
       .then((rows) => rows[0]);
+    const providerWriteContext: SecretProviderWriteContext = {
+      companyId,
+      secretKey: key,
+      secretName: input.name,
+      version: 1,
+      secretId: reservedSecret.id,
+      scope: "company",
+    };
 
     let prepared: PreparedSecretVersion | null = null;
     try {
@@ -2149,6 +2211,8 @@ export function secretService(db: Db | DbTransaction) {
         valueSha256: preparedSecret.valueSha256,
         fingerprintSha256: preparedSecret.fingerprintSha256 ?? preparedSecret.valueSha256,
         providerVersionRef: preparedSecret.providerVersionRef ?? null,
+        provider: target.provider,
+        providerConfigId: target.providerConfigId,
         status: "disabled",
         createdByAgentId: actor?.agentId ?? null,
         createdByUserId: actor?.userId ?? null,
@@ -2201,7 +2265,8 @@ export function secretService(db: Db | DbTransaction) {
     companyId: string,
     input: {
       name: string;
-      provider: SecretProvider;
+      /** Omit to follow the company default (see resolveWriteTarget). */
+      provider?: SecretProvider | null;
       providerConfigId?: string | null;
       value?: string | null;
       key?: string | null;
@@ -2231,11 +2296,12 @@ export function secretService(db: Db | DbTransaction) {
     if (duplicateKey) throw conflict(`Secret key already exists: ${key}`);
 
     const managedMode = input.managedMode ?? "paperclip_managed";
-    const provider = getSecretProvider(input.provider);
+    const target = await resolveWriteTarget(companyId, input);
+    const provider = getSecretProvider(target.provider);
     const providerConfig = await getSelectableRuntimeProviderConfig({
       companyId,
-      provider: input.provider,
-      providerConfigId: input.providerConfigId,
+      provider: target.provider,
+      providerConfigId: target.providerConfigId,
     });
     if (managedMode === "external_reference" && !input.externalRef?.trim()) {
       throw unprocessable("External reference secrets require externalRef");
@@ -2262,8 +2328,8 @@ export function secretService(db: Db | DbTransaction) {
         ownerPluginId: instanceOwner?.pluginId ?? null,
         key,
         name: input.name,
-        provider: input.provider,
-        providerConfigId: input.providerConfigId ?? null,
+        provider: target.provider,
+        providerConfigId: target.providerConfigId,
         status: "archived",
         managedMode,
         externalRef: null,
@@ -2309,7 +2375,7 @@ export function secretService(db: Db | DbTransaction) {
         rollbackReservedRow: () => db.delete(companySecrets).where(eq(companySecrets.id, reservedSecret.id)),
         companyId,
         provider: provider.id,
-        providerConfigId: input.providerConfigId ?? null,
+        providerConfigId: target.providerConfigId,
         providerConfig,
         operation: "secret.create",
       });
@@ -2331,6 +2397,8 @@ export function secretService(db: Db | DbTransaction) {
         valueSha256: prepared.valueSha256,
         fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
         providerVersionRef: prepared.providerVersionRef ?? null,
+        provider: target.provider,
+        providerConfigId: target.providerConfigId,
         status: "disabled",
         createdByAgentId: actor?.agentId ?? null,
         createdByUserId: actor?.userId ?? null,
@@ -2349,7 +2417,7 @@ export function secretService(db: Db | DbTransaction) {
           throwProviderCleanupFailedAfterCreateRollback({
             companyId,
             provider: provider.id,
-            providerConfigId: input.providerConfigId ?? null,
+            providerConfigId: target.providerConfigId,
             providerConfig,
             operation: "create.prepare_rollback",
           });
@@ -2360,7 +2428,7 @@ export function secretService(db: Db | DbTransaction) {
         secretId: reservedSecret.id,
         companyId,
         provider: provider.id,
-        providerConfigId: input.providerConfigId ?? null,
+        providerConfigId: target.providerConfigId,
         providerConfig,
         operation: "create.prepare_rollback",
       });
@@ -2407,7 +2475,7 @@ export function secretService(db: Db | DbTransaction) {
           throwProviderCleanupFailedAfterCreateRollback({
             companyId,
             provider: provider.id,
-            providerConfigId: input.providerConfigId ?? null,
+            providerConfigId: target.providerConfigId,
             providerConfig,
             operation: "create.rollback",
           });
@@ -2418,7 +2486,7 @@ export function secretService(db: Db | DbTransaction) {
         secretId: reservedSecret.id,
         companyId,
         provider: provider.id,
-        providerConfigId: input.providerConfigId ?? null,
+        providerConfigId: target.providerConfigId,
         providerConfig,
         operation: "create.rollback",
       });
@@ -2544,6 +2612,8 @@ export function secretService(db: Db | DbTransaction) {
         valueSha256: prepared.valueSha256,
         fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
         providerVersionRef: prepared.providerVersionRef ?? null,
+        provider: providerId,
+        providerConfigId: providerConfig?.id ?? null,
         status: "disabled",
         createdByAgentId: actor?.agentId ?? null,
         createdByUserId: actor?.userId ?? null,
@@ -3151,6 +3221,8 @@ export function secretService(db: Db | DbTransaction) {
           valueSha256: prepared.valueSha256,
           fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
           providerVersionRef: prepared.providerVersionRef ?? null,
+          provider: providerId,
+          providerConfigId: providerConfigId ?? null,
           status: "current",
           createdByAgentId: actor?.agentId ?? null,
           createdByUserId: actor?.userId ?? null,
@@ -3213,7 +3285,7 @@ export function secretService(db: Db | DbTransaction) {
     return (
       definition.key === CLAUDE_CODE_OAUTH_DEFINITION.key &&
       definition.name === CLAUDE_CODE_OAUTH_DEFINITION.name &&
-      definition.provider === CLAUDE_CODE_OAUTH_DEFINITION.provider &&
+      // Any provider: the definition follows the company default (owner decision 7.5).
       definition.managedMode === CLAUDE_CODE_OAUTH_DEFINITION.managedMode &&
       definition.status === CLAUDE_CODE_OAUTH_DEFINITION.status
     );
@@ -3271,6 +3343,7 @@ export function secretService(db: Db | DbTransaction) {
       }
       return existing;
     }
+    const target = await resolveWriteTarget(companyId, {});
     try {
       return await db
         .insert(userSecretDefinitions)
@@ -3280,8 +3353,8 @@ export function secretService(db: Db | DbTransaction) {
           name: CLAUDE_CODE_OAUTH_DEFINITION.name,
           description: null,
           status: CLAUDE_CODE_OAUTH_DEFINITION.status,
-          provider: CLAUDE_CODE_OAUTH_DEFINITION.provider,
-          providerConfigId: null,
+          provider: target.provider,
+          providerConfigId: target.providerConfigId,
           managedMode: CLAUDE_CODE_OAUTH_DEFINITION.managedMode,
           providerMetadata: null,
           usageGuidance: null,
@@ -3527,9 +3600,6 @@ export function secretService(db: Db | DbTransaction) {
   async function removeSecretUnlocked(secretId: string) {
     const secret = await getById(secretId);
     if (!secret) return null;
-    const versionRow = await getSecretVersion(secret.id, secret.latestVersion);
-    const providerId = secret.provider as SecretProvider;
-    const provider = getSecretProvider(providerId);
     if (secret.status !== "deleted") {
       await db
         .update(companySecrets)
@@ -3542,24 +3612,51 @@ export function secretService(db: Db | DbTransaction) {
         })
         .where(eq(companySecrets.id, secretId));
     }
-    const providerConfig = secret.providerConfigId
-      ? await getProviderConfigById(secret.providerConfigId)
-      : null;
-    const providerRuntimeConfig =
-      providerConfig && providerConfig.status !== "disabled" && providerConfig.status !== "coming_soon"
-        ? toProviderVaultRuntimeConfig(providerConfig)
+    // Versions can live in different providers (a migrated secret keeps its
+    // old versions where they were written), so delete in every distinct
+    // (provider, provider vault) among them, passing that group's newest
+    // material. A secret with no versions still gets one call for its parent.
+    const versionRows = await db
+      .select()
+      .from(companySecretVersions)
+      .where(eq(companySecretVersions.secretId, secret.id))
+      .orderBy(desc(companySecretVersions.version));
+    const groups = new Map<string, { providerId: SecretProvider; providerConfigId: string | null; versionRow: typeof versionRows[number] | null }>();
+    for (const row of versionRows) {
+      const providerId = (row.provider ?? secret.provider) as SecretProvider;
+      const providerConfigId = row.provider ? row.providerConfigId : secret.providerConfigId;
+      const groupKey = `${providerId}|${providerConfigId ?? ""}`;
+      if (!groups.has(groupKey)) groups.set(groupKey, { providerId, providerConfigId, versionRow: row });
+    }
+    if (groups.size === 0) {
+      groups.set("parent", { providerId: secret.provider as SecretProvider, providerConfigId: secret.providerConfigId, versionRow: null });
+    }
+    for (const group of groups.values()) {
+      const provider = getSecretProvider(group.providerId);
+      const providerConfig = group.providerConfigId
+        ? await getProviderConfigById(group.providerConfigId)
         : null;
-    if (!secret.providerConfigId || providerRuntimeConfig) {
+      const providerRuntimeConfig =
+        providerConfig && providerConfig.status !== "disabled" && providerConfig.status !== "coming_soon"
+          ? toProviderVaultRuntimeConfig(providerConfig)
+          : null;
+      if (group.providerConfigId && !providerRuntimeConfig) continue;
       try {
         await provider.deleteOrArchive({
-          material: versionRow?.material as Record<string, unknown> | undefined,
+          material: group.versionRow?.material as Record<string, unknown> | undefined,
           externalRef: secret.externalRef,
           providerConfig: providerRuntimeConfig,
           context: {
             companyId: secret.companyId,
             secretKey: secret.key,
             secretName: secret.name,
-            version: secret.latestVersion,
+            version: group.versionRow?.version ?? secret.latestVersion,
+            secretId: secret.id,
+            scope: secret.scope as SecretProviderWriteContext["scope"],
+            ownerUserId: secret.ownerUserId,
+            ownerAgentId: secret.ownerAgentId,
+            ownerProjectId: secret.ownerProjectId,
+            ownerPluginId: secret.ownerPluginId,
           },
           mode: "delete",
         });
@@ -3652,7 +3749,7 @@ export function secretService(db: Db | DbTransaction) {
         } else if (existing) {
           await rotateUnlocked(existing.id, { value, expectedLatestVersion: existing.latestVersion });
         } else {
-          await createSecretUnlocked(scope.companyId, { name: key, key, provider: "local_encrypted", value }, undefined, scope);
+          await createSecretUnlocked(scope.companyId, { name: key, key, value }, undefined, scope);
         }
       });
     },
@@ -3740,6 +3837,51 @@ export function secretService(db: Db | DbTransaction) {
         .orderBy(desc(companySecretProviderConfigs.createdAt)),
 
     getProviderConfigById,
+
+    resolveWriteTarget,
+    getSelectableRuntimeProviderConfig,
+
+    /** The company's default provider vault, or null (deployment provider applies). */
+    getCompanyDefaultProviderConfig: (companyId: string) =>
+      db
+        .select()
+        .from(companySecretProviderConfigs)
+        .where(and(
+          eq(companySecretProviderConfigs.companyId, companyId),
+          eq(companySecretProviderConfigs.isCompanyDefault, true),
+        ))
+        .then((rows) => rows[0] ?? null),
+
+    /**
+     * Make a ready/warning provider vault the company default, or clear the
+     * default with null. Affects only secrets created afterwards; existing
+     * secrets stay where they are until migrated.
+     */
+    setCompanyDefaultProviderConfig: async (companyId: string, providerConfigId: string | null) => {
+      if (providerConfigId) {
+        const config = await getProviderConfigById(providerConfigId);
+        if (!config || config.companyId !== companyId) throw notFound("Provider vault not found");
+        if (config.status !== "ready" && config.status !== "warning") {
+          throw unprocessable("Only ready or warning provider vaults can be the company default");
+        }
+      }
+      return db.transaction(async (tx) => {
+        await tx
+          .update(companySecretProviderConfigs)
+          .set({ isCompanyDefault: false, updatedAt: new Date() })
+          .where(and(
+            eq(companySecretProviderConfigs.companyId, companyId),
+            eq(companySecretProviderConfigs.isCompanyDefault, true),
+          ));
+        if (!providerConfigId) return null;
+        return tx
+          .update(companySecretProviderConfigs)
+          .set({ isCompanyDefault: true, updatedAt: new Date() })
+          .where(eq(companySecretProviderConfigs.id, providerConfigId))
+          .returning()
+          .then((rows) => rows[0] ?? null);
+      });
+    },
 
     createProviderConfig: async (
       companyId: string,
@@ -3830,6 +3972,9 @@ export function secretService(db: Db | DbTransaction) {
             displayName: patch.displayName?.trim() ?? existing.displayName,
             status,
             isDefault: status === "disabled" || status === "coming_soon" ? false : patch.isDefault ?? existing.isDefault,
+            // A vault that stops being usable stops being the company default
+            // (new secrets then fall back to the deployment provider, visibly).
+            isCompanyDefault: status === "disabled" || status === "coming_soon" ? false : existing.isCompanyDefault,
             config: normalizedConfig,
             disabledAt: status === "disabled" ? existing.disabledAt ?? new Date() : null,
             updatedAt: new Date(),
@@ -3848,6 +3993,7 @@ export function secretService(db: Db | DbTransaction) {
         .set({
           status: "disabled",
           isDefault: false,
+          isCompanyDefault: false,
           disabledAt: existing.disabledAt ?? new Date(),
           updatedAt: new Date(),
         })
@@ -4009,7 +4155,8 @@ export function secretService(db: Db | DbTransaction) {
         name: string;
         description?: string | null;
         status?: string;
-        provider: SecretProvider;
+        /** Omit to follow the company default (see resolveWriteTarget). */
+        provider?: SecretProvider | null;
         providerConfigId?: string | null;
         managedMode?: "paperclip_managed" | "external_reference";
         providerMetadata?: Record<string, unknown> | null;
@@ -4020,7 +4167,7 @@ export function secretService(db: Db | DbTransaction) {
       const key = input.key.trim();
       const duplicate = await getUserSecretDefinitionByKey(companyId, key);
       if (duplicate) throw conflict(`User secret definition already exists: ${key}`);
-      await assertProviderConfigForSecret(companyId, input.provider, input.providerConfigId);
+      const target = await resolveWriteTarget(companyId, input);
       try {
         return await db
           .insert(userSecretDefinitions)
@@ -4030,8 +4177,8 @@ export function secretService(db: Db | DbTransaction) {
             name: input.name.trim(),
             description: input.description ?? null,
             status: input.status ?? "active",
-            provider: input.provider,
-            providerConfigId: input.providerConfigId ?? null,
+            provider: target.provider,
+            providerConfigId: target.providerConfigId,
             managedMode: input.managedMode ?? "paperclip_managed",
             providerMetadata: input.providerMetadata ?? null,
             usageGuidance: input.usageGuidance ?? null,
@@ -4700,6 +4847,8 @@ export function secretService(db: Db | DbTransaction) {
               valueSha256: preparedSecret.valueSha256,
               fingerprintSha256: preparedSecret.fingerprintSha256 ?? preparedSecret.valueSha256,
               providerVersionRef: preparedSecret.providerVersionRef ?? null,
+              provider: providerId,
+              providerConfigId: providerConfig.id,
               status: "current",
               createdByAgentId: actor?.agentId ?? null,
               createdByUserId: actor?.userId ?? null,
@@ -4772,7 +4921,8 @@ export function secretService(db: Db | DbTransaction) {
       companyId: string,
       input: {
         name: string;
-        provider: SecretProvider;
+        /** Omit to follow the company default (see resolveWriteTarget). */
+        provider?: SecretProvider | null;
         providerConfigId?: string | null;
         value?: string | null;
         key?: string | null;

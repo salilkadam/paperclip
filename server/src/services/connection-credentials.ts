@@ -73,7 +73,6 @@ export async function writeConnectionCredential(
   const metadata = {
     name: `${input.connectionName} ${input.label} ${randomUUID().slice(0, 8)}`,
     key: `tool_app.${randomUUID()}.${input.configPath.replace(/[^a-z0-9_:-]+/gi, "_")}`,
-    provider: "local_encrypted" as const,
     description: `Credential for ${input.connectionName} (${input.configPath}).`,
   };
   if (!input.ownerUserId) {
@@ -86,8 +85,11 @@ export async function writeConnectionCredential(
   let createdDefinitionId: string | null = null;
   if (!definition) {
     if (input.definitionKey) {
+      // Shared OAuth definition: stored where the company default points.
+      const target = await vault.resolveWriteTarget(input.companyId, {});
       [definition] = await db.insert(userSecretDefinitions).values({
         ...metadata, key: input.definitionKey, companyId: input.companyId,
+        provider: target.provider, providerConfigId: target.providerConfigId,
         managedMode: "paperclip_managed", createdByUserId: input.actor?.userId, createdByAgentId: input.actor?.agentId,
       }).onConflictDoNothing().returning();
       if (definition) createdDefinitionId = definition.id;
