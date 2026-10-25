@@ -356,12 +356,16 @@ can override) the deployment-level `PAPERCLIP_SECRETS_AWS_*` env. Bootstrap
 credentials still come from the AWS SDK default credential chain — see
 `doc/SECRETS-AWS-PROVIDER.md` for the full IAM and KMS contract.
 
-**GCP Secret Manager** and **HashiCorp Vault** vaults are coming soon. You can
-save draft `projectId`, `location`, `namespace`, `address`, and `mountPath`
-metadata so the company is ready to flip them on when the provider modules
-ship. Vault `address` values must be origin-only `http(s)://host[:port]` URLs;
-addresses with embedded credentials, paths, query strings, or fragments are
-rejected.
+**HashiCorp Vault** vaults store managed values in KV v2 under a deployment-set
+prefix, by company and owner, and link read-only external values as
+`<kv path>#<field>`. The server signs in with its own Kubernetes ServiceAccount;
+a Vault provider vault carries only an optional Vault Enterprise `namespace`.
+Address, mount and prefix are deployment settings (`PAPERCLIP_SECRETS_VAULT_*`)
+and are rejected per company. See `doc/SECRETS-VAULT-PROVIDER.md`.
+
+**GCP Secret Manager** vaults are coming soon. You can save draft `projectId`,
+`location` and `namespace` metadata so the company is ready to flip them on
+when the provider module ships.
 
 ### Remote Import From AWS Vaults
 
