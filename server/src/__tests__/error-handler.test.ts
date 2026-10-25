@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../errors.js";
 import { errorHandler } from "../middleware/error-handler.js";
+import { ToolGatewayHttpError } from "../services/tool-gateway.js";
 import { mcpDiscoveryHttpFailure, retainMcpConnectionFailure } from "../services/mcp-connection-failure.js";
 
 const recordResponsibleUserDenialOnActiveRunMock = vi.hoisted(() => vi.fn());
@@ -395,5 +396,54 @@ describe("errorHandler", () => {
         code: "RESPONSIBLE_USER_UNAUTHORIZED",
       },
     );
+  });
+
+  it("maps a tool-gateway policy rejection to its own status without a crash report", () => {
+    // A Slack write denied by channel policy reaches the global handler from
+    // the agent Slack task tool endpoint. It is a client-facing 403, not a
+    // server fault: no res.err, no crash sink.
+    const req = makeReq();
+    const res = makeRes() as any;
+    const next = vi.fn() as unknown as NextFunction;
+    const err = new ToolGatewayHttpError(
+      403,
+      "Private research may only be delivered in its source channel or a DM with the requester",
+      "slack_operation_rejected",
+      { code: "slack_operation_rejected" },
+    );
+
+    errorHandler(err, req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Private research may only be delivered in its source channel or a DM with the requester",
+      reasonCode: "slack_operation_rejected",
+      code: "slack_operation_rejected",
+    });
+    expect(res.err).toBeUndefined();
+    expect(res.__errorContext).toBeUndefined();
+    expect(captureExceptionMock).not.toHaveBeenCalled();
+    expect(telemetryMocks.trackErrorHandlerCrash).not.toHaveBeenCalled();
+  });
+
+  it("reports a crash for a tool-gateway 5xx and keeps the gateway response shape", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    const next = vi.fn() as unknown as NextFunction;
+    const err = new ToolGatewayHttpError(
+      502,
+      "The assigned tool returned an error.",
+      "tool_error",
+    );
+
+    errorHandler(err, req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(502);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "The assigned tool returned an error.",
+      reasonCode: "tool_error",
+    });
+    expect(res.err).toBe(err);
+    expect(captureExceptionMock).toHaveBeenCalled();
   });
 });

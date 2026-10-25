@@ -15,6 +15,7 @@ import {
 } from "./redact-sensitive.js";
 import { recordResponsibleUserDenialOnActiveRun } from "../services/responsible-user-denial-run-outcomes.js";
 import { isExpectedMcpConnectionFailure } from "../services/mcp-connection-failure.js";
+import { ToolGatewayHttpError } from "../services/tool-gateway.js";
 import { isEndedDbPoolError } from "../database-retry.js";
 
 export interface ErrorContext {
@@ -142,6 +143,48 @@ export function errorHandler(
   _next: NextFunction,
 ) {
   if (err instanceof AgentLifecycleConflict) { res.status(409).json({ error: err.message }); return; }
+  // Tool-gateway rejections (policy denials, upstream tool failures) reach this
+  // handler from routes that relay connector execution without a local mapper,
+  // such as the agent Slack task tool endpoint. The error carries its own
+  // status: a 4xx is a client/policy rejection and must not land in the generic
+  // 500 crash path, while a genuine gateway 5xx keeps the flat gateway response
+  // shape used by the routes that map it locally.
+  if (err instanceof ToolGatewayHttpError) {
+    const secretSensitiveRequest = isSecretSensitiveHttpRequest(
+      req.method,
+      req.originalUrl,
+    );
+    if (err.status >= 500) {
+      const reportableError = sanitizeSecretSensitiveError(req, err);
+      attachErrorContext(
+        req,
+        res,
+        secretSensitiveRequest
+          ? { message: reportableError.message, name: reportableError.name }
+          : {
+              message: err.message,
+              stack: err.stack,
+              name: err.name,
+              details: err.details,
+            },
+        reportableError,
+      );
+      reportCrash(reportableError, req);
+      if (secretSensitiveRequest) {
+        res.status(err.status).json({ error: "Internal server error" });
+        return;
+      }
+    }
+    res.status(err.status).json({
+      error: sanitizeSecretSensitiveResponse(req, err.message),
+      reasonCode: err.reasonCode,
+      ...(sanitizeSecretSensitiveResponse(req, err.details) as Record<
+        string,
+        unknown
+      >),
+    });
+    return;
+  }
   if (err instanceof HttpError) {
     const details =
       err.details &&
