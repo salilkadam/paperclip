@@ -305,6 +305,26 @@ describe("secrets API parity commands", () => {
     ]);
   });
 
+  it("wraps provider migration and the company default endpoints for an explicit company", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse({ dryRun: true, total: 0, counts: {}, results: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runSecretCommand(["secrets", "migrate-provider", "-C", "company-9", "--to-vault", "vault-1", "--secret", "s-1", "s-2", "--dry-run"]);
+    await runSecretCommand(["secrets", "provider-config:company-default", "vault-1"]);
+    await runSecretCommand(["secrets", "provider-config:clear-company-default", "--company-id", "company-9"]);
+
+    expect(fetchMock.mock.calls.map((call) => [call[1]?.method ?? "GET", call[0]])).toEqual([
+      ["POST", "http://localhost:3100/api/companies/company-9/secrets/migrate-provider"],
+      ["POST", "http://localhost:3100/api/secret-provider-configs/vault-1/company-default"],
+      ["DELETE", "http://localhost:3100/api/companies/company-9/secret-provider-configs/company-default"],
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      targetProviderConfigId: "vault-1",
+      secretIds: ["s-1", "s-2"],
+      dryRun: true,
+    });
+  });
+
   it("wraps secret metadata, rotation, usage, access event, and delete endpoints", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
     vi.stubGlobal("fetch", fetchMock);

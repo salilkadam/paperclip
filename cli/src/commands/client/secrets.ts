@@ -534,6 +534,7 @@ export function registerSecretCommands(program: Command): void {
           handleCommandError(err);
         }
       }),
+    { includeCompany: true },
   );
 
   addCommonClientOptions(
@@ -649,6 +650,29 @@ export function registerSecretCommands(program: Command): void {
   addSecretProviderConfigPatch(secrets, "provider-config:update", "Update a secret provider vault config", "");
   addSecretProviderConfigPost(secrets, "provider-config:default", "Set the default provider vault config", "default");
   addSecretProviderConfigPost(secrets, "provider-config:health", "Check provider vault health", "health");
+  addSecretProviderConfigPost(
+    secrets,
+    "provider-config:company-default",
+    "Make a provider vault the company default for new secrets (existing secrets stay until migrated)",
+    "company-default",
+  );
+  addCommonClientOptions(
+    secrets
+      .command("provider-config:clear-company-default")
+      .description("Clear the company default provider vault (new secrets use the deployment provider)")
+      .action(async (opts: BaseClientOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts, { requireCompany: true });
+          printOutput(
+            await ctx.api.delete(apiPath`/api/companies/${ctx.companyId!}/secret-provider-configs/company-default`),
+            { json: ctx.json },
+          );
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+    { includeCompany: true },
+  );
   addSecretProviderConfigDelete(secrets, "provider-config:delete", "Delete a secret provider vault config");
   addCompanySecretJsonPost(secrets, "remote-import:preview", "Preview remote secret import", "secrets/remote-import/preview");
   addCompanySecretJsonPost(secrets, "remote-import", "Import selected remote secrets", "secrets/remote-import");
