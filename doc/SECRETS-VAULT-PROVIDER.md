@@ -90,14 +90,15 @@ family but no vault uses that family's default vault if one exists.
 ## Moving existing secrets between providers
 
 ```
-paperclip secrets migrate-provider --company <id> --dry-run            # to the company default
-paperclip secrets migrate-provider --company <id> --to-vault <configId>
-paperclip secrets migrate-provider --company <id> --to-provider local_encrypted   # rollback
-paperclip secrets migrate-provider --company <id> --secret <id> [--secret <id>]   # a subset
+paperclip secrets migrate-provider --company-id <id> --dry-run            # to the company default
+paperclip secrets migrate-provider --company-id <id> --to-vault <configId>
+paperclip secrets migrate-provider --company-id <id> --to-provider local_encrypted   # rollback
+paperclip secrets migrate-provider --company-id <id> --secret <id> [--secret <id>]   # a subset
 ```
 
 (API: `POST /api/companies/:companyId/secrets/migrate-provider` with `targetProviderConfigId`,
-`targetProvider`, `dryRun`, `secretIds`. **Instance admin only.**)
+`targetProvider`, `dryRun`, `secretIds`. Requires an instance admin who also has access
+to that company.)
 
 For each active, Paperclip-managed secret (company, user and instance scope; user
 values first, the most-rotated last):
@@ -114,8 +115,20 @@ values first, the most-rotated last):
    plus the version insert. If anything rotated the secret meanwhile (including an OAuth
    refresh in another process), the UPDATE matches nothing: the target write is removed
    and that secret reports a 409 conflict. Re-run to pick it up.
-6. A user-secret definition moves to the target once all its live values have moved, so
-   new values for that definition follow.
+6. A user-secret definition moves to the target once all its **active** values have
+   moved, so new values for that definition follow. A full company run (no `--secret`)
+   also moves definitions that have no values yet. Each definition gets its own result
+   row (`kind: "definition"`).
+
+A failed attempt archives only the version it wrote. A re-run reuses the leftover
+target entry (or re-creates one an operator removed), so "re-run to pick it up" works.
+
+**Limits.**
+- The source vault must be usable. Re-enable a disabled vault before migrating away
+  from it, and disable it afterwards.
+- A company run is a single HTTP request. Behind a proxy with a short timeout, the CLI
+  can report an error while the server finishes the run. Re-running is safe (secrets
+  already moved report `already_on_target`), or split the work with `--secret`.
 
 Older versions stay where they were written and keep resolving there. External
 references are refused: Paperclip does not own those values. Each read is an access

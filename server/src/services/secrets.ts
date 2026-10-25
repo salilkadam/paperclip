@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, like, ne, notInArray, notLike, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, ne, notInArray, notLike, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -2860,11 +2860,25 @@ export function secretService(db: Db | DbTransaction) {
       ))
       .limit(1)
       .then((rows) => rows.length > 0);
+    // The database's view can be stale either way: a rolled-back earlier attempt
+    // leaves a provider-side entry with no version row, and an operator can
+    // remove an entry a row still points at. So fall back once: create that
+    // collides -> add a version; add-a-version that finds nothing -> create.
+    const writeArgs = { value, externalRef: null, providerConfig: targetConfig, context: writeContext };
+    const isCode = (error: unknown, code: string) => isSecretProviderClientError(error) && error.code === code;
     let prepared: PreparedSecretVersion;
     try {
-      prepared = priorOnTarget
-        ? await targetProvider.createVersion({ value, externalRef: null, providerConfig: targetConfig, context: writeContext })
-        : await targetProvider.createSecret({ value, externalRef: null, providerConfig: targetConfig, context: writeContext });
+      if (priorOnTarget) {
+        prepared = await targetProvider.createVersion(writeArgs).catch((error) => {
+          if (isCode(error, "not_found")) return targetProvider.createSecret(writeArgs);
+          throw error;
+        });
+      } else {
+        prepared = await targetProvider.createSecret(writeArgs).catch((error) => {
+          if (isCode(error, "conflict")) return targetProvider.createVersion(writeArgs);
+          throw error;
+        });
+      }
     } catch (error) {
       throw remoteProviderWriteHttpError(error, {
         companyId: secret.companyId,
@@ -2874,13 +2888,16 @@ export function secretService(db: Db | DbTransaction) {
         operation: "secret.migrate_provider",
       });
     }
+    // Always archive just this version (Vault: soft-delete this KV version;
+    // AWS: drop its pending stage). Deleting the whole entry would block a
+    // retry (Vault cas, AWS deletion window) for no gain.
     const undoTargetWrite = (operation: string) =>
       cleanupPreparedProviderWrite({
         provider: targetProvider,
         prepared,
         providerConfig: targetConfig,
         context: writeContext,
-        mode: priorOnTarget ? "archive" : "delete",
+        mode: "archive",
         operation,
       });
 
@@ -2930,14 +2947,16 @@ export function secretService(db: Db | DbTransaction) {
           createdByUserId: actor?.userId ?? null,
         });
         // A user value's definition decides where NEW values go. Move it once
-        // every live value of the definition is on the target.
+        // every active value of the definition is on the target.
         if (secret.scope === "user" && secret.userSecretDefinitionId) {
           const stragglers = await tx
             .select({ id: companySecrets.id })
             .from(companySecrets)
             .where(and(
               eq(companySecrets.userSecretDefinitionId, secret.userSecretDefinitionId),
-              ne(companySecrets.status, "deleted"),
+              // Archived/disabled values keep resolving through their own
+              // versions' providers; only active values decide.
+              eq(companySecrets.status, "active"),
               or(
                 ne(companySecrets.provider, target.provider),
                 target.providerConfigId
@@ -5291,7 +5310,8 @@ export function secretService(db: Db | DbTransaction) {
       }
       rows.sort((a, b) =>
         (a.scope === "user" ? 0 : 1) - (b.scope === "user" ? 0 : 1) || a.latestVersion - b.latestVersion);
-      const results: Array<MigrateProviderResult | { secretId: string; status: "failed"; error: string; code: string | null }> = [];
+      // `secretId` is the definition id for `kind: "definition"` rows.
+      const results: Array<(MigrateProviderResult | { secretId: string; status: "failed"; error: string; code: string | null }) & { kind?: "definition" }> = [];
       for (const row of rows) {
         try {
           results.push(await withAccountHomeSecretMutationLock(undefined, companyId, () =>
@@ -5303,6 +5323,60 @@ export function secretService(db: Db | DbTransaction) {
             status: "failed",
             error: error instanceof Error ? error.message : String(error),
             code: details?.code ?? (error instanceof HttpError ? String(error.status) : null),
+          });
+        }
+      }
+      // Definitions decide where NEW user values go. Move every managed
+      // definition whose active values are all on the target, including
+      // definitions with no values yet (never visited by the loop above).
+      if (!input.secretIds?.length) {
+        const target = await resolveWriteTarget(companyId, { provider: input.targetProvider, providerConfigId: input.targetProviderConfigId });
+        const definitions = await db
+          .select()
+          .from(userSecretDefinitions)
+          .where(and(
+            eq(userSecretDefinitions.companyId, companyId),
+            eq(userSecretDefinitions.managedMode, "paperclip_managed"),
+            isNull(userSecretDefinitions.deletedAt),
+          ));
+        for (const definition of definitions) {
+          const onTarget = definition.provider === target.provider &&
+            (definition.providerConfigId ?? null) === target.providerConfigId;
+          if (onTarget) continue;
+          const offTarget = await db
+            .select({ id: companySecrets.id })
+            .from(companySecrets)
+            .where(and(
+              eq(companySecrets.userSecretDefinitionId, definition.id),
+              eq(companySecrets.status, "active"),
+              or(
+                ne(companySecrets.provider, target.provider),
+                target.providerConfigId
+                  ? or(sql`${companySecrets.providerConfigId} is null`, ne(companySecrets.providerConfigId, target.providerConfigId))
+                  : sql`${companySecrets.providerConfigId} is not null`,
+              ),
+            ))
+            .limit(1);
+          if (offTarget.length > 0) {
+            results.push({ secretId: definition.id, kind: "definition", status: "failed", error: "Some active values of this definition are not on the target yet", code: "definition_values_pending" });
+            continue;
+          }
+          if (!input.dryRun) {
+            await db
+              .update(userSecretDefinitions)
+              .set({ provider: target.provider, providerConfigId: target.providerConfigId, updatedAt: new Date() })
+              .where(eq(userSecretDefinitions.id, definition.id));
+          }
+          results.push({
+            secretId: definition.id,
+            kind: "definition",
+            status: input.dryRun ? "dry_run" : "migrated",
+            fromProvider: definition.provider as SecretProvider,
+            fromProviderConfigId: definition.providerConfigId ?? null,
+            toProvider: target.provider,
+            toProviderConfigId: target.providerConfigId,
+            fromVersion: 0,
+            toVersion: null,
           });
         }
       }
