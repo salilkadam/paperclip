@@ -62,6 +62,47 @@ curl -s -X POST -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
   upload token/idempotency key. When retrying a failed write, change the
   arguments (e.g. re-upload media), do not resend byte-for-byte.
 
+## Publishing governance: drafts are yours, going live is the board's
+
+Paperclip gates every call that makes a post go live. `publish-post-tool`,
+`approve-post-tool`, `move-post-to-slot-tool`, `set-post-recurrence-tool`,
+`delete-post-tool`, the repurpose tools (create/activate/resume/update: they
+auto-post replicated videos), the posting-schedule and queue tools
+(`update-`/`generate-`/`copy-posting-schedule-tool`, `reorder-queue-tool`:
+they move already-approved posts), and any `create-post-tool`, `create-posts-tool` or
+`update-post-tool` call **whose `status` is not exactly `"draft"`** are
+"ask first": the gateway returns `approval_required` and posts an approval card
+on your checked-out task. The TryPost workspace itself may report
+`publishes_directly: true`; that does not change this rule.
+
+1. **Prepare as a draft.** Always send `status: "draft"` explicitly on
+   `create-post-tool` / `create-posts-tool` / `update-post-tool`, including
+   when you only edit text or media. An omitted `status` counts as a go-live
+   request and opens an approval card.
+2. **Plan the time, don't set it.** Write the intended publish time (account
+   timezone and UTC) in the task. Do not send `scheduled_at`, `queue` or
+   `queue_slot` while drafting: scheduling is going live.
+3. **Post only to your own company's accounts.** A workspace can hold several
+   companies' pages. Pick accounts whose display name/username is your
+   company's, never a person's profile or another company's page unless the
+   task names it. If it is ambiguous, ask.
+4. **Hand it to the board.** `preview-post-tool`, then put a publishing block
+   in the task: account (platform, display name, id), post id, intended time,
+   final text, media. If you have a Slack tool and the task or company
+   instructions name a board channel, post the same block there with a link
+   to the task. Slack is a notification only: a Slack reply is not an
+   approval.
+5. **Request go-live once.** Call `update-post-tool` with `post_id`,
+   `status: "scheduled"` and `scheduled_at` (or `status: "publishing"` for
+   now). The gateway returns `approval_required`. Do not retry it; move the
+   task to `in_review` naming the pending approval, and end the run.
+6. **After the decision.** Approval runs that exact stored call once and wakes
+   you with the result: verify with `get-post-tool` and record the outcome.
+   Rejection means nothing ran: revise the draft (step 1) and request again.
+
+Editing a post that is already scheduled is a go-live change too: send
+`status: "draft"` to pull it back, edit, then request approval again.
+
 ## Known provider quirk: media attach
 
 `request-media-upload-tool` returns both an `upload_token` and a `media_id`
@@ -126,20 +167,21 @@ A `linkedin-page` account needs `content_type: linkedin_page_post`. Forcing
    - Existing workspace asset: pass its `id`.
    - Local file: `request-media-upload-tool`, upload via the signed URL, then
      pass `upload_token`.
-6. `create-post-tool` with `status: draft` unless the user explicitly asks to
-   schedule or publish immediately.
-7. `preview-post-tool` before publishing.
-8. `publish-post-tool` only after explicit user approval.
-9. After publication, use `get-post-metrics-tool` for per-platform analytics.
+6. `create-post-tool` with an explicit `status: "draft"`.
+7. `preview-post-tool`, then hand the draft to the board and request go-live
+   as described in "Publishing governance" above.
+8. After publication, use `get-post-metrics-tool` for per-platform analytics.
 
 ## Queue workflow
 
 1. `get-posting-schedule-tool` to inspect the channel's schedule and timezone.
 2. Use `list-free-slots-tool` for exact available queue slots.
-3. Create with:
+3. Queueing is going live, so it goes through board approval: create the
+   draft, then request go-live with `update-post-tool` and `status:
+   "scheduled"` plus:
    - `queue: "next"` for the next free slot
    - `queue: "top"` for the first slot, shifting other queued posts back
-   - `queue_slot` for a specific free slot
+   - or `move-post-to-slot-tool` for a specific free slot
 4. Use `move-post-to-slot-tool` or `reorder-queue-tool` only if the user has
    direct-publish permission.
 
@@ -147,16 +189,17 @@ A `linkedin-page` account needs `content_type: linkedin_page_post`. Forcing
 
 For "Post this to LinkedIn next Tuesday at 9am Pacific":
 
-1. Resolve the LinkedIn `social_account_id`.
+1. Resolve the LinkedIn `social_account_id` (your company's page).
 2. Convert the requested local time to UTC or ISO 8601 with offset.
 3. Validate content type and length limits.
-4. Create a draft:
-   - `platforms`: `[{ "social_account_id": "<resolved-id>" }]`
-   - `content`: user-approved caption
-   - `status`: `"scheduled"`
-   - `scheduled_at`: resolved ISO 8601 timestamp
-5. Preview, then confirm before publishing if the user asked for immediate
-   publication.
+4. Create a draft with `create-post-tool`:
+   - `social_account_id`: `"<resolved-id>"`
+   - `content`: the caption
+   - `status`: `"draft"`
+5. Preview and hand it to the board with the intended time.
+6. Request go-live: `update-post-tool` with `post_id`, `status: "scheduled"`,
+   `scheduled_at: "<resolved ISO 8601 timestamp>"`. It runs when the board
+   approves the card.
 
 ## Safety and confirmation
 

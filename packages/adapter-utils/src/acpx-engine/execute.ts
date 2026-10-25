@@ -1457,10 +1457,10 @@ async function prepareGeminiSkillRuntime(input: {
     const target = path.join(skillsHome, entry.runtimeName);
     try {
       const result = await ensurePaperclipSkillSymlink(entry.source, target);
-      if (result === "created" || result === "repaired") {
+      if (result === "created" || result === "repaired" || result === "replaced") {
         await input.onLog(
           "stdout",
-          `[paperclip] ${result === "repaired" ? "Repaired" : "Linked"} ACPX Gemini skill "${entry.runtimeName}" into ${skillsHome}\n`,
+          `[paperclip] ${result === "repaired" ? "Repaired" : result === "replaced" ? "Replaced stale unmanaged copy of" : "Linked"} ACPX Gemini skill "${entry.runtimeName}" into ${skillsHome}\n`,
         );
       }
     } catch (err) {

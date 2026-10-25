@@ -4365,7 +4365,7 @@ export async function ensurePaperclipSkillSymlink(
     linkSource,
     linkTarget,
   ) => fs.symlink(linkSource, linkTarget),
-): Promise<"created" | "repaired" | "skipped"> {
+): Promise<"created" | "repaired" | "replaced" | "skipped"> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {
     await linkSkill(source, target);
@@ -4373,7 +4373,7 @@ export async function ensurePaperclipSkillSymlink(
   }
 
   if (!existing.isSymbolicLink()) {
-    return "skipped";
+    return await replaceStaleUnmanagedSkillCopy(source, target, linkSkill);
   }
 
   const linkedPath = await fs.readlink(target).catch(() => null);
@@ -4395,6 +4395,102 @@ export async function ensurePaperclipSkillSymlink(
   await fs.unlink(target);
   await linkSkill(source, target);
   return "repaired";
+}
+
+/**
+ * A real directory (or file) sitting at a managed skill's runtime name shadows
+ * the skill Paperclip is configured to inject, so the agent silently reads
+ * whatever stale copy is there. Production hit this with a pre-fix `trypost`
+ * copy in the shared skills home: every agent sent the gateway session token
+ * as a Bearer header and got 401 for every TryPost call. (The production
+ * agents are opencode_local, whose skills home is `$HOME/.claude/skills`;
+ * claude_local links into its per-company prompt bundle instead.)
+ *
+ * Move a differing copy to `<skillsHome>/../skills-replaced/` (outside the
+ * scanned skills home, so it never loads as a second skill) and link the
+ * managed source. Left alone: an identical copy, a copy Paperclip
+ * materialized itself (it has the sentinel; materializePaperclipSkillCopy owns
+ * its freshness), and anything when the managed source is missing.
+ *
+ * The skills home is shared by concurrent runs, so the check-and-move runs
+ * under the materialize lock, kept beside the backups (never inside the
+ * scanned home), and the target is re-read inside it: a run that finds the
+ * work already done returns "skipped". That lock is a LEASE: a holder older
+ * than MATERIALIZED_SKILL_LOCK_STALE_MS, or one in another pod, can be evicted.
+ * So nothing in the critical section may delete: the only mutation is a
+ * rename into the backup, and losing the lease can only fail that rename.
+ *
+ * If linking fails with EPERM (no symlinks here), the backup stays and the
+ * target is left empty, because the acpx fallback materializes a copy there
+ * after an fs.rm. Any other link failure puts the original back, so an adapter
+ * without a fallback keeps the old skill instead of losing it. Either way the
+ * error is rethrown for the caller's failure log.
+ */
+async function replaceStaleUnmanagedSkillCopy(
+  source: string,
+  target: string,
+  linkSkill: (source: string, target: string) => Promise<void>,
+): Promise<"replaced" | "skipped"> {
+  if (!(await fs.lstat(source).catch(() => null))) return "skipped";
+  const isMaterialized = async () =>
+    Boolean(await fs.lstat(path.join(target, MATERIALIZED_SKILL_SENTINEL)).catch(() => null));
+  if (await isMaterialized()) return "skipped";
+  // Identity check before any lock or directory creation: an identical copy
+  // costs one hash per run and leaves nothing behind.
+  const sameAsSource = async () => {
+    const [targetHash, sourceHash] = await Promise.all([
+      hashSkillDirectory(target),
+      hashSkillDirectory(source),
+    ]);
+    return targetHash === sourceHash;
+  };
+  const unchanged = await sameAsSource().catch((err: NodeJS.ErrnoException) => {
+    if (err?.code === "ENOENT") return false; // moved by a concurrent run; re-read under the lock
+    throw err;
+  });
+  if (unchanged) return "skipped";
+  const backupRoot = path.join(path.dirname(path.dirname(target)), "skills-replaced");
+  const release = await acquireMaterializeLock(
+    path.join(backupRoot, `.${path.basename(target)}.lock`),
+  );
+  // A run outside this lock (the plain "created" path) may link first.
+  const link = async (): Promise<"replaced" | "skipped"> => {
+    try {
+      await linkSkill(source, target);
+      return "replaced";
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | null)?.code !== "EEXIST") throw err;
+      const linked = await fs.readlink(target).catch(() => null);
+      if (linked !== null && path.resolve(path.dirname(target), linked) === source) return "skipped";
+      throw err;
+    }
+  };
+  try {
+    const current = await fs.lstat(target).catch(() => null);
+    if (!current) return await link();
+    // A link (another run finished first, or anything else managed) is not ours.
+    if (current.isSymbolicLink()) return "skipped";
+    if (await isMaterialized()) return "skipped";
+
+    if (await sameAsSource()) return "skipped";
+
+    const backup = path.join(
+      backupRoot,
+      `${path.basename(target)}-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`,
+    );
+    await fs.rename(target, backup);
+    try {
+      return await link();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | null)?.code !== "EPERM"
+          && !(await fs.lstat(target).catch(() => null))) {
+        await fs.rename(backup, target).catch(() => {});
+      }
+      throw err;
+    }
+  } finally {
+    await release();
+  }
 }
 
 async function hashSkillDirectory(root: string): Promise<string> {
