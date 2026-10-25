@@ -1,8 +1,8 @@
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
-import { open as openFile } from "node:fs/promises";
+import { open as openFile, readdir, stat, unlink } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 import postgres from "postgres";
@@ -124,8 +124,18 @@ function monthlyRetentionCutoff(nowMs: number, monthlyMonths: number): number {
  * - Monthly tier: keep the NEWEST backup per calendar month for `monthlyMonths` months
  * - Everything else is deleted
  */
-function pruneOldBackups(backupDir: string, retention: BackupRetentionPolicy, filenamePrefix: string): number {
-  if (!existsSync(backupDir)) return 0;
+async function pruneOldBackups(
+  backupDir: string,
+  retention: BackupRetentionPolicy,
+  filenamePrefix: string,
+): Promise<number> {
+  let names: string[];
+  try {
+    names = await readdir(backupDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
 
   const now = Date.now();
   const dailyCutoff = now - Math.max(1, retention.dailyDays) * 24 * 60 * 60 * 1000;
@@ -135,12 +145,12 @@ function pruneOldBackups(backupDir: string, retention: BackupRetentionPolicy, fi
   type BackupEntry = { name: string; fullPath: string; mtimeMs: number };
   const entries: BackupEntry[] = [];
 
-  for (const name of readdirSync(backupDir)) {
+  for (const name of names) {
     if (!name.startsWith(`${filenamePrefix}-`)) continue;
     if (!name.endsWith(".sql") && !name.endsWith(".sql.gz")) continue;
     const fullPath = resolve(backupDir, name);
-    const stat = statSync(fullPath);
-    entries.push({ name, fullPath, mtimeMs: stat.mtimeMs });
+    const entryStat = await stat(fullPath);
+    entries.push({ name, fullPath, mtimeMs: entryStat.mtimeMs });
   }
 
   // Sort newest first so the first entry per week/month bucket is the one we keep
@@ -183,7 +193,7 @@ function pruneOldBackups(backupDir: string, retention: BackupRetentionPolicy, fi
   }
 
   for (const filePath of toDelete) {
-    unlinkSync(filePath);
+    await unlink(filePath);
   }
 
   return toDelete.length;
@@ -580,9 +590,9 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         // pg_dump succeeds, archive verification or persistence failures
         // must retain their original error and must not reuse a closed writer.
         await writer.abort();
-        const sizeBytes = statSync(backupFile).size;
+        const sizeBytes = (await stat(backupFile)).size;
         await opts.verifyBeforePrune?.(backupFile);
-        const prunedCount = pruneOldBackups(opts.backupDir, retention, filenamePrefix);
+        const prunedCount = await pruneOldBackups(opts.backupDir, retention, filenamePrefix);
         return { backupFile, sizeBytes, prunedCount };
       }
     }
@@ -1065,9 +1075,9 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     await pipeline(sqlReadStream, createGzip(), gzWriteStream);
     unlinkSync(sqlFile);
 
-    const sizeBytes = statSync(backupFile).size;
+    const sizeBytes = (await stat(backupFile)).size;
     await opts.verifyBeforePrune?.(backupFile);
-    const prunedCount = pruneOldBackups(opts.backupDir, retention, filenamePrefix);
+    const prunedCount = await pruneOldBackups(opts.backupDir, retention, filenamePrefix);
 
     return {
       backupFile,

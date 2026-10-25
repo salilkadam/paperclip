@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
 export type DatabaseBackupHealthWarningCode =
@@ -41,8 +41,23 @@ export type InspectDatabaseBackupHealthOptions = {
   now?: Date;
 };
 
+/**
+ * The backup directory can sit on a slow network mount and hold hundreds of
+ * dump files, so scanning it is expensive. Health checks call this endpoint
+ * frequently; cache successful scans so a slow mount cannot turn every probe
+ * into a full directory walk. Explicit `now` callers (tests, one-shot checks)
+ * bypass the cache and always observe current filesystem state.
+ */
+const HEALTH_CACHE_TTL_MS = 60_000;
+const healthCache = new Map<string, { expiresAt: number; value: DatabaseBackupHealthStatus }>();
+const healthInFlight = new Map<string, Promise<DatabaseBackupHealthStatus>>();
+
 function roundHours(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
 }
 
 function alertFileCandidates(opts: InspectDatabaseBackupHealthOptions) {
@@ -54,20 +69,24 @@ function alertFileCandidates(opts: InspectDatabaseBackupHealthOptions) {
   ].filter((value): value is string => Boolean(value)))];
 }
 
-function readLastFailure(alertFiles: string[]) {
-  const failures = alertFiles
-    .filter((alertFile) => existsSync(alertFile))
-    .map((alertFile) => {
-      const stat = statSync(alertFile);
-      const message = readFileSync(alertFile, "utf8").trim().split(/\r?\n/)[0] ||
-        "Database backup failure marker is present.";
+async function readLastFailure(alertFiles: string[]) {
+  const results = await Promise.all(alertFiles.map(async (alertFile) => {
+    try {
+      const alertStat = await stat(alertFile);
+      const raw = await readFile(alertFile, "utf8");
       return {
         path: alertFile,
-        mtime: new Date(stat.mtimeMs).toISOString(),
-        mtimeMs: stat.mtimeMs,
-        message,
+        mtime: new Date(alertStat.mtimeMs).toISOString(),
+        mtimeMs: alertStat.mtimeMs,
+        message: raw.trim().split(/\r?\n/)[0] || "Database backup failure marker is present.",
       };
-    })
+    } catch (error) {
+      if (isMissingPathError(error)) return null;
+      throw error;
+    }
+  }));
+  const failures = results
+    .filter((failure): failure is NonNullable<typeof failure> => failure !== null)
     .sort((left, right) => right.mtimeMs - left.mtimeMs);
   const latest = failures[0];
   if (!latest) return null;
@@ -78,17 +97,26 @@ function readLastFailure(alertFiles: string[]) {
   };
 }
 
-function findLatestBackup(backupDir: string, nowMs: number) {
-  if (!existsSync(backupDir)) return null;
+async function findLatestBackup(backupDir: string, nowMs: number) {
+  let names: string[];
+  try {
+    names = await readdir(backupDir);
+  } catch (error) {
+    if (isMissingPathError(error)) return null;
+    throw error;
+  }
 
-  const candidates = readdirSync(backupDir)
-    .filter((name) => name.endsWith(".sql.gz"))
-    .map((name) => {
-      const fullPath = join(backupDir, name);
-      const stat = statSync(fullPath);
-      return { fullPath, name, stat };
-    })
-    .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  const candidates = await Promise.all(
+    names
+      .filter((name) => name.endsWith(".sql.gz"))
+      .map(async (name) => {
+        const fullPath = join(backupDir, name);
+        const entryStat = await stat(fullPath);
+        return { fullPath, name, mtimeMs: entryStat.mtimeMs, size: entryStat.size };
+      }),
+  );
+
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
   const latest = candidates[0];
   if (!latest) return null;
@@ -96,15 +124,15 @@ function findLatestBackup(backupDir: string, nowMs: number) {
   return {
     name: basename(latest.fullPath),
     path: latest.fullPath,
-    mtime: new Date(latest.stat.mtimeMs).toISOString(),
-    ageHours: roundHours((nowMs - latest.stat.mtimeMs) / 3_600_000),
-    sizeBytes: latest.stat.size,
+    mtime: new Date(latest.mtimeMs).toISOString(),
+    ageHours: roundHours((nowMs - latest.mtimeMs) / 3_600_000),
+    sizeBytes: latest.size,
   };
 }
 
-export function inspectDatabaseBackupHealth(
+async function inspectDatabaseBackupHealthUncached(
   opts: InspectDatabaseBackupHealthOptions,
-): DatabaseBackupHealthStatus {
+): Promise<DatabaseBackupHealthStatus> {
   const warnings: DatabaseBackupHealthWarning[] = [];
   const now = opts.now ?? new Date();
   const maxAgeHours = Math.max(1, opts.maxAgeHours);
@@ -113,8 +141,8 @@ export function inspectDatabaseBackupHealth(
   let lastFailure: DatabaseBackupHealthStatus["lastFailure"] = null;
 
   try {
-    latestBackup = findLatestBackup(opts.backupDir, now.getTime());
-    lastFailure = readLastFailure(alertFileCandidates(opts));
+    latestBackup = await findLatestBackup(opts.backupDir, now.getTime());
+    lastFailure = await readLastFailure(alertFileCandidates(opts));
 
     if (!latestBackup) {
       warnings.push({
@@ -150,4 +178,39 @@ export function inspectDatabaseBackupHealth(
     lastFailure,
     warnings,
   };
+}
+
+export function inspectDatabaseBackupHealth(
+  opts: InspectDatabaseBackupHealthOptions,
+): Promise<DatabaseBackupHealthStatus> {
+  if (opts.now) {
+    return inspectDatabaseBackupHealthUncached(opts);
+  }
+
+  const cacheKey = JSON.stringify([
+    opts.enabled,
+    opts.backupDir,
+    opts.maxAgeHours,
+    opts.alertFile ?? null,
+    opts.alertFiles ?? null,
+  ]);
+
+  const cached = healthCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value);
+
+  const inFlight = healthInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const pending = inspectDatabaseBackupHealthUncached(opts)
+    .then((value) => {
+      if (!value.warnings.some((warning) => warning.code === "database_backup_check_failed")) {
+        healthCache.set(cacheKey, { expiresAt: Date.now() + HEALTH_CACHE_TTL_MS, value });
+      }
+      return value;
+    })
+    .finally(() => {
+      healthInFlight.delete(cacheKey);
+    });
+  healthInFlight.set(cacheKey, pending);
+  return pending;
 }
