@@ -4406,42 +4406,65 @@ export async function ensurePaperclipSkillSymlink(
  *
  * Move a differing copy to `<skillsHome>/../skills-replaced/` (outside the
  * scanned skills home, so it never loads as a second skill) and link the
- * managed source. Left alone: an identical copy, and a copy Paperclip
+ * managed source. Left alone: an identical copy, a copy Paperclip
  * materialized itself (it has the sentinel; materializePaperclipSkillCopy owns
- * its freshness). If linking fails, the original is put back and the error is
- * rethrown so the caller's existing failure log and fallbacks still apply.
+ * its freshness), and anything when the managed source is missing.
+ *
+ * The skills home is shared by concurrent runs, so the check-and-move runs
+ * under a per-skill lock kept beside the backups (never inside the scanned
+ * home), and the target is re-read inside the lock: a run that finds the work
+ * already done returns "skipped". If linking fails, the backup stays where it
+ * is and the error is rethrown: the target is then empty, so the caller's
+ * failure log or EPERM materialize fallback runs against nothing that could
+ * be lost.
  */
 async function replaceStaleUnmanagedSkillCopy(
   source: string,
   target: string,
   linkSkill: (source: string, target: string) => Promise<void>,
 ): Promise<"replaced" | "skipped"> {
-  const sentinel = await fs
-    .lstat(path.join(target, MATERIALIZED_SKILL_SENTINEL))
-    .catch(() => null);
-  if (sentinel) return "skipped";
-
-  const [targetHash, sourceHash] = await Promise.all([
-    hashSkillDirectory(target),
-    hashSkillDirectory(source),
-  ]);
-  if (targetHash === sourceHash) return "skipped";
-
+  if (!(await fs.lstat(source).catch(() => null))) return "skipped";
+  const isMaterialized = async () =>
+    Boolean(await fs.lstat(path.join(target, MATERIALIZED_SKILL_SENTINEL)).catch(() => null));
+  if (await isMaterialized()) return "skipped";
   const backupRoot = path.join(path.dirname(path.dirname(target)), "skills-replaced");
-  await fs.mkdir(backupRoot, { recursive: true });
-  const backup = path.join(
-    backupRoot,
-    `${path.basename(target)}-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`,
+  const release = await acquireMaterializeLock(
+    path.join(backupRoot, `.${path.basename(target)}.lock`),
   );
-  await fs.rename(target, backup);
+  // A run outside this lock (the plain "created" path) may link first.
+  const link = async (): Promise<"replaced" | "skipped"> => {
+    try {
+      await linkSkill(source, target);
+      return "replaced";
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | null)?.code !== "EEXIST") throw err;
+      const linked = await fs.readlink(target).catch(() => null);
+      if (linked !== null && path.resolve(path.dirname(target), linked) === source) return "skipped";
+      throw err;
+    }
+  };
   try {
-    await linkSkill(source, target);
-  } catch (err) {
-    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
-    await fs.rename(backup, target).catch(() => {});
-    throw err;
+    const current = await fs.lstat(target).catch(() => null);
+    if (!current) return await link();
+    // A link (another run finished first, or anything else managed) is not ours.
+    if (current.isSymbolicLink()) return "skipped";
+    if (await isMaterialized()) return "skipped";
+
+    const [targetHash, sourceHash] = await Promise.all([
+      hashSkillDirectory(target),
+      hashSkillDirectory(source),
+    ]);
+    if (targetHash === sourceHash) return "skipped";
+
+    const backup = path.join(
+      backupRoot,
+      `${path.basename(target)}-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`,
+    );
+    await fs.rename(target, backup);
+    return await link();
+  } finally {
+    await release();
   }
-  return "replaced";
 }
 
 async function hashSkillDirectory(root: string): Promise<string> {

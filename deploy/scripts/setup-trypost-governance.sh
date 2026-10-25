@@ -9,12 +9,17 @@
 #
 # Per TryPost connection it ensures three company policies, by exact name:
 #   1. ask first: publish-post, approve-post, move-post-to-slot,
-#      set-post-recurrence, delete-post (always);
+#      set-post-recurrence, delete-post, the repurpose tools (they auto-post
+#      replicated videos) and the posting-schedule/queue tools (they move
+#      already-approved posts) — always;
 #   2. ask first: create-post, create-posts, update-post when the call's
 #      `status` is not exactly "draft" (an omitted status is gated too, so an
 #      edit to an already-scheduled post cannot slip through);
 #   3. block: API-key and webhook tools (operator work).
-# A policy that exists with different selectors/conditions is updated in place.
+# A policy that exists with a different type, priority, selectors or conditions
+# (or disabled) is updated in place. Zero TryPost connections found is fatal.
+# Policy names are unique per company, so one TryPost connection per company
+# is supported; a second one stops the run with the server's 409.
 #
 # Then it PROVES the gate with real gateway test calls as one of the company's
 # agents, using an all-zero social_account_id so nothing could post even if the
@@ -68,7 +73,9 @@ desired_policies() {
     { name: "org-instructions: ask first for TryPost publishing",
       description: "The board publishes; agents draft.",
       policyType: "require_approval", priority: 40, enabled: true,
-      selectors: { toolNames: ["publish-post-tool","approve-post-tool","move-post-to-slot-tool","set-post-recurrence-tool","delete-post-tool"], connectionId: $conn },
+      selectors: { toolNames: ["publish-post-tool","approve-post-tool","move-post-to-slot-tool","set-post-recurrence-tool","delete-post-tool",
+                               "create-repurpose-tool","activate-repurpose-tool","resume-repurpose-tool","update-repurpose-tool",
+                               "update-posting-schedule-tool","generate-posting-schedule-tool","copy-posting-schedule-tool","reorder-queue-tool"], connectionId: $conn },
       conditions: null },
     { name: "org-instructions: ask first for TryPost go-live (non-draft create/update)",
       description: "Agents may create and edit posts only as drafts (status: \"draft\" must be sent explicitly). Any create/update that schedules, queues or publishes (or omits status) needs board approval; the approved call then runs exactly once.",
@@ -78,7 +85,7 @@ desired_policies() {
     { name: "org-instructions: block TryPost keys and webhooks",
       description: "Credential and integration changes are operator work.",
       policyType: "block", priority: 40, enabled: true,
-      selectors: { toolNames: ["create-api-key-tool","delete-api-key-tool","rotate-webhook-secret-tool","create-webhook-tool","update-webhook-tool","delete-webhook-tool","send-webhook-test-tool"], connectionId: $conn },
+      selectors: { toolNames: ["create-api-key-tool","delete-api-key-tool","rotate-webhook-secret-tool","create-webhook-tool","update-webhook-tool","delete-webhook-tool","send-webhook-test-tool","replay-webhook-log-tool"], connectionId: $conn },
       conditions: null }
   ]'
 }
@@ -108,12 +115,15 @@ log "board key sees $(jq length <<<"$companies") target companies"
 total=0
 for cid in $(jq -r '.[].id' <<<"$companies"); do
   cname="$(jq -r --arg id "$cid" '.[]|select(.id==$id)|.name' <<<"$companies")"
-  conns="$(api GET "/companies/$cid/tools/connections" | jq '(.connections // .)
+  apps="$(api GET "/companies/$cid/tools/applications" | jq '[(.applications // .)[] | {key:.id, value:(.name // "")}] | from_entries')"
+  conns="$(api GET "/companies/$cid/tools/connections" | jq --argjson apps "$apps" '(.connections // .)
             | [.[] | select(.status=="active")
-                   | select((.name|ascii_downcase)=="trypost" or ((.url // .config.url // "")|test("/mcp/trypost")))]')"
+                   | select(((.name // "")|test("trypost";"i"))
+                            or (($apps[.applicationId // ""] // "")|test("trypost";"i"))
+                            or ((.url // .config.url // "")|test("/mcp/trypost")))]')"
   n="$(jq length <<<"$conns")"
   if [[ "$n" -eq 0 ]]; then log "$cname: no active TryPost connection, skipped"; continue; fi
-  agent="$(api GET "/companies/$cid/agents" | jq -r '[.[] | select(.status != "terminated")][0].id // empty')"
+  agent="$(api GET "/companies/$cid/agents" | jq -r '[.[] | select(.status=="idle" or .status=="active" or .status=="running")][0].id // empty')"
   [[ -n "$agent" ]] || die "$cname has a TryPost connection but no agent to prove the gate with"
   existing="$(api GET "/companies/$cid/tools/policies" | jq '(.policies // .)')"
 
@@ -125,8 +135,8 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
       if [[ -z "$have" ]]; then
         log "  create: $name"
         [[ "$DRY" -eq 1 ]] || { printf '%s' "$want" > "$WORK/p.json"; api POST "/companies/$cid/tools/policies" "$WORK/p.json" >/dev/null; }
-      elif ! jq -e --argjson w "$want" '(.policyType==$w.policyType) and (.enabled==true)
-               and ((.selectors.toolNames|sort)==($w.selectors.toolNames|sort))
+      elif ! jq -e --argjson w "$want" '(.policyType==$w.policyType) and (.enabled==true) and (.priority==$w.priority)
+               and ((.selectors | .toolNames |= sort)==($w.selectors | .toolNames |= sort))
                and (.conditions==$w.conditions)' <<<"$have" >/dev/null; then
         log "  update (drifted): $name"
         [[ "$DRY" -eq 1 ]] || { printf '%s' "$want" > "$WORK/p.json"; api PATCH "/companies/$cid/tools/policies/$(jq -r .id <<<"$have")" "$WORK/p.json" >/dev/null; }
@@ -142,4 +152,5 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
     total=$((total + 1))
   done
 done
+[[ "$total" -gt 0 ]] || die "no active TryPost connection found in any target company (nothing governed)"
 log "done: $total TryPost connection(s) governed$([[ "$DRY" -eq 1 ]] && echo ' (dry run, no writes, no probes)')"

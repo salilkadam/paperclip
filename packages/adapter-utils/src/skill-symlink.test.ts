@@ -71,16 +71,54 @@ describe("ensurePaperclipSkillSymlink with an unmanaged copy at the target", () 
     await expect(readdir(path.join(root, "home", ".claude", "skills-replaced"))).rejects.toThrow();
   });
 
-  it("restores the original copy and rethrows when linking fails", async () => {
-    const { source, target } = await setup();
+  it("keeps the backup and leaves the target empty when linking fails", async () => {
+    // The acpx EPERM fallback materializes into the target with fs.rm first, so
+    // putting the stale copy back would let that fallback destroy it unbacked.
+    const { root, source, target } = await setup();
     await mkdir(target);
     await writeFile(path.join(target, "SKILL.md"), "stale\n");
     const failingLink = async () => {
       throw Object.assign(new Error("symlinks unavailable"), { code: "EPERM" });
     };
     await expect(ensurePaperclipSkillSymlink(source, target, failingLink)).rejects.toThrow("symlinks unavailable");
+    await expect(lstat(target)).rejects.toThrow();
+    const backupRoot = path.join(root, "home", ".claude", "skills-replaced");
+    const backups = await readdir(backupRoot);
+    expect(backups).toHaveLength(1);
+    expect(await readFile(path.join(backupRoot, backups[0]!, "SKILL.md"), "utf8")).toBe("stale\n");
+  });
+
+  it("converges without errors when many runs race on the same stale copy", async () => {
+    const { root, source, target } = await setup();
+    await mkdir(target);
+    await writeFile(path.join(target, "SKILL.md"), "stale\n");
+    const results = await Promise.allSettled(
+      Array.from({ length: 8 }, () => ensurePaperclipSkillSymlink(source, target)),
+    );
+    expect(results.filter((r) => r.status === "rejected")).toEqual([]);
+    expect(results.map((r) => (r as PromiseFulfilledResult<string>).value)).toContain("replaced");
+    expect(await readlink(target)).toBe(source);
+    expect(await readdir(path.join(root, "home", ".claude", "skills-replaced"))).toHaveLength(1);
+  });
+
+  it("treats a concurrent run's link (EEXIST) as done, not as a failure", async () => {
+    const { source, target } = await setup();
+    await mkdir(target);
+    await writeFile(path.join(target, "SKILL.md"), "stale\n");
+    const raceLink = async (src: string, dst: string) => {
+      await symlink(src, dst); // the other run wins
+      throw Object.assign(new Error("exists"), { code: "EEXIST" });
+    };
+    await expect(ensurePaperclipSkillSymlink(source, target, raceLink)).resolves.toBe("skipped");
+    expect(await readlink(target)).toBe(source);
+  });
+
+  it("leaves a real directory alone when the managed source is missing", async () => {
+    const { root, target } = await setup();
+    await mkdir(target);
+    await writeFile(path.join(target, "SKILL.md"), "stale\n");
+    await expect(ensurePaperclipSkillSymlink(path.join(root, "missing"), target)).resolves.toBe("skipped");
     expect((await lstat(target)).isDirectory()).toBe(true);
-    expect(await readFile(path.join(target, "SKILL.md"), "utf8")).toBe("stale\n");
   });
 
   it("keeps the existing created / skipped / repaired behaviour", async () => {

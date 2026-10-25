@@ -66,7 +66,10 @@ curl -s -X POST -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
 
 Paperclip gates every call that makes a post go live. `publish-post-tool`,
 `approve-post-tool`, `move-post-to-slot-tool`, `set-post-recurrence-tool`,
-`delete-post-tool`, and any `create-post-tool`, `create-posts-tool` or
+`delete-post-tool`, the repurpose tools (create/activate/resume/update: they
+auto-post replicated videos), the posting-schedule and queue tools
+(`update-`/`generate-`/`copy-posting-schedule-tool`, `reorder-queue-tool`:
+they move already-approved posts), and any `create-post-tool`, `create-posts-tool` or
 `update-post-tool` call **whose `status` is not exactly `"draft"`** are
 "ask first": the gateway returns `approval_required` and posts an approval card
 on your checked-out task. The TryPost workspace itself may report
