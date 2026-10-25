@@ -301,12 +301,26 @@ function rejectUnsafeVaultAddress(value: unknown, ctx: z.RefinementCtx) {
   }
 }
 
+// Where the server connects, which KV mount and which path prefix it writes
+// under are deployment settings (PAPERCLIP_SECRETS_VAULT_*), never per-company
+// data: a company admin must not be able to redirect the server's Vault login.
+// Only the Vault Enterprise namespace may be set per provider vault.
 export const vaultProviderConfigSchema = z.object({
-  address: vaultAddressSchema.optional().nullable(),
+  address: z.unknown().optional(),
   namespace: optionalSafeShortText,
-  mountPath: optionalSafeShortText,
-  secretPathPrefix: optionalSafeShortText,
-}).strict();
+  mountPath: z.unknown().optional(),
+  secretPathPrefix: z.unknown().optional(),
+}).strict().superRefine((value, ctx) => {
+  for (const field of ["address", "mountPath", "secretPathPrefix"] as const) {
+    const fieldValue = value[field];
+    if (fieldValue === undefined || fieldValue === null || fieldValue === "") continue;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [field],
+      message: `Vault ${field} is set by the deployment (PAPERCLIP_SECRETS_VAULT_*), not per provider vault`,
+    });
+  }
+});
 
 export const secretProviderConfigPayloadSchema = z.discriminatedUnion("provider", [
   z.object({ provider: z.literal("local_encrypted"), config: localEncryptedProviderConfigSchema }),
@@ -335,8 +349,8 @@ export const createSecretProviderConfigSchema = z.object({
       });
     }
   }
-  const status = value.status ?? (["gcp_secret_manager", "vault"].includes(value.provider) ? "coming_soon" : "ready");
-  if ((value.provider === "gcp_secret_manager" || value.provider === "vault") && status !== "coming_soon" && status !== "disabled") {
+  const status = value.status ?? (value.provider === "gcp_secret_manager" ? "coming_soon" : "ready");
+  if (value.provider === "gcp_secret_manager" && status !== "coming_soon" && status !== "disabled") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["status"],

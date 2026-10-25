@@ -142,47 +142,36 @@ describe("secret validators", () => {
     ).not.toThrow();
   });
 
-  it("accepts origin-only Vault provider vault addresses", () => {
-    expect(() =>
-      createSecretProviderConfigSchema.parse({
-        provider: "vault",
-        displayName: "Vault draft",
-        config: { address: " https://vault.example.com/ " },
-      }),
-    ).not.toThrow();
-
-    const parsed = secretProviderConfigPayloadSchema.parse({
-      provider: "vault",
-      config: { address: " https://vault.example.com/ " },
-    });
-
+  it("accepts a Vault provider vault that only names a namespace", () => {
+    const parsed = secretProviderConfigPayloadSchema.parse({ provider: "vault", config: { namespace: "admin" } });
     expect(parsed.provider).toBe("vault");
-    if (parsed.provider !== "vault") throw new Error("Expected vault provider payload");
-    expect(parsed.config.address).toBe("https://vault.example.com");
+    expect(() =>
+      createSecretProviderConfigSchema.parse({ provider: "vault", displayName: "Vault", status: "ready", config: { namespace: "admin" } }),
+    ).not.toThrow();
   });
 
   it.each([
-    "https://user:pass@vault.example.com",
-    "https://vault.example.com?token=hvs.x",
-    "https://vault.example.com#token=hvs.x",
-    "https://vault.example.com/v1/secret",
-  ])("rejects credential-bearing or non-origin Vault addresses: %s", (address) => {
+    { address: "https://vault.example.com" },
+    { address: "https://user:pass@vault.example.com" },
+    { address: "https://vault.example.com?token=hvs.x" },
+    { mountPath: "kv" },
+    { secretPathPrefix: "other/team" },
+  ])("rejects deployment-owned Vault fields per provider vault: %o", (config) => {
+    // Where the server connects and writes is a deployment setting; a company
+    // admin must not be able to redirect the server's Vault login.
     expect(() =>
-      createSecretProviderConfigSchema.parse({
-        provider: "vault",
-        displayName: "Vault draft",
-        config: { address },
-      }),
-    ).toThrow(/origin-only HTTP\(S\) URL/i);
+      createSecretProviderConfigSchema.parse({ provider: "vault", displayName: "Vault", config }),
+    ).toThrow(/set by the deployment|origin-only HTTP\(S\) URL/i);
+    expect(() => secretProviderConfigPayloadSchema.parse({ provider: "vault", config })).toThrow(/set by the deployment/i);
   });
 
-  it("rejects unsafe Vault addresses in provider payload validation used by updates", () => {
+  it("no longer locks Vault provider vaults as coming soon; GCP stays locked", () => {
     expect(() =>
-      secretProviderConfigPayloadSchema.parse({
-        provider: "vault",
-        config: { address: "https://vault.example.com?client_token=hvs.x" },
-      }),
-    ).toThrow(/origin-only HTTP\(S\) URL/i);
+      createSecretProviderConfigSchema.parse({ provider: "vault", displayName: "Vault", status: "ready", config: {} }),
+    ).not.toThrow();
+    expect(() =>
+      createSecretProviderConfigSchema.parse({ provider: "gcp_secret_manager", displayName: "GCP", status: "ready", config: {} }),
+    ).toThrow(/locked while coming soon/i);
   });
 
   it("rejects unsafe Vault addresses in provider vault update payloads", () => {

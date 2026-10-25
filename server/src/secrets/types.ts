@@ -122,6 +122,17 @@ export interface SecretProviderWriteContext {
   secretKey: string;
   secretName: string;
   version: number;
+  /**
+   * Identity of the secret being written. Providers that place values by
+   * ownership (HashiCorp Vault: companies/<c>/{company,users/<u>,agents/<a>,...}/<id>)
+   * require these; providers that do not, ignore them.
+   */
+  secretId?: string;
+  scope?: "company" | "user" | "instance";
+  ownerUserId?: string | null;
+  ownerAgentId?: string | null;
+  ownerProjectId?: string | null;
+  ownerPluginId?: string | null;
 }
 
 export interface SecretProviderModule {

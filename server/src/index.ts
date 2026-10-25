@@ -1,4 +1,5 @@
 import { loginCleanupSchedule } from "./services/login-cleanup-state.js";
+import { revokeVaultLoginForShutdown } from "./secrets/vault-provider.js";
 import { registerLoginCleanupWork } from "./services/login-cleanup-work.js";
 import { timeStartupRecovery } from "./startup-recovery-timing.js";
 import { skillSourceSyncService } from "./services/skill-source-sync.js";
@@ -2174,6 +2175,11 @@ async function startServerWithDatabaseTeardown(
         });
       });
     }
+
+    // Last step, after runs have drained (they may still resolve secrets):
+    // revoke the Vault login token so it does not outlive this process.
+    const vaultRevoke = await revokeVaultLoginForShutdown().catch(() => "failed" as const);
+    if (vaultRevoke !== "none") logger.info({ vaultRevoke }, "vault provider login token revocation at shutdown");
 
     if (exitProcess) process.exit(0);
   };

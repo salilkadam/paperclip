@@ -572,11 +572,11 @@ describe("secret routes", () => {
 
   it("rejects ready status for coming-soon provider vaults", async () => {
     const res = await request(createApp()).post("/api/companies/company-1/secret-provider-configs").send({
-      provider: "vault",
-      displayName: "Vault draft",
+      provider: "gcp_secret_manager",
+      displayName: "GCP draft",
       status: "ready",
       config: {
-        address: "https://vault.example.com",
+        projectId: "paperclip-prod",
       },
     });
 
@@ -595,7 +595,7 @@ describe("secret routes", () => {
     });
 
     expect(res.status).toBe(400);
-    expect(JSON.stringify(res.body)).toMatch(/origin-only HTTP\(S\) URL/i);
+    expect(JSON.stringify(res.body)).toMatch(/set by the deployment|origin-only HTTP\(S\) URL/i);
     expect(mockSecretService.createProviderConfig).not.toHaveBeenCalled();
   });
 
@@ -610,8 +610,51 @@ describe("secret routes", () => {
     });
 
     expect(res.status).toBe(400);
-    expect(JSON.stringify(res.body)).toMatch(/origin-only HTTP\(S\) URL/i);
+    expect(JSON.stringify(res.body)).toMatch(/set by the deployment|origin-only HTTP\(S\) URL/i);
     expect(mockSecretService.createProviderConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects even a well-formed Vault address: address, mount and prefix are deployment settings", async () => {
+    for (const config of [{ address: "https://vault.example.com" }, { mountPath: "kv" }, { secretPathPrefix: "elsewhere" }]) {
+      const res = await request(createApp()).post("/api/companies/company-1/secret-provider-configs").send({
+        provider: "vault",
+        displayName: "Vault",
+        config,
+      });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).toMatch(/set by the deployment/i);
+    }
+    expect(mockSecretService.createProviderConfig).not.toHaveBeenCalled();
+  });
+
+  it("accepts a ready Vault provider vault that only names a namespace", async () => {
+    const createdAt = new Date("2026-10-25T00:00:00.000Z");
+    mockSecretService.createProviderConfig.mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      companyId: "company-1",
+      provider: "vault",
+      displayName: "Vault",
+      status: "ready",
+      isDefault: false,
+      config: { namespace: "admin" },
+      healthStatus: null,
+      healthCheckedAt: null,
+      healthMessage: null,
+      healthDetails: null,
+      disabledAt: null,
+      createdByAgentId: null,
+      createdByUserId: "user-1",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const res = await request(createApp()).post("/api/companies/company-1/secret-provider-configs").send({
+      provider: "vault",
+      displayName: "Vault",
+      status: "ready",
+      config: { namespace: "admin" },
+    });
+    expect(res.status).toBeLessThan(300);
+    expect(mockSecretService.createProviderConfig).toHaveBeenCalled();
   });
 
   it("rejects unsafe Vault provider vault address patches before persistence", async () => {

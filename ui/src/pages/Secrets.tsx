@@ -209,7 +209,7 @@ const PROVIDER_ORDER: SecretProvider[] = [
 ];
 
 function defaultProviderVaultStatus(provider: SecretProvider): SecretProviderConfigStatus {
-  return provider === "gcp_secret_manager" || provider === "vault" ? "coming_soon" : "ready";
+  return provider === "gcp_secret_manager" ? "coming_soon" : "ready";
 }
 
 function emptyProviderVaultForm(provider: SecretProvider = "local_encrypted"): ProviderVaultForm {
@@ -614,11 +614,10 @@ function buildProviderVaultConfig(form: ProviderVaultForm): Record<string, unkno
         secretNamePrefix: compact(form.secretNamePrefix),
       };
     case "vault":
+      // Address, mount and path prefix are deployment settings
+      // (PAPERCLIP_SECRETS_VAULT_*); only the namespace is per provider vault.
       return {
-        address: compact(form.address),
         namespace: compact(form.namespace),
-        mountPath: compact(form.mountPath),
-        secretPathPrefix: compact(form.secretPathPrefix),
       };
     default:
       return {};
@@ -3571,7 +3570,7 @@ export function ProviderVaultsTab({
     id: providerId,
     provider: providerMap.get(providerId),
     Icon: providerFamilyIcon(providerId),
-    isComingSoonFamily: providerId === "gcp_secret_manager" || providerId === "vault",
+    isComingSoonFamily: providerId === "gcp_secret_manager",
     configs: providerConfigs.filter((config) => config.provider === providerId),
   }));
 
@@ -3808,11 +3807,12 @@ function ProviderVaultFields({
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <TextField label="Address" value={form.address} onChange={(value) => setField("address", value)} placeholder="https://vault.example.com" />
-      <TextField label="Namespace" value={form.namespace} onChange={(value) => setField("namespace", value)} placeholder="admin" />
-      <TextField label="Mount path" value={form.mountPath} onChange={(value) => setField("mountPath", value)} placeholder="secret" />
-      <TextField label="Secret path prefix" value={form.secretPathPrefix} onChange={(value) => setField("secretPathPrefix", value)} placeholder="paperclip/prod" />
+    <div className="space-y-3">
+      <TextField label="Namespace (Vault Enterprise, optional)" value={form.namespace} onChange={(value) => setField("namespace", value)} placeholder="admin" />
+      <p className="text-xs text-muted-foreground">
+        The Vault address, KV mount and path prefix are set by the deployment, and the server signs in to Vault with its
+        own identity. Secrets are stored under that prefix by company and owner.
+      </p>
     </div>
   );
 }

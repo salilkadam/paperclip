@@ -212,8 +212,10 @@ role or policy:
   `bionicorg`, TTL 1 h, max 24 h, policy `paperclip-secrets`.
 - **Policy** `paperclip-secrets`:
   - `secret/data/t6-apps/bionic-org/paperclip/*`: create, read, update
-  - `secret/metadata/t6-apps/bionic-org/paperclip/*`: read, update. Only to set
-    `max_versions` (decision 7.3).
+  - `secret/metadata/t6-apps/bionic-org/paperclip/*`: **create**, read, update. Only to
+    set `max_versions` (decision 7.3). `create` is required: setting `max_versions` on a
+    new entry is a metadata create. Found by the PR-A integration test against Vault
+    1.21.2 on 2026-10-25; `read, update` alone is denied on the first write.
   - `secret/delete/t6-apps/bionic-org/paperclip/*`: update (soft delete)
   - `secret/data/t6-apps/bionic-org/sandbox`,
     `secret/data/t6-apps/bionic-org/external/*` and `secret/data/t6-apps/mcp/config`:
