@@ -682,6 +682,7 @@ export {
   secretProviderConfigPayloadSchema,
   createSecretBindingSchema,
   rotateSecretSchema,
+  migrateSecretProviderSchema,
   secretBindingTargetSchema,
   updateSecretSchema,
   type CreateSecretBinding,
@@ -698,6 +699,7 @@ export {
   type RemoteSecretImport,
   type RemoteSecretImportSelection,
   type RotateSecret,
+  type MigrateSecretProvider,
   type UpdateSecret,
 } from "./secret.js";
 

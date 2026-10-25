@@ -8,6 +8,7 @@ import {
   remoteSecretImportPreviewSchema,
   remoteSecretImportSchema,
   rotateSecretSchema,
+  migrateSecretProviderSchema,
   rotateUserSecretValueSchema,
   secretProviderConfigDiscoveryPreviewSchema,
   updateSecretProviderConfigSchema,
@@ -16,7 +17,7 @@ import {
   updateUserSecretValueSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { assertBoard, assertBoardOrAgent, assertCompanyAccess, getAccessibleResource } from "./authz.js";
+import { assertBoard, assertBoardOrAgent, assertCompanyAccess, assertInstanceAdmin, getAccessibleResource } from "./authz.js";
 import { logActivity, secretService } from "../services/index.js";
 import { createSecretProposalsService } from "../services/secret-proposals.js";
 import { forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
@@ -1039,6 +1040,45 @@ export function secretRoutes(db: Db, deps: SecretRoutesDeps = {}) {
       });
 
       res.json(result);
+    },
+  );
+
+  // Provider migration moves stored credentials between backends; it is an
+  // instance-admin operation. Results are per secret; a dry run proves each
+  // source value resolves and matches its digest without writing anything.
+  router.post(
+    "/companies/:companyId/secrets/migrate-provider",
+    validate(migrateSecretProviderSchema),
+    async (req, res) => {
+      assertBoard(req);
+      assertInstanceAdmin(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const outcome = await svc.migrateCompanyProvider(
+        companyId,
+        {
+          targetProviderConfigId: req.body.targetProviderConfigId,
+          targetProvider: req.body.targetProvider,
+          dryRun: req.body.dryRun,
+          secretIds: req.body.secretIds,
+        },
+        { userId: req.actor.userId ?? "board", agentId: null },
+      );
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId ?? "board",
+        action: outcome.dryRun ? "secret.provider_migration_dry_run" : "secret.provider_migration_run",
+        entityType: "company",
+        entityId: companyId,
+        details: {
+          targetProviderConfigId: req.body.targetProviderConfigId ?? null,
+          targetProvider: req.body.targetProvider ?? null,
+          total: outcome.total,
+          counts: outcome.counts,
+        },
+      });
+      res.json(outcome);
     },
   );
 
