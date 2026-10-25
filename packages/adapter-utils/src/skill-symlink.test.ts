@@ -88,6 +88,28 @@ describe("ensurePaperclipSkillSymlink with an unmanaged copy at the target", () 
     expect(await readFile(path.join(backupRoot, backups[0]!, "SKILL.md"), "utf8")).toBe("stale\n");
   });
 
+  it("puts the original back when linking fails for a reason other than EPERM", async () => {
+    // opencode_local (production) has no materialize fallback: losing the old
+    // skill and installing nothing would be worse than keeping it.
+    const { root, source, target } = await setup();
+    await mkdir(target);
+    await writeFile(path.join(target, "SKILL.md"), "stale\n");
+    const failingLink = async () => {
+      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    };
+    await expect(ensurePaperclipSkillSymlink(source, target, failingLink)).rejects.toThrow("permission denied");
+    expect(await readFile(path.join(target, "SKILL.md"), "utf8")).toBe("stale\n");
+    expect(await readdir(path.join(root, "home", ".claude", "skills-replaced"))).toEqual([]);
+  });
+
+  it("creates nothing beside the skills home for an identical copy", async () => {
+    const { root, source, target } = await setup();
+    await mkdir(target);
+    await writeFile(path.join(target, "SKILL.md"), "X-Paperclip-Tool-Gateway-Token\n");
+    await expect(ensurePaperclipSkillSymlink(source, target)).resolves.toBe("skipped");
+    await expect(readdir(path.join(root, "home", ".claude", "skills-replaced"))).rejects.toThrow();
+  });
+
   it("converges without errors when many runs race on the same stale copy", async () => {
     const { root, source, target } = await setup();
     await mkdir(target);
