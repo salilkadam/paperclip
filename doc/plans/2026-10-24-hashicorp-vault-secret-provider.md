@@ -361,6 +361,25 @@ no SDK.
    - Test: warm the cache, revoke the version, and the next resolve fails.
    - Decision 7.6.
 
+**As built in PR-B (2026-10-25), deviations from the text above:**
+- The company default is a flag, `company_secret_provider_configs.is_company_default`,
+  with a partial unique index (one per company), not a `companies` column. A
+  `companies` FK would make the two tables reference each other. The flag also
+  clears itself when its vault is deleted, and is cleared when the vault is
+  disabled or set back to coming soon.
+- An explicit non-local family with no vault of that family keeps today's behaviour:
+  it uses the deployment's env configuration for that provider, instead of 422. AWS
+  deployments configured only through env would otherwise break. The UI no longer
+  sends a bare family: the create dialog starts on the company default vault and
+  sends its id.
+- Routine webhook secrets did not get a `createInTransaction` variant. They resolve
+  the company default, pick the secret id up front (Vault derives the path from it),
+  write to the provider, then insert in the existing transaction, and remove the
+  provider write if that insert fails. **Known limit:** when a caller passes its own
+  transaction (`executor`) and rolls it back *after* `createWebhookSecret` returns,
+  the provider-side value is orphaned. Under Vault that is an unreferenced entry
+  under the company's own path; under `local_encrypted` nothing is left behind.
+
 ### 3.6 Deployment changes
 
 - Helm configmap: add the `PAPERCLIP_SECRETS_VAULT_*` variables. Remove `VAULT_ADDR`

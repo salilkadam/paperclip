@@ -6,6 +6,7 @@ import {
   findCreateProviderReplacement,
   getAwsManagedPathPreview,
   getCreateProviderBlockReason,
+  getCompanyDefaultCreateTarget,
   getDefaultProviderConfigId,
   getProviderConfigBlockReason,
 } from "./Secrets";
@@ -53,6 +54,15 @@ function providerConfig(
 }
 
 describe("Secrets page provider helpers", () => {
+  it("starts new secrets on the usable company default vault, else local", () => {
+    const aws = providerConfig({ id: "aws", provider: "aws_secrets_manager", isCompanyDefault: true });
+    const local = providerConfig({ id: "local", provider: "local_encrypted", isDefault: true });
+    expect(getCompanyDefaultCreateTarget([local, aws])).toEqual({ provider: "aws_secrets_manager", providerConfigId: "aws" });
+    const broken = { ...aws, healthStatus: "error" as const, healthMessage: "denied" };
+    expect(getCompanyDefaultCreateTarget([local, broken])).toEqual({ provider: "local_encrypted", providerConfigId: "local" });
+    expect(getCompanyDefaultCreateTarget([])).toEqual({ provider: "local_encrypted", providerConfigId: "" });
+  });
+
   it("previews the derived AWS managed path from provider health details", () => {
     const health: SecretProviderHealthResponse = {
       providers: [

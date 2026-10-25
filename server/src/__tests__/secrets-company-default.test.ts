@@ -258,7 +258,7 @@ describeEmbeddedPostgres("company default secret provider", () => {
       path.resolve(import.meta.dirname, "../../../packages/db/src/migrations/0375_sad_captain_midlands.sql"),
       "utf8",
     );
-    const backfill = migration.split("--> statement-breakpoint").find((statement) => statement.includes("UPDATE"));
+    const backfill = migration.split("--> statement-breakpoint").find((statement) => statement.includes("UPDATE \"company_secret_versions\" AS v"));
     expect(backfill).toBeTruthy();
     await db.execute(sql.raw(backfill!));
     const [version] = await db.select().from(companySecretVersions).where(eq(companySecretVersions.secretId, secret!.id));
