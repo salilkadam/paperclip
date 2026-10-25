@@ -155,6 +155,25 @@ persistence:
   # App container runs as uid/gid 1000 (node)
   fsGroup: 1000
 
+# HashiCorp Vault secret provider (doc/SECRETS-VAULT-PROVIDER.md). The server
+# logs in at Kubernetes-auth role `k8sRole` with an audience-"vault" token for
+# its own ServiceAccount, projected at /var/run/secrets/vault/token (separate
+# from the API-server token). Run deploy/scripts/setup-vault-paperclip-provider.sh
+# BEFORE enabling, then check with deploy/scripts/probe-paperclip-vault-provider.sh.
+# Enabling only makes Vault usable; secrets move there when a company default is
+# set (Secrets → Provider vaults) and `paperclip secrets migrate-provider` runs.
+secretsVault:
+  enabled: false
+  address: "http://vault.vault.svc.cluster.local:8200"
+  mount: secret
+  prefix: t6-apps/bionic-org/paperclip
+  k8sRole: bionic-org
+  k8sMount: kubernetes
+  # Read-only external references, owner decision 7.4 (exact KV entries).
+  externalPaths: "t6-apps/bionic-org/sandbox,t6-apps/mcp/config"
+  maxVersions: 100
+  tokenExpirationSeconds: 3600
+
 # ---------------------------------------------------------------------------
 # Extra trusted root CAs
 # ---------------------------------------------------------------------------

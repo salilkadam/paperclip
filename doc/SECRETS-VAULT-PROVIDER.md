@@ -168,6 +168,30 @@ The output gives a status per secret (`migrated`, `already_on_target`, `dry_run`
 
 For a private CA, use `NODE_EXTRA_CA_CERTS`.
 
+### Rolling it out on the bionic-org cluster
+
+1. `VAULT_TOKEN_FILE=<0600 admin token file> deploy/scripts/setup-vault-paperclip-provider.sh`
+   writes policy `paperclip-secrets` and role `bionic-org`. The role is bound to
+   `bionicorg/bionic-org-sa`, audience `vault`, TTL 1 h, max 24 h.
+2. `deploy/scripts/probe-paperclip-vault-provider.sh` logs in as that role and checks
+   every needed capability, and that the master-key entry, other apps and destroy are
+   denied. It must exit 0. Its local gate is
+   `deploy/scripts/test-vault-paperclip-provider-local.sh`: a planted over-broad
+   policy or a missing metadata `create` must fail it.
+3. Helm: `secretsVault.enabled=true` (values.yaml `secretsVault`). This sets the
+   `PAPERCLIP_SECRETS_VAULT_*` env and projects an audience-`vault` token at
+   `/var/run/secrets/vault/token`.
+4. Create a `vault` provider vault per company, check its health, and make it the
+   company default.
+5. `paperclip secrets migrate-provider --company-id <id> --dry-run`, then without
+   `--dry-run`.
+
+**Exposure note.** Local agents run in the server's pod under the same uid. They can
+read the projected token and so act as the server's Vault role. They can already
+read the server's environment (including the local master key), so this adds no
+new class of access. The fix is agent-process isolation (plan §6), not this
+provider.
+
 ## Vault policy for the server role
 
 Least privilege for the managed prefix plus read-only external paths. **`create` on

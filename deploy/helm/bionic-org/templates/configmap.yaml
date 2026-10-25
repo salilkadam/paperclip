@@ -30,6 +30,19 @@ data:
   # and metadata addresses stay blocked regardless.
   PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS: {{ . | quote }}
   {{- end }}
+  {{- if .Values.secretsVault.enabled }}
+  # HashiCorp Vault secret provider (server/src/secrets/vault-provider.ts).
+  # Non-secret routing only; the credential is the projected SA token.
+  PAPERCLIP_SECRETS_VAULT_ADDR: {{ .Values.secretsVault.address | quote }}
+  PAPERCLIP_SECRETS_VAULT_MOUNT: {{ .Values.secretsVault.mount | quote }}
+  PAPERCLIP_SECRETS_VAULT_PREFIX: {{ .Values.secretsVault.prefix | quote }}
+  PAPERCLIP_SECRETS_VAULT_AUTH_METHOD: "kubernetes"
+  PAPERCLIP_SECRETS_VAULT_K8S_ROLE: {{ .Values.secretsVault.k8sRole | quote }}
+  PAPERCLIP_SECRETS_VAULT_K8S_MOUNT: {{ .Values.secretsVault.k8sMount | quote }}
+  PAPERCLIP_SECRETS_VAULT_K8S_JWT_PATH: "/var/run/secrets/vault/token"
+  PAPERCLIP_SECRETS_VAULT_EXTERNAL_PATHS: {{ .Values.secretsVault.externalPaths | quote }}
+  PAPERCLIP_SECRETS_VAULT_MAX_VERSIONS: {{ .Values.secretsVault.maxVersions | quote }}
+  {{- end }}
   {{- if .Values.modelAccess.enabled }}
   # Central model access (values.yaml modelAccess). Read by the server process:
   # the OpenCode adapter falls back to these when an agent sets none.
