@@ -21,7 +21,8 @@
 # Requires: curl jq; PAPERCLIP_BOARD_KEY_FILE — a 0600 file holding a board API
 # key of an instance admin (`paperclipai token board create --name cmo-amp
 # --ttl-days 1`). The key never appears on a command line.
-# Optional: BOARD_SLACK_CHANNEL_<SITE> (e.g. BOARD_SLACK_CHANNEL_RELIORA=#board).
+# Board Slack channel per company is the 5th SITES field; the CMO's Slack bot
+# (cmo-<site>) posts there. Override with BOARD_SLACK_CHANNEL_<SITE>.
 #
 # Usage: deploy/scripts/setup-cmo-blog-amplifier.sh [--dry-run]
 set -euo pipefail
@@ -30,10 +31,10 @@ API="${PAPERCLIP_API_BASE:-https://org.baisoln.com}"
 PERSONAL_PROFILE="${PERSONAL_LINKEDIN_PROFILE:-Salil Kadam}"
 ROUTINE_TITLE="Daily blog -> LinkedIn"
 CRON="0 8 * * *"; TZ_NAME="America/Los_Angeles"
-# site|company name|blog base URL|LinkedIn page display name
+# site|company name|blog base URL|LinkedIn page display name|board Slack channel
 SITES=(
-  "bionic|Bionic AI Solutions|https://blog-bionic.baisoln.com|Bionic AI Solutions"
-  "reliora|Reliora Inc|https://blog-reliora.baisoln.com|Reliora Inc"
+  "bionic|Bionic AI Solutions|https://blog-bionic.baisoln.com|Bionic AI Solutions|#bionic-board"
+  "reliora|Reliora Inc|https://blog-reliora.baisoln.com|Reliora Inc|#reliora-board"
 )
 C_LEVEL_NAMES=(CMO COO CLO)
 DRY=0
@@ -69,7 +70,7 @@ write() { if (( DRY )); then log "  DRY-RUN would $1 $2"; echo '{}'; else api "$
 companies="$(api GET /companies)"
 
 for entry in "${SITES[@]}"; do
-  IFS='|' read -r site cname blog_url page <<<"$entry"
+  IFS='|' read -r site cname blog_url page board_chan <<<"$entry"
   log "== $cname ($site)"
   cid="$(jq -r --arg n "$cname" '[.[] | select(.name == $n and .status == "active")] | if length == 1 then .[0].id else "" end' <<<"$companies")"
   [[ -n "$cid" ]] || die "expected exactly one active company named '$cname'"
@@ -103,7 +104,7 @@ for entry in "${SITES[@]}"; do
   fi
 
   # 3. routine
-  chan_var="BOARD_SLACK_CHANNEL_${site^^}"; chan="${!chan_var:-}"
+  chan_var="BOARD_SLACK_CHANNEL_${site^^}"; chan="${!chan_var:-$board_chan}"
   desc="$(cat <<EOF
 Use the **blog-linkedin-amplifier** skill. Inputs:
 
@@ -111,7 +112,7 @@ Use the **blog-linkedin-amplifier** skill. Inputs:
 - Public blog base URL: $blog_url
 - Company LinkedIn page: **$page**
 - Personal LinkedIn profile for the repost: **$PERSONAL_PROFILE** (the only personal profile you may post to)
-- Board Slack channel: ${chan:-not set. Notify via a subtask to your manager (the CMO)}
+- Board Slack channel: \`$chan\`, posted by the CMO's Slack bot (cmo-$site). If you have no Slack tools yourself, create the "Slack board note" subtask for your manager (the CMO) so its bot posts it there.
 
 Pick one new draft blog, publish it, and schedule its company and personal LinkedIn
 posts. All of this goes through ONE board decision (Approve all on this task).
