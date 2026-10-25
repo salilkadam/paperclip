@@ -78,7 +78,7 @@ printf "%s\n" "$WANT_POLICY" | vault policy write "$1" - >/dev/null
 echo "policy $1 written"
 vault write "auth/$3/role/$2" \
   bound_service_account_names="$4" bound_service_account_namespaces="$5" \
-  audience=vault alias_name_source=serviceaccount_uid \
+  audience=vault alias_name_source=serviceaccount_uid bound_service_account_namespace_selector="" \
   token_policies="$1" token_no_default_policy=false token_ttl=1h token_max_ttl=24h \
   token_period=0 token_explicit_max_ttl=0 token_num_uses=0 token_bound_cidrs="" token_type=default >/dev/null
 echo "role $2 written"
@@ -97,6 +97,10 @@ want 86400 token_max_ttl "$3" "$2"
 want 0 token_period "$3" "$2"
 want 0 token_num_uses "$3" "$2"
 want "[]" token_bound_cidrs "$3" "$2"
+want 0 token_explicit_max_ttl "$3" "$2"
+want default token_type "$3" "$2"
+want serviceaccount_uid alias_name_source "$3" "$2"
+want "" bound_service_account_namespace_selector "$3" "$2"
 if [ "$(vault policy read "$1")" = "$WANT_POLICY" ]; then echo "ok    policy $1 matches"; else echo "FAIL  policy $1 differs from the script"; fail=1; fi
 exit $fail
 ' _ "$POLICY" "$ROLE" "$AUTH_MOUNT" "$SA_NAME" "$SA_NAMESPACE"

@@ -201,8 +201,10 @@ against the company's path), not by Vault.
 **Accepted risk: external read paths** (owner decision 7.4, review PR-D F3).
 - Anything that can act as `bionic-org-sa` gains read on `t6-apps/mcp/config` and
   `t6-apps/bionic-org/sandbox`: the pod and its agents, and `sre-harness-sa`, which
-  can create pods and deployments in `bionicorg`. Neither entry is in a `bionicorg`
-  Secret today.
+  can create pods and deployments in `bionicorg`. `sre-harness-sa` can already read
+  every `bionicorg` Secret, including the master key, so for it this is strictly less
+  than its existing reach. Neither entry is in a `bionicorg` Secret today, as far as
+  the repos show.
 - The allowlist is deployment-wide: a company admin may link any field of those two
   entries.
 - Owner: the deployment owner.

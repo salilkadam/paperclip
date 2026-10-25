@@ -63,8 +63,9 @@ check "probe fails without metadata create (planted)" "$([[ $rc -ne 0 ]] && echo
 # the read-back assertions pass. A copy of the script missing one explicit
 # parameter must fail its own read-back (planted).
 root vault auth enable kubernetes >/dev/null
-root vault write auth/kubernetes/role/bionic-org bound_service_account_names=x bound_service_account_namespaces=y \
-  token_no_default_policy=true token_period=2h token_bound_cidrs=10.0.0.0/8 >/dev/null
+root vault write auth/kubernetes/role/bionic-org bound_service_account_names=x bound_service_account_namespaces=y audience=x \
+  token_no_default_policy=true token_period=2h token_bound_cidrs=10.0.0.0/8 token_explicit_max_ttl=5h \
+  alias_name_source=serviceaccount_name >/dev/null
 printf 'devroot' > "$W/admin"; chmod 600 "$W/admin"
 set +e; VAULT_TOKEN_FILE="$W/admin" "$HERE/setup-vault-paperclip-provider.sh" >"$W/setup.out" 2>&1; rc=$?; set -e
 check "setup corrects a drifted role and its read-back passes" "$rc" 0
