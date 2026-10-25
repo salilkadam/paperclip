@@ -79,6 +79,6 @@ vault_ops_get() {
 vault_ops_logout() {
   [[ -n "$VAULT_OPS_TOKEN" ]] || return 0
   vault_ops_sh 'vault token revoke -self >/dev/null' \
-    || echo "vault-ops: WARNING token revoke failed; it expires within its 15m TTL" >&2
+    || echo "vault-ops: WARNING token revoke failed; it expires at the end of its role TTL ($VAULT_OPS_ROLE)" >&2
   VAULT_OPS_TOKEN=""
 }

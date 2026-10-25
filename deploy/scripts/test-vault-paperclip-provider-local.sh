@@ -19,11 +19,12 @@ trap cleanup EXIT
 
 docker run -d --name "$NAME" -e VAULT_DEV_ROOT_TOKEN_ID=devroot "$IMAGE" >/dev/null
 root() { docker exec -i -e VAULT_TOKEN=devroot -e VAULT_ADDR=http://127.0.0.1:8200 "$NAME" "$@"; }
-for _ in $(seq 1 30); do root vault status >/dev/null 2>&1 && break; sleep 1; done
-root vault status >/dev/null || { echo "dev Vault did not start" >&2; exit 1; }
+for _ in $(seq 1 90); do root vault status >/dev/null 2>&1 && break; sleep 1; done
+root vault status >/dev/null 2>&1 || { echo "dev Vault did not start; container log:" >&2; docker logs "$NAME" 2>&1 | tail -30 >&2; exit 1; }
 
 cat > "$W/kubectl" <<EOF
 #!/usr/bin/env bash
+case "\$*" in *"get serviceaccount"*) exit 0 ;; esac
 while [[ \$# -gt 0 && "\$1" != "--" ]]; do shift; done; shift
 exec docker exec -i "$NAME" "\$@"
 EOF
@@ -56,5 +57,23 @@ grep -q "FAIL  secret/data/t6-apps/bionic-org/config" "$W/probe.out" && echo "ok
 NO_META_CREATE="$(printf '%s' "$POLICY" | awk 'BEGIN{n=0} /secret\/metadata\//{m=1} m && /capabilities/ {sub(/"create", /,""); m=0} {print}')"
 set +e; probe_with_policy "$NO_META_CREATE"; rc=$?; set -e
 check "probe fails without metadata create (planted)" "$([[ $rc -ne 0 ]] && echo failed || echo passed)" failed
+
+# The setup script itself, against a dev Vault with Kubernetes auth: a role
+# that already exists with fields the script must not keep is corrected, and
+# the read-back assertions pass. A copy of the script missing one explicit
+# parameter must fail its own read-back (planted).
+root vault auth enable kubernetes >/dev/null
+root vault write auth/kubernetes/role/bionic-org bound_service_account_names=x bound_service_account_namespaces=y \
+  token_no_default_policy=true token_period=2h token_bound_cidrs=10.0.0.0/8 >/dev/null
+printf 'devroot' > "$W/admin"; chmod 600 "$W/admin"
+set +e; VAULT_TOKEN_FILE="$W/admin" "$HERE/setup-vault-paperclip-provider.sh" >"$W/setup.out" 2>&1; rc=$?; set -e
+check "setup corrects a drifted role and its read-back passes" "$rc" 0
+[[ $rc -eq 0 ]] || cat "$W/setup.out"
+check "role no longer drops the default policy" "$(root vault read -field=token_no_default_policy auth/kubernetes/role/bionic-org)" false
+root vault write auth/kubernetes/role/bionic-org token_no_default_policy=true >/dev/null
+sed 's/ token_no_default_policy=false//' "$HERE/setup-vault-paperclip-provider.sh" > "$W/setup-planted.sh"; chmod +x "$W/setup-planted.sh"
+set +e; VAULT_TOKEN_FILE="$W/admin" "$W/setup-planted.sh" >"$W/setup-planted.out" 2>&1; rc=$?; set -e
+check "planted setup without the explicit parameter fails its read-back" "$([[ $rc -ne 0 ]] && echo failed || echo passed)" failed
+grep -q "FAIL  role token_no_default_policy" "$W/setup-planted.out" && echo "ok    ...and names the field" || { echo "FAIL  field not named"; cat "$W/setup-planted.out"; fails=$((fails+1)); }
 
 [[ $fails -eq 0 ]] && echo "ALL OK" || { echo "$fails check(s) failed"; exit 1; }

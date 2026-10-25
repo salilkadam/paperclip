@@ -20,7 +20,12 @@ expect_cap() {  # expect_cap PATH EXACT_CAPS (capabilities-self: authoritative, 
   if [ "$got" = "$2" ]; then echo "ok    $1: $got"; else echo "FAIL  $1: $got (expected $2)"; fail=1; fi
 }
 P=t6-apps/bionic-org/paperclip
-vault token lookup -format=json | grep -E "\"policies\"|\"ttl\"" -A2 | tr -s " \n" " "; echo
+pol=$(vault token lookup -format=json | tr -d " \n" | sed -n "s/.*\"policies\":\[\([^]]*\)\].*/\1/p")
+if [ "$pol" = "\"default\",\"paperclip-secrets\"" ]; then echo "ok    token policies: $pol"; else echo "FAIL  token policies: $pol (expected default + paperclip-secrets only)"; fail=1; fi
+idp=$(vault token lookup -format=json | tr -d " \n" | sed -n "s/.*\"identity_policies\":\[\([^]]*\)\].*/\1/p")
+if [ -z "$idp" ]; then echo "ok    no identity policies"; else echo "FAIL  identity policies: $idp"; fail=1; fi
+expect_cap auth/token/renew-self                         update
+expect_cap auth/token/revoke-self                        update
 expect_cap secret/data/$P/companies/probe/company/x      create,read,update
 expect_cap secret/metadata/$P/companies/probe/company/x  create,read,update
 expect_cap secret/delete/$P/companies/probe/company/x    update
