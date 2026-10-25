@@ -460,6 +460,24 @@ no SDK.
 - `PAPERCLIP_SECRETS_PROVIDER` stays `local_encrypted` as the deployment fallback.
   Vault is chosen per company through `default_secret_provider_config_id`.
 
+## Rollout status (2026-10-25)
+
+| Phase | State |
+|---|---|
+| 1 PR-A | #13, #14 merged; deployed |
+| 2 PR-B | #15 merged; migration 0375 applied (1059 versions backfilled) |
+| 3 PR-C | #16 merged (+ #18 CLI `--company-id` fix) |
+| 4 PR-D | #17 merged; owner ran `setup-vault-paperclip-provider.sh`; probe exit 0 |
+| 5 deploy | Helm rev 63 `edf9430e2` (19:31 UTC). The pod's own Vault login was verified as uid 1000 (health `ok`, canary written, revoke-self `revoked`). A Vault provider vault per company is health `ready` and is the company default. |
+| 6 migrate | Dry run: 0 failures. Real run: Bionic AI Solutions 18 secrets + 2 definitions (19:48), Reliora Inc 25 secrets + 3 definitions (20:05). **All 43 active managed secrets on `vault`**; 0 external refs, 0 non-active. |
+| 6 checks | Post-move reads through Vault, 0 failures, 0 server error lines: plugin workers 14, tool connections 17 (Bionic AI Solutions 19:48-20:20, Reliora Inc 20:05-20:20). **Not yet observed:** an agent run resolving a secret, the Brev environment probe, an OAuth refresh writing a new Vault version. |
+| 7 PR-E | Not started (Brev and Ghost external refs) |
+| 8 | Blank superseded local material after the 48 h soak (decision 7.7): not before 2026-10-27 20:05 UTC |
+
+Rollback: `paperclip secrets migrate-provider --company-id <id> --to-provider local_encrypted`,
+then `provider-config:clear-company-default`. Old local versions are intact (phase 8 not run).
+Pre-deploy dump: `pg-ceph-8:/var/lib/postgresql/data/predeploy-edf9430e2-20261025192943.dump`.
+
 ## 4. Phases and delivery units
 
 Every unit goes branch → PR → review → merge into `main`. Images are built from a
