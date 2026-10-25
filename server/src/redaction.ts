@@ -415,28 +415,84 @@ function isPublicConsentUrl(value: unknown): value is string {
  * appears. Scheme, host, path and harmless parameters stay readable, so an
  * OAuth consent URL (client_id, state, scope, ...) is unchanged.
  */
-const URL_IN_TEXT_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`\\]+/gi;
-const URL_USERINFO_RE = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#@\s]+)@/i;
-const URL_QUERY_PARAM_RE = /([?&;])([^=&#;]+)=([^&#;]*)/g;
+// Scheme start: a lookbehind (not `\b`) so a long `a.b-c+d` run offers one start,
+// not one per character, plus a bounded scheme; together they keep this linear
+// on attacker-sized text (the unbounded `\b...*` form was quadratic: 1 MB took
+// minutes on the event loop).
+const URL_IN_TEXT_RE = /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,63}:\/\/[^\s"'<>`\\]+/gi;
+const URL_SCHEME_PREFIX_RE = /^[a-z][a-z0-9+.-]{0,63}:\/\//i;
+const URL_USERINFO_RE = /^([a-z][a-z0-9+.-]{0,63}:\/\/)([^/?#@\s]+)@/i;
+// Query (?), fragment (#: OAuth implicit-flow tokens) and path parameters (;).
+const URL_PARAM_RE = /([?&;#])([^=&#;?]+)=([^&#;]*)/g;
+const URL_TRAILING_PUNCTUATION_RE = /[.,;:!?)\]}>'"]+$/;
 const SECRET_URL_PARAM_RE =
-  /^(?:code|token|access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|key|sig|signature|password|passwd|pwd|secret|client[-_]?secret|session[-_]?id|sessionid|x-amz-(?:signature|credential|security-token)|x-goog-(?:signature|credential))$/i;
+  /^(?:code|token|access[-_]?token|refresh[-_]?token|id[-_]?token|private[-_]?token|auth|jwt|api[-_]?key|apikey|key|sig|signature|password|passwd|pwd|secret|client[-_]?secret|session[-_]?id|sessionid|phpsessid|jsessionid|x-amz-(?:signature|credential|security-token)|x-goog-(?:signature|credential))$/i;
+// A bare username is only redacted when it looks like a credential: plain
+// `ssh://git@github.com` or `postgres://app@db` stays readable.
+const TOKEN_LIKE_USERINFO_RE = /^(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|sk-)/i;
 
-function redactCredentialUrl(url: string): string {
-  const withoutUserinfo = url.replace(URL_USERINFO_RE, (_match, scheme: string) => `${scheme}${REDACTED_EVENT_VALUE}@`);
-  const queryStart = withoutUserinfo.indexOf("?");
-  if (queryStart === -1) return withoutUserinfo;
-  const head = withoutUserinfo.slice(0, queryStart);
-  const tail = withoutUserinfo.slice(queryStart).replace(
-    URL_QUERY_PARAM_RE,
-    (match, sep: string, name: string, value: string) =>
-      value && SECRET_URL_PARAM_RE.test(name) ? `${sep}${name}=${REDACTED_EVENT_VALUE}` : match,
-  );
-  return head + tail;
+function isCredentialUserinfo(userinfo: string): boolean {
+  if (userinfo.includes(":")) return true;
+  if (TOKEN_LIKE_USERINFO_RE.test(userinfo)) return true;
+  return userinfo.length >= 20 && /[0-9]/.test(userinfo) && /[a-z]/i.test(userinfo);
+}
+
+function isSecretUrlParamName(name: string): boolean {
+  if (SECRET_URL_PARAM_RE.test(name)) return true;
+  try {
+    const decoded = decodeURIComponent(name);
+    return decoded !== name && SECRET_URL_PARAM_RE.test(decoded);
+  } catch {
+    return false;
+  }
+}
+
+function redactCredentialUrl(url: string, depth = 0): string {
+  const withoutUserinfo = url.replace(URL_USERINFO_RE, (match, scheme: string, userinfo: string) =>
+    isCredentialUserinfo(userinfo) ? `${scheme}${REDACTED_EVENT_VALUE}@` : match);
+  const schemeEnd = withoutUserinfo.indexOf("://") + 3;
+  const tailStart = withoutUserinfo.slice(schemeEnd).search(/[?#;]/);
+  if (tailStart === -1) return withoutUserinfo;
+  const head = withoutUserinfo.slice(0, schemeEnd + tailStart);
+  return head + redactUrlParams(withoutUserinfo.slice(schemeEnd + tailStart), depth);
+}
+
+function redactUrlParams(tail: string, depth: number): string {
+  return tail.replace(URL_PARAM_RE, (match, sep: string, name: string, rawValue: string) => {
+    // A `;` path parameter ends where the query begins; values of query and
+    // fragment parameters may contain `?` (nested URLs).
+    const queryAt = sep === ";" ? rawValue.indexOf("?") : -1;
+    const value = queryAt === -1 ? rawValue : rawValue.slice(0, queryAt);
+    const rest = queryAt === -1 ? "" : redactUrlParams(rawValue.slice(queryAt), depth);
+    if (!value) return `${sep}${name}=${rest}`;
+    if (isSecretUrlParamName(name)) return `${sep}${name}=${REDACTED_EVENT_VALUE}${rest}`;
+    // return_to/next/redirect values are often URLs with their own credentials.
+    if (depth < 3 && URL_SCHEME_PREFIX_RE.test(value)) return `${sep}${name}=${redactCredentialUrl(value, depth + 1)}${rest}`;
+    return `${sep}${name}=${value}${rest}`;
+  });
+}
+
+// Sentence or markup punctuation after a URL (`).`, `,`, `]`) is not part of it;
+// keep it out of the parameter values so redaction cannot swallow it. A `)` is
+// only treated as trailing when the URL has no matching `(`.
+function splitTrailingPunctuation(match: string): [string, string] {
+  const trailing = match.match(URL_TRAILING_PUNCTUATION_RE)?.[0] ?? "";
+  if (!trailing) return [match, ""];
+  let core = match.slice(0, match.length - trailing.length);
+  let rest = trailing;
+  while (rest.startsWith(")") && (core.split("(").length - 1) > (core.split(")").length - 1)) {
+    core += ")";
+    rest = rest.slice(1);
+  }
+  return [core, rest];
 }
 
 export function redactCredentialUrls(input: string): string {
   if (!input.includes("://")) return input;
-  return input.replace(URL_IN_TEXT_RE, redactCredentialUrl);
+  return input.replace(URL_IN_TEXT_RE, (match) => {
+    const [core, trailing] = splitTrailingPunctuation(match);
+    return redactCredentialUrl(core) + trailing;
+  });
 }
 
 function redactJsonSecretTextMatch(

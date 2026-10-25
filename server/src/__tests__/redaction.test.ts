@@ -14,6 +14,7 @@ describe("explicit diagnostic credential forms", () => {
   });
 });
 import {
+  redactCredentialUrls,
   PRP_V1_EVENT_TYPES,
   PRP_V2_EVENT_TYPES,
   REDACTED_EVENT_VALUE,
@@ -353,6 +354,44 @@ describe("redaction", () => {
     it("redacts URL credentials inside free text that has no other secret hint", () => {
       const out = redactSensitiveText("retrying https://hooks.example/run?sig=deadbeef01 now");
       expect(out).toBe(`retrying https://hooks.example/run?sig=${REDACTED_EVENT_VALUE} now`);
+    });
+
+    it("redacts fragment, path-parameter and percent-encoded credentials", () => {
+      expect(redactCredentialUrls("https://h/cb#access_token=SECRETAT&token_type=bearer")).not.toContain("SECRETAT");
+      expect(redactCredentialUrls("https://h/cb#code=SECRETCODE&state=x")).toBe(`https://h/cb#code=${REDACTED_EVENT_VALUE}&state=x`);
+      expect(redactCredentialUrls("https://h/x;jsessionid=SECRETJS?a=1")).toBe(`https://h/x;jsessionid=${REDACTED_EVENT_VALUE}?a=1`);
+      expect(redactCredentialUrls("https://h/x?%74oken=SECRETPT")).not.toContain("SECRETPT");
+      expect(redactCredentialUrls("https://h/x?auth=SECRETAU&PHPSESSID=SECRETPH")).not.toMatch(/SECRETAU|SECRETPH/);
+    });
+
+    it("redacts credentials inside URLs nested in redirect parameters", () => {
+      expect(redactCredentialUrls("https://h/x?next=https://user:PASSW@h2/")).not.toContain("PASSW");
+      expect(redactCredentialUrls("https://h/x?next=https://h2/cb?code=SECRETNC&s=1"))
+        .toBe(`https://h/x?next=https://h2/cb?code=${REDACTED_EVENT_VALUE}&s=1`);
+    });
+
+    it("keeps trailing punctuation and balanced parentheses out of redacted values", () => {
+      expect(redactCredentialUrls("see [reset](https://app.example/r?code=S) now"))
+        .toBe(`see [reset](https://app.example/r?code=${REDACTED_EVENT_VALUE}) now`);
+      expect(redactCredentialUrls("go to https://app.example/r?code=S.")).toBe(`go to https://app.example/r?code=${REDACTED_EVENT_VALUE}.`);
+      expect(redactCredentialUrls("https://en.wikipedia.org/wiki/Foo_(bar)")).toBe("https://en.wikipedia.org/wiki/Foo_(bar)");
+    });
+
+    it("keeps plain usernames but redacts passwords and token-shaped usernames", () => {
+      expect(redactCredentialUrls("ssh://git@github.com/o/r.git")).toBe("ssh://git@github.com/o/r.git");
+      expect(redactCredentialUrls("postgres://app@db.internal:5432/x")).toBe("postgres://app@db.internal:5432/x");
+      expect(redactCredentialUrls("https://x-access-token:SECRETGH@github.com/o/r")).not.toContain("SECRETGH");
+      expect(redactCredentialUrls("https://ghp_abcdefghijklmnopqrstu@github.com/o/r")).not.toContain("ghp_abc");
+    });
+
+    it("stays linear on large adversarial text (no event-loop stall)", () => {
+      // The unbounded `\b[a-z][a-z0-9+.-]*://` form took ~7 minutes on 1 MB of this.
+      for (const unit of ["a.", "a-", "ab+", "x.y-z"]) {
+        const input = "see http://h/x?code=S " + unit.repeat(Math.ceil((1024 * 1024) / unit.length));
+        const started = performance.now();
+        redactSensitiveText(input);
+        expect(performance.now() - started).toBeLessThan(2000);
+      }
     });
 
     it("still keeps a clean consent URL under auth_url", () => {
