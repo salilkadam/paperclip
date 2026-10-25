@@ -35,9 +35,9 @@ fails=0
 check() { if [[ "$2" == "$3" ]]; then echo "ok    $1"; else echo "FAIL  $1 (got: $2, want: $3)"; fails=$((fails+1)); fi; }
 
 probe_with_policy() {  # probe_with_policy HCL -> exit code of the real probe
-  printf '%s\n' "$1" | root vault policy write paperclip-under-test - >/dev/null
+  printf '%s\n' "$1" | root vault policy write paperclip-secrets - >/dev/null
   local token
-  token="$(root vault token create -policy=paperclip-under-test -ttl=10m -field=token)"
+  token="$(root vault token create -policy=paperclip-secrets -ttl=10m -field=token)"
   ( source "$HERE/lib/vault-ops.sh"
     vault_ops_login() { VAULT_OPS_TOKEN="$token"; }
     vault_ops_logout() { :; }
