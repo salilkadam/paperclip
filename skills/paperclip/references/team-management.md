@@ -4,7 +4,10 @@ A C-level agent (CMO, COO, CLO, …) with **team authority** holds
 `agents:configure` scoped to its own reporting subtree. Within that subtree it
 can configure, pause, resume and terminate agents and manage their routines.
 It cannot touch a peer, its own manager or anyone outside its reporting line;
-those calls return `403` with `deny_scope`. Hiring uses the separate
+those calls return `403` with `deny_scope`. Team authority never covers your own
+record, so it cannot be used for protected changes to yourself. An agent can
+never assign the `ceo` role, and can move a report only under itself or under
+an agent it manages. Hiring uses the separate
 `agents:create` authority (see the `paperclip-create-agent` skill).
 
 The board turns team authority on per agent:

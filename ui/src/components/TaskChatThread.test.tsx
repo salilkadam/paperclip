@@ -727,6 +727,30 @@ function planDocument(overrides: Partial<IssueDocument> = {}): IssueDocument {
   };
 }
 
+function toolActionInteraction(id: string, toolName: string, createdAt: string): IssueThreadInteraction {
+  const base = planReviewInteraction();
+  if (base.kind !== "request_confirmation") throw new Error("expected a request_confirmation fixture");
+  return {
+    ...base,
+    id,
+    title: "Approve tool action",
+    resolverPolicy: "human_only",
+    createdAt: new Date(createdAt),
+    updatedAt: new Date(createdAt),
+    payload: {
+      version: 1,
+      prompt: `Approve ${toolName}?`,
+      target: { type: "custom", key: `tool-action:${id}`, revisionId: "hash", label: toolName },
+      toolAction: {
+        version: 1, actionRequestId: `ar-${id}`, invocationId: `inv-${id}`, toolName, toolDisplayName: toolName,
+        connectionId: null, applicationId: null, appDisplayName: null, risk: "write",
+        previewMarkdown: `Run ${toolName}`, argumentsSummaryJson: "{}", argumentsHash: "hash",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      },
+    },
+  };
+}
+
 function planReviewInteraction(
   status: "pending" | "accepted" | "expired" = "pending",
   revisionId = "revision-3",
@@ -3240,28 +3264,6 @@ describe("TaskChatThread runtime transcript selection", () => {
   );
 
   it("approves every pending tool action on the task with one Approve all", async () => {
-    const toolActionInteraction = (id: string, toolName: string, createdAt: string): IssueThreadInteraction => {
-      const base = planReviewInteraction();
-      return {
-        ...base,
-        id,
-        title: "Approve tool action",
-        resolverPolicy: "human_only",
-        createdAt: new Date(createdAt),
-        updatedAt: new Date(createdAt),
-        payload: {
-          version: 1,
-          prompt: `Approve ${toolName}?`,
-          target: { type: "custom", key: `tool-action:${id}`, revisionId: "hash", label: toolName },
-          toolAction: {
-            version: 1, actionRequestId: `ar-${id}`, invocationId: `inv-${id}`, toolName, toolDisplayName: toolName,
-            connectionId: null, applicationId: null, appDisplayName: null, risk: "write",
-            previewMarkdown: `Run ${toolName}`, argumentsSummaryJson: "{}", argumentsHash: "hash",
-            expiresAt: "2099-01-01T00:00:00.000Z",
-          },
-        },
-      };
-    };
     const onAcceptInteraction = vi.fn().mockResolvedValue(undefined);
     renderThread({
       comments: [],
@@ -3277,8 +3279,27 @@ describe("TaskChatThread runtime transcript selection", () => {
     const approveAll = container.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-approve-all"]');
     expect(approveAll?.textContent).toBe("Approve all 2");
     await act(async () => approveAll!.click());
-    expect(onAcceptInteraction.mock.calls.map(([interaction]) => interaction.id).sort())
+    // Oldest first: the blog is published before its LinkedIn post is scheduled.
+    expect(onAcceptInteraction.mock.calls.map(([interaction]) => interaction.id))
       .toEqual(["publish-blog", "schedule-company"]);
+  });
+
+  it("offers no Approve all while the open card is not one of the tool actions", () => {
+    renderThread({
+      comments: [],
+      interactions: [
+        toolActionInteraction("tool-a", "tool-a", "2026-08-25T18:00:01.000Z"),
+        toolActionInteraction("tool-b", "tool-b", "2026-08-25T18:00:02.000Z"),
+        questionInteraction("question-newest", "Which channel?", "2026-08-25T18:00:03.000Z"),
+      ],
+      onAdd: async () => {},
+      onAcceptInteraction: vi.fn(),
+      onSubmitInteractionAnswers: async () => {},
+      issueStatus: "in_review",
+    });
+
+    expect(container.querySelector('[data-testid="task-chat-composer-takeover"]')?.textContent).toContain("Which channel?");
+    expect(container.querySelector('[data-testid="task-chat-composer-approve-all"]')).toBeNull();
   });
 
   it.each(DIRECT_ADAPTER_TYPES)(

@@ -337,6 +337,9 @@ describeEmbeddedPostgres("authorization service", () => {
     await expect(decideFor(peer.id)).resolves.toMatchObject({ allowed: false, reason: "deny_scope" });
     await expect(decideFor(ceo.id)).resolves.toMatchObject({ allowed: false, reason: "deny_scope" });
     await expect(decideFor(peer.id, "agent_config:read")).resolves.toMatchObject({ allowed: false });
+    // The holder's own record is not a scoped target: no protected self change
+    // (e.g. promoting itself to role "ceo") through its own team grant.
+    await expect(decideFor(cmo.id)).resolves.toMatchObject({ allowed: false });
   });
 
   it("enforces direct or consented suggest grants for agent configuration changes", async () => {

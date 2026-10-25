@@ -1418,6 +1418,15 @@ export function agentRoutes(
     return actorAgent;
   }
 
+  // `role: "ceo"` unlocks CEO-only routes (permissions, team authority, hiring
+  // authority). An agent key may never assign it, to itself or to anyone it
+  // hires or manages; only the board makes a CEO.
+  function assertAgentActorDoesNotAssignCeoRole(req: Request, role: unknown) {
+    if (req.actor.type === "agent" && role === "ceo") {
+      throw forbidden("Only the board can assign the CEO role");
+    }
+  }
+
   async function assertBoardCanManageAgentsForCompany(req: Request, companyId: string) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
@@ -4395,6 +4404,7 @@ export function agentRoutes(
   const handleAgentHire = async (req: Request, res: Response) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    assertAgentActorDoesNotAssignCeoRole(req, req.body.role);
     const sourceIssueIds = parseSourceIssueIds(req.body);
     const {
       desiredSkills: requestedDesiredSkills,
@@ -4785,6 +4795,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    assertAgentActorDoesNotAssignCeoRole(req, req.body.role);
 
     const company = await db
       .select()
@@ -5515,6 +5526,26 @@ export function agentRoutes(
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
       return;
+    }
+    if (existing.role !== "ceo") assertAgentActorDoesNotAssignCeoRole(req, (req.body as { role?: unknown }).role);
+    // A manager may re-parent another agent only within its own reporting line:
+    // the new manager must be the actor or an agent the actor may configure.
+    const requestedReportsTo = (req.body as { reportsTo?: unknown }).reportsTo;
+    if (
+      req.actor.type === "agent" && hasOwn(req.body as object, "reportsTo")
+      && existing.id !== req.actor.agentId && requestedReportsTo !== existing.reportsTo
+    ) {
+      const newManagerId = typeof requestedReportsTo === "string" ? requestedReportsTo : null;
+      const newManagerAllowed = newManagerId !== null && (
+        newManagerId === req.actor.agentId
+        || (await access.decide({
+          actor: req.actor,
+          action: "agent_config:update",
+          resource: { type: "agent", companyId: existing.companyId, agentId: newManagerId },
+          scope: { requiresChangeGrant: true },
+        })).allowed
+      );
+      if (!newManagerAllowed) throw forbidden("Agents can only move a report under themselves or an agent they manage");
     }
 
     const runtimeSettings = req.body.runtimeSettings;

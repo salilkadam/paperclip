@@ -2366,6 +2366,51 @@ describe("agent permission routes", () => {
     expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
   });
 
+  describe("agent keys and the CEO role / reporting line", () => {
+    const managerId = "33333333-3333-4333-8333-333333333333";
+    const outsiderId = "44444444-4444-4444-8444-444444444444";
+    const managerActor = { type: "agent", agentId: managerId, companyId, source: "agent_key" };
+    beforeEach(() => {
+      mockAgentService.getById.mockImplementation(async (id: string) =>
+        id === managerId ? { ...baseAgent, id: managerId, role: "cmo" } : { ...baseAgent, reportsTo: managerId });
+      // The manager may configure its report (agentId) but nobody else.
+      mockAccessService.decide.mockImplementation(async (input: { action?: string; resource?: { agentId?: string } }) => {
+        const allowed = input.action === "agents:create" || input.resource?.agentId === agentId;
+        return { allowed, reason: allowed ? "allow_direct_change" : "deny_scope", explanation: "test" };
+      });
+    });
+
+    it("refuses an agent making its report a CEO", async () => {
+      const app = await createApp(managerActor);
+      const res = await requestApp(app, (baseUrl) => request(baseUrl).patch(`/api/agents/${agentId}`).send({ role: "ceo" }));
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toBe("Only the board can assign the CEO role");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses an agent hiring or creating a CEO", async () => {
+      const app = await createApp(managerActor);
+      for (const path of ["agent-hires", "agents"]) {
+        const res = await requestApp(app, (baseUrl) => request(baseUrl)
+          .post(`/api/companies/${companyId}/${path}`)
+          .send({ name: "Boss", role: "ceo", adapterType: "process", adapterConfig: {} }));
+        expect(res.status, `${path}: ${JSON.stringify(res.body)}`).toBe(403);
+        expect(res.body.error).toBe("Only the board can assign the CEO role");
+      }
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+    });
+
+    it("refuses moving a report under an agent outside the manager's line", async () => {
+      const app = await createApp(managerActor);
+      for (const reportsTo of [outsiderId, null]) {
+        const res = await requestApp(app, (baseUrl) => request(baseUrl).patch(`/api/agents/${agentId}`).send({ reportsTo }));
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+        expect(res.body.error).toBe("Agents can only move a report under themselves or an agent they manage");
+      }
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe("PUT /api/agents/:id/team-authority", () => {
     const teamScope = { managedSubtreeAgentIds: [agentId] };
     const boardActor = { type: "board", userId: "board-user", source: "session", isInstanceAdmin: false, companyIds: [companyId] };

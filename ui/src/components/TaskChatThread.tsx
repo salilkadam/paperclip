@@ -2857,17 +2857,24 @@ export function TaskChatThread(props: TaskChatThreadProps) {
     )
   ) : null;
   // Several pending tool-action approvals on one task (e.g. publish the blog
-  // and schedule its LinkedIn posts) can be decided in one step. Each is
-  // accepted exactly as its own card's "Approve" would; a failure stops the
-  // sequence so nothing after it is approved silently.
-  const pendingToolActionInteractions = pendingReminderInputs.flatMap((input) =>
-    input.kind === "durable" &&
-    input.interaction.kind === "request_confirmation" &&
-    input.interaction.payload.toolAction
-      ? [input.interaction]
-      : []);
+  // and schedule its LinkedIn posts) can be decided in one step, offered only
+  // while one of those cards is on screen. They run oldest first, the order the
+  // agent requested them, so a prerequisite (publish) runs before what depends
+  // on it, and a failure stops the sequence before any later action. Each is
+  // accepted exactly as its own card's "Approve" would.
+  const pendingToolActionInteractions = pendingReminderInputs
+    .flatMap((input) =>
+      input.kind === "durable" &&
+      input.interaction.kind === "request_confirmation" &&
+      input.interaction.payload.toolAction
+        ? [input.interaction]
+        : [])
+    .sort((left, right) => toMs(left.createdAt) - toMs(right.createdAt));
+  const selectedIsToolAction =
+    selectedPendingInput?.kind === "durable" &&
+    pendingToolActionInteractions.some((interaction) => interaction.id === selectedPendingInput.interaction.id);
   const approveAllToolActions =
-    onAcceptInteraction && pendingToolActionInteractions.length > 1
+    onAcceptInteraction && selectedIsToolAction && pendingToolActionInteractions.length > 1
       ? {
           count: pendingToolActionInteractions.length,
           run: async () => {

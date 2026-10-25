@@ -1850,10 +1850,16 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
     }
 
     // Agent-config grants are checked against the target agent, so a grant
-    // scoped to a manager's subtree (`subtree:<managerId>`) covers exactly that
-    // manager's reports. Without the target, a scoped grant could never match.
+    // scoped to a manager's subtree (`managedSubtreeAgentIds: [managerId]`)
+    // covers that manager's reports. An agent's OWN record is never a scoped
+    // target: a subtree contains its root, and a self-matching grant would let a
+    // manager make protected changes to itself (e.g. `role: "ceo"`). Self edits
+    // keep their existing rules (allow_self, or an unscoped grant).
+    const targetsActorItself =
+      input.actor.type === "agent" && input.resource.type === "agent"
+      && input.resource.agentId === input.actor.agentId;
     const agentGrantScope =
-      input.resource.type === "agent" && input.resource.agentId
+      input.resource.type === "agent" && input.resource.agentId && !targetsActorItself
         ? { ...(input.scope ?? {}), targetAgentId: input.resource.agentId }
         : input.scope;
 
