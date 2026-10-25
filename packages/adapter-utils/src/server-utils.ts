@@ -4365,7 +4365,7 @@ export async function ensurePaperclipSkillSymlink(
     linkSource,
     linkTarget,
   ) => fs.symlink(linkSource, linkTarget),
-): Promise<"created" | "repaired" | "skipped"> {
+): Promise<"created" | "repaired" | "replaced" | "skipped"> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {
     await linkSkill(source, target);
@@ -4373,7 +4373,7 @@ export async function ensurePaperclipSkillSymlink(
   }
 
   if (!existing.isSymbolicLink()) {
-    return "skipped";
+    return await replaceStaleUnmanagedSkillCopy(source, target, linkSkill);
   }
 
   const linkedPath = await fs.readlink(target).catch(() => null);
@@ -4395,6 +4395,53 @@ export async function ensurePaperclipSkillSymlink(
   await fs.unlink(target);
   await linkSkill(source, target);
   return "repaired";
+}
+
+/**
+ * A real directory (or file) sitting at a managed skill's runtime name shadows
+ * the skill Paperclip is configured to inject, so the agent silently reads
+ * whatever stale copy is there. Production hit this with a pre-fix `trypost`
+ * copy in the shared skills home: every agent sent the gateway session token
+ * as a Bearer header and got 401 for every TryPost call.
+ *
+ * Move a differing copy to `<skillsHome>/../skills-replaced/` (outside the
+ * scanned skills home, so it never loads as a second skill) and link the
+ * managed source. Left alone: an identical copy, and a copy Paperclip
+ * materialized itself (it has the sentinel; materializePaperclipSkillCopy owns
+ * its freshness). If linking fails, the original is put back and the error is
+ * rethrown so the caller's existing failure log and fallbacks still apply.
+ */
+async function replaceStaleUnmanagedSkillCopy(
+  source: string,
+  target: string,
+  linkSkill: (source: string, target: string) => Promise<void>,
+): Promise<"replaced" | "skipped"> {
+  const sentinel = await fs
+    .lstat(path.join(target, MATERIALIZED_SKILL_SENTINEL))
+    .catch(() => null);
+  if (sentinel) return "skipped";
+
+  const [targetHash, sourceHash] = await Promise.all([
+    hashSkillDirectory(target),
+    hashSkillDirectory(source),
+  ]);
+  if (targetHash === sourceHash) return "skipped";
+
+  const backupRoot = path.join(path.dirname(path.dirname(target)), "skills-replaced");
+  await fs.mkdir(backupRoot, { recursive: true });
+  const backup = path.join(
+    backupRoot,
+    `${path.basename(target)}-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`,
+  );
+  await fs.rename(target, backup);
+  try {
+    await linkSkill(source, target);
+  } catch (err) {
+    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+    await fs.rename(backup, target).catch(() => {});
+    throw err;
+  }
+  return "replaced";
 }
 
 async function hashSkillDirectory(root: string): Promise<string> {
