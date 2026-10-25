@@ -168,6 +168,11 @@ describeEmbeddedPostgres("company default secret provider", () => {
     expect((await svc.getCompanyDefaultProviderConfig(companyId))?.id).toBe(vault.id);
     await svc.disableProviderConfig(vault.id);
     expect(await svc.getCompanyDefaultProviderConfig(companyId)).toBeNull();
+    // Same through a status edit on the vault.
+    const second = await awsCompanyDefault(companyId);
+    expect((await svc.getCompanyDefaultProviderConfig(companyId))?.id).toBe(second.id);
+    await svc.updateProviderConfig(second.id, { status: "disabled" });
+    expect(await svc.getCompanyDefaultProviderConfig(companyId)).toBeNull();
     expect(await svc.resolveWriteTarget(companyId, {})).toEqual({ provider: "local_encrypted", providerConfigId: null });
   });
 
