@@ -979,6 +979,17 @@ function assertSelectableProviderConfig(config: {
   }
 }
 
+/**
+ * Provider vault rows created while Vault was "coming soon" could hold address,
+ * mountPath and secretPathPrefix; those are deployment settings now. A
+ * status-only PATCH drops them so the row becomes usable instead of failing
+ * every operation.
+ */
+function stripDeploymentOwnedVaultFields(config: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const { address: _address, mountPath: _mountPath, secretPathPrefix: _secretPathPrefix, ...rest } = config ?? {};
+  return rest;
+}
+
 export function secretService(db: Db | DbTransaction) {
   const authorization = authorizationService(db);
 
@@ -3799,7 +3810,9 @@ export function secretService(db: Db | DbTransaction) {
       }
       const normalizedConfig =
         patch.config === undefined
-          ? existing.config
+          ? provider === "vault"
+            ? stripDeploymentOwnedVaultFields(existing.config)
+            : existing.config
           : validateProviderConfigPayload(provider, patch.config);
       return db.transaction(async (tx) => {
         if (patch.isDefault) {
