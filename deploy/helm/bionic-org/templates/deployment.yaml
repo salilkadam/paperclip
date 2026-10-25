@@ -278,7 +278,7 @@ spec:
             failureThreshold: {{ .Values.probes.readiness.failureThreshold | default 3 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.persistence.enabled .Values.extraTrustedCa.enabled }}
+          {{- if or .Values.persistence.enabled .Values.extraTrustedCa.enabled .Values.secretsVault.enabled }}
           volumeMounts:
             {{- if .Values.persistence.enabled }}
             - name: paperclip-data
@@ -291,8 +291,13 @@ spec:
               mountPath: {{ .Values.extraTrustedCa.mountDir }}
               readOnly: true
             {{- end }}
+            {{- if .Values.secretsVault.enabled }}
+            - name: vault-token
+              mountPath: /var/run/secrets/vault
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if or .Values.persistence.enabled .Values.extraTrustedCa.enabled }}
+      {{- if or .Values.persistence.enabled .Values.extraTrustedCa.enabled .Values.secretsVault.enabled }}
       volumes:
         {{- if .Values.persistence.enabled }}
         - name: paperclip-data
@@ -307,5 +312,17 @@ spec:
             # pod still starts where no mail plane exists.
             name: {{ .Values.extraTrustedCa.configMap }}
             optional: true
+        {{- end }}
+        {{- if .Values.secretsVault.enabled }}
+        # Audience-"vault" ServiceAccount token for the Vault secret provider's
+        # Kubernetes login; the kubelet rotates it and the server re-reads it on
+        # every login.
+        - name: vault-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: vault
+                  expirationSeconds: {{ .Values.secretsVault.tokenExpirationSeconds }}
         {{- end }}
       {{- end }}

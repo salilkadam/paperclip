@@ -168,6 +168,56 @@ The output gives a status per secret (`migrated`, `already_on_target`, `dry_run`
 
 For a private CA, use `NODE_EXTRA_CA_CERTS`.
 
+### Rolling it out on the bionic-org cluster
+
+1. `VAULT_TOKEN_FILE=<0600 admin token file> deploy/scripts/setup-vault-paperclip-provider.sh`
+   writes policy `paperclip-secrets` and role `bionic-org`. The role is bound to
+   `bionicorg/bionic-org-sa`, audience `vault`, TTL 1 h, max 24 h.
+2. `deploy/scripts/probe-paperclip-vault-provider.sh` logs in as that role and checks
+   every needed capability, and that the master-key entry, other apps and destroy are
+   denied. It must exit 0. Its local gate is
+   `deploy/scripts/test-vault-paperclip-provider-local.sh`: a planted over-broad
+   policy or a missing metadata `create` must fail it.
+3. Helm: `secretsVault.enabled` is **true in the chart's values.yaml**, so the next
+   deploy of `main` turns it on. Run steps 1-2 before that deploy. It sets the
+   `PAPERCLIP_SECRETS_VAULT_*` env and projects an audience-`vault` token at
+   `/var/run/secrets/vault/token`. If the role is missing the pod still starts: only
+   the Vault provider's health check reports the gap.
+   **Required check after rollout:** the probe tests a token minted by the operator.
+   The first proof that the pod's own projected token works is the Vault provider
+   vault's health check (Secrets → Provider vaults → Check health) reporting `ready`.
+4. Create a `vault` provider vault per company, check its health, and make it the
+   company default.
+5. `paperclip secrets migrate-provider --company-id <id> --dry-run`, then without
+   `--dry-run`.
+
+**What the role can do.** It holds policy `paperclip-secrets` plus Vault's `default`
+policy (renew/revoke/lookup-self, cubbyhole, wrapping). The setup script sets every
+role parameter explicitly and reads the role and policy back: a role write *merges*,
+so a stale field would otherwise survive. One Vault identity reads every company's
+managed secrets. Per-company isolation is enforced by Paperclip (each read is checked
+against the company's path), not by Vault.
+
+**Accepted risk: external read paths** (owner decision 7.4, review PR-D F3).
+- Anything that can act as `bionic-org-sa` gains read on `t6-apps/mcp/config` and
+  `t6-apps/bionic-org/sandbox`: the pod and its agents, and `sre-harness-sa`, which
+  can create pods and deployments in `bionicorg`. `sre-harness-sa` can already read
+  every `bionicorg` Secret, including the master key, so for it this is strictly less
+  than its existing reach. Neither entry is in a `bionicorg` Secret today, as far as
+  the repos show.
+- The allowlist is deployment-wide: a company admin may link any field of those two
+  entries.
+- Owner: the deployment owner.
+- Trigger to revisit: before a second tenant company that should not see the shared
+  MCP keys is created, or when `sre-harness-sa` stops needing pod creation. Then move
+  the needed fields to a dedicated `t6-apps/bionic-org/paperclip-external` entry.
+
+**Exposure note.** Local agents run in the server's pod under the same uid. They can
+read the projected token and so act as the server's Vault role. They can already
+read the server's environment (including the local master key), so this adds no
+new class of access. The fix is agent-process isolation (plan §6), not this
+provider.
+
 ## Vault policy for the server role
 
 Least privilege for the managed prefix plus read-only external paths. **`create` on

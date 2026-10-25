@@ -75,10 +75,10 @@ vault_ops_get() {
 }
 
 # vault_ops_logout — revoke the token. A failure is reported, not hidden: the
-# token still expires on its own after its 15-minute TTL.
+# token still expires on its own at the end of its role TTL.
 vault_ops_logout() {
   [[ -n "$VAULT_OPS_TOKEN" ]] || return 0
   vault_ops_sh 'vault token revoke -self >/dev/null' \
-    || echo "vault-ops: WARNING token revoke failed; it expires within its 15m TTL" >&2
+    || echo "vault-ops: WARNING token revoke failed; it expires at the end of its role TTL ($VAULT_OPS_ROLE)" >&2
   VAULT_OPS_TOKEN=""
 }
