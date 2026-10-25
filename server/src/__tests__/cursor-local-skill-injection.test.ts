@@ -71,8 +71,9 @@ describe("cursor local adapter skill injection", () => {
     await ensureCursorSkillsInjected(async () => {}, { skillsDir, skillsHome });
 
     expect((await fs.lstat(existingTarget)).isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(existingTarget)).toBe(path.join(skillsDir, "paperclip"));
     const backupRoot = path.join(path.dirname(skillsHome), "skills-replaced");
-    const backups = (await fs.readdir(backupRoot)).filter((name) => name.startsWith("paperclip-"));
+    const backups = (await fs.readdir(backupRoot)).filter((name) => /^paperclip-\d{4}-/.test(name));
     expect(backups).toHaveLength(1);
     expect(await fs.readFile(path.join(backupRoot, backups[0]!, "keep.txt"), "utf8")).toBe("keep");
     expect((await fs.lstat(path.join(skillsHome, "paperclip-create-agent"))).isSymbolicLink()).toBe(true);

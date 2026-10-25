@@ -4405,11 +4405,21 @@ export async function ensurePaperclipSkillSymlink(
  * agents kept reading the pre-fix gateway header.
  *
  * Re-point it when the linked content differs from the source. Nothing is
- * deleted: the old copy stays where it is, only the link moves. Identical
- * content (another company's pinned copy of the same version) is left alone,
- * so agents that share the home do not flip the link back and forth. The new
- * link is built beside the backups and renamed over the old one, which is
- * atomic, so a concurrent run never sees the name missing.
+ * deleted: the old copy stays where it is, only the link moves (a stray file
+ * appearing at the name in the lstat-to-rename window would be overwritten).
+ * The new link is built beside the backups and renamed over the old one, which
+ * is atomic, so a concurrent run never sees the name missing.
+ *
+ * Left alone, returning "skipped" as before:
+ * - a link into an immutable `__versions__/` snapshot. That is another agent's
+ *   deliberate version pin; in a home shared by companies with different pins,
+ *   re-pointing would flip the link on every run and let one run read two
+ *   versions. Stale copies are the unversioned ones, like the incident's.
+ * - content equal to the source. Compared by bytes and the executable bit
+ *   only: pinned snapshots are written read-only, so a full-mode hash would
+ *   call identical copies different.
+ * - a linked copy or source that cannot be read right now (ENOENT while a
+ *   snapshot is re-materialized, EACCES).
  */
 async function repointStaleSkillSymlink(
   source: string,
@@ -4417,18 +4427,29 @@ async function repointStaleSkillSymlink(
   linkedPath: string,
   linkSkill: (source: string, target: string) => Promise<void>,
 ): Promise<"repaired" | "skipped"> {
+  const realLinked = await fs.realpath(linkedPath).catch(() => null);
+  if (!realLinked) return "skipped";
+  if (realLinked.split(path.sep).includes("__versions__")) return "skipped";
   if (!(await fs.lstat(source).catch(() => null))) return "skipped";
-  const [linkedHash, sourceHash] = await Promise.all([
-    hashSkillDirectory(linkedPath),
-    hashSkillDirectory(source),
-  ]);
+  let linkedHash: string;
+  let sourceHash: string;
+  try {
+    [linkedHash, sourceHash] = await Promise.all([
+      hashSkillDirectory(realLinked, { contentOnly: true }),
+      hashSkillDirectory(source, { contentOnly: true }),
+    ]);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT" || code === "EACCES") return "skipped";
+    throw err;
+  }
   if (linkedHash === sourceHash) return "skipped";
 
   const stagingRoot = path.join(path.dirname(path.dirname(target)), "skills-replaced");
   await fs.mkdir(stagingRoot, { recursive: true });
   const staged = path.join(stagingRoot, `.${path.basename(target)}.link-${randomUUID().slice(0, 8)}`);
-  await linkSkill(source, staged);
   try {
+    await linkSkill(source, staged);
     await fs.rename(staged, target);
   } catch (err) {
     await fs.rm(staged, { force: true }).catch(() => {});
@@ -4479,8 +4500,8 @@ async function replaceStaleUnmanagedSkillCopy(
   // costs one hash per run and leaves nothing behind.
   const sameAsSource = async () => {
     const [targetHash, sourceHash] = await Promise.all([
-      hashSkillDirectory(target),
-      hashSkillDirectory(source),
+      hashSkillDirectory(target, { contentOnly: true }),
+      hashSkillDirectory(source, { contentOnly: true }),
     ]);
     return targetHash === sourceHash;
   };
@@ -4533,7 +4554,13 @@ async function replaceStaleUnmanagedSkillCopy(
   }
 }
 
-async function hashSkillDirectory(root: string): Promise<string> {
+/**
+ * `contentOnly` hashes bytes and the executable bit, not the full mode: pinned
+ * snapshots are written read-only, bundled skills carry image modes, and both
+ * must compare equal when their content is the same. The materialize
+ * fingerprint keeps the full mode (default).
+ */
+async function hashSkillDirectory(root: string, options: { contentOnly?: boolean } = {}): Promise<string> {
   const hash = createHash("sha256");
 
   async function visit(candidate: string, relativePath: string): Promise<void> {
@@ -4555,7 +4582,8 @@ async function hashSkillDirectory(root: string): Promise<string> {
       return;
     }
     if (stat.isFile()) {
-      hash.update(`file:${relativePath}:${stat.mode}\n`);
+      const mode = options.contentOnly ? (stat.mode & 0o111 ? "x" : "-") : String(stat.mode);
+      hash.update(`file:${relativePath}:${mode}\n`);
       hash.update(await fs.readFile(candidate));
       hash.update("\n");
       return;
