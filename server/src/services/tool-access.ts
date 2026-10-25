@@ -3720,6 +3720,31 @@ export function toolAccessService(
           });
         }
       }
+      if (!personalIdentity) {
+        // Organization grants mirror the connection-owned refs. When a
+        // reconnect replaces a field's secret (a linked secret is never
+        // rotated in place), carry the new ref into those mirrors too, or the
+        // grant keeps the old secret bound at the same path.
+        const replacedByPath = new Map(
+          credentialSecretRefs
+            .filter((ref) => providedFields.some((field) => field.configPath === ref.configPath))
+            .map((ref) => [ref.configPath, ref]),
+        );
+        if (replacedByPath.size > 0) {
+          const orgGrants = await tx.select().from(connectionGrants).where(and(
+            eq(connectionGrants.companyId, companyId),
+            eq(connectionGrants.connectionId, connection.id),
+            eq(connectionGrants.kind, "organization"),
+          ));
+          for (const grant of orgGrants) {
+            const refs = grant.credentialSecretRefs ?? [];
+            if (!refs.some((ref) => replacedByPath.has(ref.configPath))) continue;
+            await tx.update(connectionGrants)
+              .set({ credentialSecretRefs: refs.map((ref) => replacedByPath.get(ref.configPath) ?? ref), updatedAt })
+              .where(eq(connectionGrants.id, grant.id));
+          }
+        }
+      }
       const [nextConnection] = await tx
         .update(toolConnections)
         .set({
