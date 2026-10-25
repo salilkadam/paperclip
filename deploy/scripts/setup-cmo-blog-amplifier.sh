@@ -49,7 +49,7 @@ for a in "$@"; do
 done
 
 die() { echo "ERROR: $*" >&2; exit 1; }
-log() { echo "[cmo-blog-amplifier] $*"; }
+log() { echo "[cmo-blog-amplifier] $*" >&2; }
 for b in curl jq; do command -v "$b" >/dev/null || die "$b is required"; done
 [[ -r "${PAPERCLIP_BOARD_KEY_FILE:-}" ]] || die "PAPERCLIP_BOARD_KEY_FILE must point to a readable file"
 [[ "$(stat -c %a "$PAPERCLIP_BOARD_KEY_FILE")" == 600 ]] || die "$PAPERCLIP_BOARD_KEY_FILE must be mode 0600"
