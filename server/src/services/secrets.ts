@@ -2862,8 +2862,14 @@ export function secretService(db: Db | DbTransaction) {
       .then((rows) => rows.length > 0);
     // The database's view can be stale either way: a rolled-back earlier attempt
     // leaves a provider-side entry with no version row, and an operator can
-    // remove an entry a row still points at. So fall back once: create that
-    // collides -> add a version; add-a-version that finds nothing -> create.
+    // remove an entry a row still points at. So fall back once:
+    //  - add-a-version that finds nothing -> create (safe for any provider);
+    //  - create that collides -> add a version, ONLY where the provider-side
+    //    entry is derived from this secret's id (HashiCorp Vault paths end in
+    //    the secret id), so a collision can only be this secret's own leftover.
+    //    AWS names derive from the key, which other secrets (instance scope,
+    //    company vs instance) can share; appending there would merge two
+    //    secrets into one entry, so a collision fails loudly instead.
     const writeArgs = { value, externalRef: null, providerConfig: targetConfig, context: writeContext };
     const isCode = (error: unknown, code: string) => isSecretProviderClientError(error) && error.code === code;
     let prepared: PreparedSecretVersion;
@@ -2875,7 +2881,13 @@ export function secretService(db: Db | DbTransaction) {
         });
       } else {
         prepared = await targetProvider.createSecret(writeArgs).catch((error) => {
-          if (isCode(error, "conflict")) return targetProvider.createVersion(writeArgs);
+          if (isCode(error, "conflict") && target.provider === "vault") return targetProvider.createVersion(writeArgs);
+          if (isCode(error, "conflict")) {
+            throw conflict(
+              "The target provider already has an entry with this secret's name (another secret with the same key, or a leftover from a failed attempt); resolve it in the provider, then re-run",
+              { code: "secret_migration_target_entry_exists", provider: target.provider },
+            );
+          }
           throw error;
         });
       }
@@ -2914,6 +2926,7 @@ export function secretService(db: Db | DbTransaction) {
           code: "secret_migration_readback_mismatch",
         });
       }
+      let definitionMoved = false;
       const migrated = await db.transaction(async (tx) => {
         // Parent row first (same lock order as rotate), as one compare-and-set.
         const updated = await tx
@@ -2966,6 +2979,7 @@ export function secretService(db: Db | DbTransaction) {
             ))
             .limit(1);
           if (stragglers.length === 0) {
+            definitionMoved = true;
             await tx
               .update(userSecretDefinitions)
               .set({ provider: target.provider, providerConfigId: target.providerConfigId, updatedAt: new Date() })
@@ -2981,7 +2995,11 @@ export function secretService(db: Db | DbTransaction) {
         action: "secret.provider_migrated",
         entityType: "secret",
         entityId: migrated.id,
-        details: { ...base, toVersion },
+        details: {
+          ...base,
+          toVersion,
+          ...(definitionMoved ? { userSecretDefinitionMoved: secret.userSecretDefinitionId } : {}),
+        },
       }).catch((error) => {
         logger.warn({ err: error, secretId: secret.id }, "secret provider migration committed but its activity log entry failed");
       });
@@ -5310,12 +5328,23 @@ export function secretService(db: Db | DbTransaction) {
       }
       rows.sort((a, b) =>
         (a.scope === "user" ? 0 : 1) - (b.scope === "user" ? 0 : 1) || a.latestVersion - b.latestVersion);
+      // Resolve the target once, so a company-default change mid-run cannot
+      // split the run between two targets.
+      const target = await resolveWriteTarget(companyId, {
+        provider: input.targetProvider,
+        providerConfigId: input.targetProviderConfigId,
+      });
+      const perSecretInput = {
+        targetProvider: target.provider,
+        targetProviderConfigId: target.providerConfigId,
+        dryRun: input.dryRun,
+      };
       // `secretId` is the definition id for `kind: "definition"` rows.
       const results: Array<(MigrateProviderResult | { secretId: string; status: "failed"; error: string; code: string | null }) & { kind?: "definition" }> = [];
       for (const row of rows) {
         try {
           results.push(await withAccountHomeSecretMutationLock(undefined, companyId, () =>
-            migrateProviderUnlocked(row.id, input, actor)));
+            migrateProviderUnlocked(row.id, perSecretInput, actor)));
         } catch (error) {
           const details = error instanceof HttpError ? error.details as { code?: string } | undefined : undefined;
           results.push({
@@ -5329,8 +5358,12 @@ export function secretService(db: Db | DbTransaction) {
       // Definitions decide where NEW user values go. Move every managed
       // definition whose active values are all on the target, including
       // definitions with no values yet (never visited by the loop above).
+      // Values this run moved, or (dry run) would move / already on target,
+      // count as on the target for the definitions pass.
+      const settled = results
+        .filter((result) => result.status === "migrated" || result.status === "dry_run" || result.status === "already_on_target")
+        .map((result) => result.secretId);
       if (!input.secretIds?.length) {
-        const target = await resolveWriteTarget(companyId, { provider: input.targetProvider, providerConfigId: input.targetProviderConfigId });
         const definitions = await db
           .select()
           .from(userSecretDefinitions)
@@ -5349,6 +5382,7 @@ export function secretService(db: Db | DbTransaction) {
             .where(and(
               eq(companySecrets.userSecretDefinitionId, definition.id),
               eq(companySecrets.status, "active"),
+              settled.length ? notInArray(companySecrets.id, settled) : undefined,
               or(
                 ne(companySecrets.provider, target.provider),
                 target.providerConfigId
@@ -5366,6 +5400,22 @@ export function secretService(db: Db | DbTransaction) {
               .update(userSecretDefinitions)
               .set({ provider: target.provider, providerConfigId: target.providerConfigId, updatedAt: new Date() })
               .where(eq(userSecretDefinitions.id, definition.id));
+            await logActivity(db as Db, {
+              companyId,
+              actorType: actor?.userId ? "user" : actor?.agentId ? "agent" : "system",
+              actorId: actor?.userId ?? actor?.agentId ?? "system",
+              action: "user_secret_definition.provider_migrated",
+              entityType: "user_secret_definition",
+              entityId: definition.id,
+              details: {
+                fromProvider: definition.provider,
+                fromProviderConfigId: definition.providerConfigId ?? null,
+                toProvider: target.provider,
+                toProviderConfigId: target.providerConfigId,
+              },
+            }).catch((error) => {
+              logger.warn({ err: error, definitionId: definition.id }, "definition provider migration committed but its activity log entry failed");
+            });
           }
           results.push({
             secretId: definition.id,

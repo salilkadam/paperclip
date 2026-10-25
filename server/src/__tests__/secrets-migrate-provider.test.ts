@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { eq } from "drizzle-orm";
 import {
   activityLog,
+  agents,
   companies,
   companyMemberships,
   companySecretBindings,
@@ -24,6 +25,7 @@ import {
 } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { awsSecretsManagerProvider } from "../secrets/aws-secrets-manager-provider.js";
+import { createVaultProvider, vaultProvider, type VaultKvGateway } from "../secrets/vault-provider.js";
 import { localEncryptedProvider } from "../secrets/local-encrypted-provider.js";
 import { SecretProviderClientError } from "../secrets/types.js";
 import { secretService } from "../services/secrets.js";
@@ -57,6 +59,7 @@ describeEmbeddedPostgres("secret provider migration", () => {
     await db.delete(userSecretDefinitions);
     await db.delete(companySecretProviderConfigs);
     await db.delete(companyMemberships);
+    await db.delete(agents);
     await db.delete(companies);
   });
 
@@ -80,39 +83,43 @@ describeEmbeddedPostgres("secret provider migration", () => {
 
   /**
    * In-memory AWS: createSecret/createVersion store bytes; resolveVersion returns
-   * them. Like the real service, the secret container persists: createSecret
-   * on an existing (or deletion-scheduled) name is a conflict, createVersion on
-   * a missing one is not_found, and "delete" does not free the name.
+   * them. Like the real service, entries are named from the secret KEY (so two
+   * secrets with one key share a name), an entry persists: createSecret on an
+   * existing name is a conflict, createVersion on a missing one is not_found,
+   * and "delete" does not free the name.
    */
   function fakeAws(options: { corruptReadBack?: boolean; corruptReadBackTimes?: number } = {}) {
     const store = new Map<string, string>();
     const calls: string[] = [];
-    const state = { exists: false };
+    const names = new Set<string>();
+    const nameOf = (input: { context?: { secretKey: string } }) => `paperclip/dep/${input.context?.secretKey ?? "?"}`;
     let corruptionsLeft = options.corruptReadBackTimes ?? (options.corruptReadBack ? Number.POSITIVE_INFINITY : 0);
     let counter = 0;
     const awsError = (code: "conflict" | "not_found", operation: string) =>
       new SecretProviderClientError({ code, provider: "aws_secrets_manager", operation, message: code });
-    const prepared = (value: string, kind: string) => {
+    const prepared = (value: string, kind: string, name: string) => {
       counter += 1;
       const versionId = `aws-${counter}`;
       store.set(versionId, value);
       calls.push(`${kind}:${versionId}`);
       return {
-        material: { scheme: "aws_secrets_manager_v1", secretId: "arn:aws:secretsmanager:us-east-1:1:secret:x", versionId, source: "managed" },
+        material: { scheme: "aws_secrets_manager_v1", secretId: `arn:aws:secretsmanager:us-east-1:1:secret:${name}`, versionId, source: "managed" },
         valueSha256: sha(value),
         fingerprintSha256: sha(value),
-        externalRef: "arn:aws:secretsmanager:us-east-1:1:secret:x",
+        externalRef: `arn:aws:secretsmanager:us-east-1:1:secret:${name}`,
         providerVersionRef: versionId,
       };
     };
     vi.spyOn(awsSecretsManagerProvider, "createSecret").mockImplementation(async (input) => {
-      if (state.exists) throw awsError("conflict", "createSecret");
-      state.exists = true;
-      return prepared(input.value, "create");
+      const name = nameOf(input);
+      if (names.has(name)) throw awsError("conflict", "createSecret");
+      names.add(name);
+      return prepared(input.value, "create", name);
     });
     vi.spyOn(awsSecretsManagerProvider, "createVersion").mockImplementation(async (input) => {
-      if (!state.exists) throw awsError("not_found", "createVersion");
-      return prepared(input.value, "version");
+      const name = nameOf(input);
+      if (!names.has(name)) throw awsError("not_found", "createVersion");
+      return prepared(input.value, "version", name);
     });
     vi.spyOn(awsSecretsManagerProvider, "resolveVersion").mockImplementation(async (input) => {
       const value = store.get(String(input.providerVersionRef));
@@ -126,7 +133,7 @@ describeEmbeddedPostgres("secret provider migration", () => {
     const deletes = vi.spyOn(awsSecretsManagerProvider, "deleteOrArchive").mockImplementation(async (input) => {
       calls.push(`delete:${input.mode}`);
     });
-    return { store, calls, deletes, state };
+    return { store, calls, deletes, names };
   }
 
   async function awsVault(companyId: string) {
@@ -186,17 +193,92 @@ describeEmbeddedPostgres("secret provider migration", () => {
     expect(await svc.getById(secret.id)).toMatchObject({ provider: "local_encrypted", latestVersion: 1 });
   });
 
-  it("a rolled-back migration can be re-run: the leftover target entry gets a new version", async () => {
+  /** The real Vault provider over an in-memory KV v2 with vendor check-and-set rules. */
+  function fakeVault() {
+    const entries = new Map<string, { versions: Array<{ data: Record<string, string>; deleted: boolean }> }>();
+    const gateway: VaultKvGateway = {
+      async writeMetadata(p) { if (!entries.has(p)) entries.set(p, { versions: [] }); },
+      async readMetadata(p) {
+        const entry = entries.get(p);
+        if (!entry) return null;
+        const versions: Record<string, { deleted: boolean; destroyed: boolean }> = {};
+        entry.versions.forEach((v, i) => { versions[String(i + 1)] = { deleted: v.deleted, destroyed: false }; });
+        return { currentVersion: entry.versions.length, maxVersions: 100, versions };
+      },
+      async writeData(p, data, cas) {
+        const entry = entries.get(p) ?? { versions: [] };
+        // Vendor rule: cas must equal the current version (0 only for a key with no versions).
+        if (cas !== null && cas !== entry.versions.length) {
+          throw new SecretProviderClientError({ code: "conflict", provider: "vault", operation: "writeData", message: "check-and-set parameter did not match the current version" });
+        }
+        entry.versions.push({ data, deleted: false });
+        entries.set(p, entry);
+        return { version: entry.versions.length };
+      },
+      async readData(p, version) {
+        const stored = entries.get(p)?.versions[(version ?? entries.get(p)!.versions.length) - 1];
+        return stored && !stored.deleted ? { data: stored.data, version: version ?? 0 } : null;
+      },
+      async softDeleteVersions(p, versions) {
+        for (const v of versions) { const row = entries.get(p)?.versions[v - 1]; if (row) row.deleted = true; }
+      },
+    };
+    const real = createVaultProvider({
+      config: {
+        address: "http://vault.vault.svc:8200", namespace: null, mount: "secret", prefix: "t6-apps/bionic-org/paperclip",
+        authMethod: "token_file", k8sRole: null, k8sMount: "kubernetes", k8sJwtPath: "/dev/null", tokenFile: "/dev/null",
+        timeoutMs: 1000, maxVersions: 100, externalPrefixes: [],
+      },
+      gateway,
+    });
+    let corruptNext = 0;
+    for (const method of ["createSecret", "createVersion", "deleteOrArchive", "healthCheck", "validateConfig"] as const) {
+      vi.spyOn(vaultProvider, method).mockImplementation(((...args: unknown[]) => (real[method] as (...a: unknown[]) => unknown)(...args)) as never);
+    }
+    vi.spyOn(vaultProvider, "resolveVersion").mockImplementation(async (input) => {
+      const value = await real.resolveVersion(input);
+      if (corruptNext > 0) { corruptNext -= 1; return `${value}-corrupted`; }
+      return value;
+    });
+    return { entries, corruptOnce: () => { corruptNext = 1; } };
+  }
+
+  it("a rolled-back migration to Vault can be re-run: the leftover entry (same secret id) gets a new version", async () => {
     const companyId = await seedCompany();
     const svc = secretService(db);
     const secret = await svc.create(companyId, { name: `retry-${randomUUID()}`, provider: "local_encrypted", value: "v" });
-    const vault = await awsVault(companyId);
-    const aws = fakeAws({ corruptReadBackTimes: 1 });
+    const vault = await svc.createProviderConfig(companyId, { provider: "vault", displayName: "Vault", config: {} });
+    const kv = fakeVault();
+    kv.corruptOnce();
     await expect(svc.migrateProvider(secret.id, { targetProviderConfigId: vault.id })).rejects.toMatchObject({ status: 422 });
-    expect(aws.state.exists).toBe(true); // the entry outlives the archived version, as in AWS/Vault
+    const [path] = [...kv.entries.keys()];
+    expect(kv.entries.get(path!)?.versions.map((v) => v.deleted)).toEqual([true]); // archived, entry kept
     expect(await svc.migrateProvider(secret.id, { targetProviderConfigId: vault.id })).toMatchObject({ status: "migrated", toVersion: 2 });
-    expect(aws.calls.filter((call) => !call.startsWith("delete"))).toEqual(["create:aws-1", "version:aws-2"]);
+    expect(kv.entries.get(path!)?.versions.map((v) => v.deleted)).toEqual([true, false]);
     expect(await svc.resolveSecretValue(companyId, secret.id, "latest")).toBe("v");
+  });
+
+  it("never merges two secrets that share a key into one AWS entry", async () => {
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    const agentId = randomUUID();
+    await db.insert(agents).values({ id: agentId, companyId, name: "a", role: "engineer", adapterType: "codex_local", adapterConfig: {}, status: "idle" });
+    const company = await svc.create(companyId, { name: "api_token", key: "api_token", provider: "local_encrypted", value: "company-value" });
+    const local = await localEncryptedProvider.createSecret({ value: "instance-value", externalRef: null });
+    const [instance] = await db.insert(companySecrets).values({
+      companyId, scope: "instance", ownerAgentId: agentId, key: "api_token", name: "api_token (agent)", provider: "local_encrypted",
+      status: "active", latestVersion: 1,
+    }).returning();
+    await db.insert(companySecretVersions).values({
+      secretId: instance!.id, version: 1, material: local.material, valueSha256: local.valueSha256,
+      fingerprintSha256: local.fingerprintSha256 ?? local.valueSha256, provider: "local_encrypted", status: "current",
+    });
+    const vault = await awsVault(companyId);
+    fakeAws();
+    expect((await svc.migrateProvider(company.id, { targetProviderConfigId: vault.id })).status).toBe("migrated");
+    await expect(svc.migrateProvider(instance!.id, { targetProviderConfigId: vault.id }))
+      .rejects.toMatchObject({ status: 409, details: expect.objectContaining({ code: "secret_migration_target_entry_exists" }) });
+    expect(await svc.getById(instance!.id)).toMatchObject({ provider: "local_encrypted", latestVersion: 1 });
   });
 
   it("re-creates the target entry if an operator removed it although rows still point at it", async () => {
@@ -207,7 +289,7 @@ describeEmbeddedPostgres("secret provider migration", () => {
     const aws = fakeAws();
     await svc.migrateProvider(secret.id, { targetProviderConfigId: vault.id });
     await svc.migrateProvider(secret.id, { targetProvider: "local_encrypted" });
-    aws.state.exists = false; // removed out of band
+    aws.names.clear(); // removed out of band
     expect(await svc.migrateProvider(secret.id, { targetProviderConfigId: vault.id })).toMatchObject({ status: "migrated" });
     expect(aws.calls.filter((call) => !call.startsWith("delete"))).toEqual(["create:aws-1", "create:aws-2"]);
   });
@@ -269,6 +351,44 @@ describeEmbeddedPostgres("secret provider migration", () => {
       .rejects.toMatchObject({ details: expect.objectContaining({ code: "secret_external_reference" }) });
   });
 
+  it("a company dry run reports definitions as would-move, not failed; a --secret run skips the definitions pass", async () => {
+    const companyId = await seedCompany();
+    await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "user-1", status: "active", membershipRole: "owner" });
+    const svc = secretService(db);
+    const definition = await svc.createUserSecretDefinition(companyId, { key: "dd", name: "Dry", provider: "local_encrypted" });
+    const value = await svc.createCurrentUserSecretValue(companyId, "user-1", { definitionId: definition.id, value: "x" });
+    const vault = await awsVault(companyId);
+    const aws = fakeAws();
+    const dry = await svc.migrateCompanyProvider(companyId, { targetProviderConfigId: vault.id, dryRun: true });
+    expect(dry.counts).toEqual({ dry_run: 2 });
+    expect(aws.calls).toEqual([]);
+    const [still] = await db.select().from(userSecretDefinitions).where(eq(userSecretDefinitions.id, definition.id));
+    expect(still).toMatchObject({ provider: "local_encrypted" });
+
+    const other = await svc.createUserSecretDefinition(companyId, { key: "untouched", name: "Untouched", provider: "local_encrypted" });
+    const subset = await svc.migrateCompanyProvider(companyId, { targetProviderConfigId: vault.id, secretIds: [value.id] });
+    expect(subset.results.some((result) => result.kind === "definition")).toBe(false);
+    const [untouched] = await db.select().from(userSecretDefinitions).where(eq(userSecretDefinitions.id, other.id));
+    expect(untouched).toMatchObject({ provider: "local_encrypted" });
+  });
+
+  it("a definition with an active value left behind is reported, not moved", async () => {
+    const companyId = await seedCompany();
+    await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "user-1", status: "active", membershipRole: "owner" });
+    const svc = secretService(db);
+    const definition = await svc.createUserSecretDefinition(companyId, { key: "pend", name: "Pending", provider: "local_encrypted" });
+    const value = await svc.createCurrentUserSecretValue(companyId, "user-1", { definitionId: definition.id, value: "x" });
+    await db.update(companySecretVersions).set({ valueSha256: sha("tampered") }).where(eq(companySecretVersions.secretId, value.id));
+    const vault = await awsVault(companyId);
+    fakeAws();
+    const run = await svc.migrateCompanyProvider(companyId, { targetProviderConfigId: vault.id });
+    expect(run.results.find((result) => result.secretId === definition.id)).toMatchObject({
+      kind: "definition", status: "failed", code: "definition_values_pending",
+    });
+    const [still] = await db.select().from(userSecretDefinitions).where(eq(userSecretDefinitions.id, definition.id));
+    expect(still).toMatchObject({ provider: "local_encrypted" });
+  });
+
   it("migrating a definition's last active value moves the definition even with an archived sibling", async () => {
     const companyId = await seedCompany();
     await db.insert(companyMemberships).values([
@@ -287,7 +407,7 @@ describeEmbeddedPostgres("secret provider migration", () => {
     expect(moved).toMatchObject({ provider: "aws_secrets_manager", providerConfigId: vault.id });
   });
 
-  it("a company run migrates user values first, records failures per secret, and moves a definition once all its values moved", async () => {
+  it("a company run migrates user values first, records failures per secret, and moves a definition once all its values moved", { timeout: 60_000 }, async () => {
     const companyId = await seedCompany();
     await db.insert(companyMemberships).values([
       { companyId, principalType: "user", principalId: "user-1", status: "active", membershipRole: "owner" },

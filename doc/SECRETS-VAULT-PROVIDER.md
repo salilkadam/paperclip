@@ -120,8 +120,19 @@ values first, the most-rotated last):
    also moves definitions that have no values yet. Each definition gets its own result
    row (`kind: "definition"`).
 
-A failed attempt archives only the version it wrote. A re-run reuses the leftover
-target entry (or re-creates one an operator removed), so "re-run to pick it up" works.
+**Re-running after a failure.** A failed attempt archives the version it wrote.
+- **HashiCorp Vault.** The KV version is soft-deleted and the entry kept. Vault paths
+  end in the secret's id, so a re-run safely adds a version to that leftover entry. If
+  an operator removed an entry that rows still point at, it is re-created.
+- **AWS Secrets Manager.** Entry names come from the secret's key, which other secrets
+  can share (instance-scoped plugin secrets, company vs instance scope). So a
+  migration never writes into an existing AWS entry it did not create in this
+  attempt: a collision fails with `secret_migration_target_entry_exists`.
+  - A failed *first* write to AWS can leave the created entry with its value
+    (archiving only removes Paperclip's pending label). A re-run then reports that
+    code. Remove the entry in AWS, then re-run.
+  - On AWS, only the current and the latest pending version stay readable. Older
+    pinned versions are not kept there (pre-existing; this deployment uses Vault).
 
 **Limits.**
 - The source vault must be usable. Re-enable a disabled vault before migrating away
@@ -130,7 +141,8 @@ target entry (or re-creates one an operator removed), so "re-run to pick it up" 
   can report an error while the server finishes the run. Re-running is safe (secrets
   already moved report `already_on_target`), or split the work with `--secret`.
 
-Older versions stay where they were written and keep resolving there. External
+Older versions stay where they were written and keep resolving there (on Vault and
+local storage; see the AWS note above). External
 references are refused: Paperclip does not own those values. Each read is an access
 event (`consumer_type = secret_migration`), and each migration is in the activity log.
 The output gives a status per secret (`migrated`, `already_on_target`, `dry_run`,
