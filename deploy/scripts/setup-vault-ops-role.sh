@@ -27,8 +27,8 @@ VAULT_NS=vault
 VAULT_POD=vault-0
 
 # Exactly what the ops scripts touch:
-#   bionic-org/sandbox  read               sync-brev-sandbox-key
-#   mcp/config          read/update/patch  switch-tenant-client-*, setup-ghost-connections
+#   bionic-org/sandbox  read               (operator reads; the server reads it via its own role)
+#   mcp/config          read/update/patch  switch-tenant-client-*, setup-ghost-connections (copy mode)
 #   ghost/config        read               setup-ghost-plugin
 # Deliberately NOT bionic-org/config: it holds the secrets master key and no
 # ops script needs it.

@@ -206,4 +206,19 @@ describe("tool access validators", () => {
 
     expect(parsed.redactedFields).toEqual(["headers.Authorization", "body.token"]);
   });
+
+  describe("connectToolAppSchema credentialSecretIds", () => {
+    it("accepts a header field backed by an existing secret id", () => {
+      expect(connectToolAppSchema.safeParse({ link: "https://mcp.example.com/mcp", authMode: "custom_headers",
+        credentialSecretIds: { "headers.X-API-Key": "11111111-1111-4111-8111-111111111111" } }).success).toBe(true);
+    });
+    it.each([
+      ["a value and a secret for the same field", { credentialValues: { "headers.X-API-Key": "v" }, credentialSecretIds: { "headers.X-API-Key": "11111111-1111-4111-8111-111111111111" } }],
+      ["a personal grant", { grantKind: "user", credentialSecretIds: { "headers.X-API-Key": "11111111-1111-4111-8111-111111111111" } }],
+      ["a non-uuid", { credentialSecretIds: { "headers.X-API-Key": "not-a-uuid" } }],
+      ["a refused header name", { credentialSecretIds: { "headers.Host": "11111111-1111-4111-8111-111111111111" } }],
+    ])("rejects %s", (_label, extra) => {
+      expect(connectToolAppSchema.safeParse({ link: "https://mcp.example.com/mcp", authMode: "custom_headers", ...extra }).success).toBe(false);
+    });
+  });
 });

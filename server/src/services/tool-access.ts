@@ -2171,6 +2171,7 @@ export function toolAccessService(
     assertLocalStdioCanBeEnabled(transport, false);
 
     const credentialValues = input.credentialValues ?? {};
+    const credentialSecretIds = input.credentialSecretIds ?? {};
     // A curated method declares its auth kind. A pasted URL declares one only
     // under Advanced authentication; on the simple path it starts from what the
     // operator supplied and is upgraded to `oauth` when discovery proves the
@@ -2183,7 +2184,7 @@ export function toolAccessService(
           ? "api_key"
           : input.authMode === "none"
             ? "none"
-            : Object.keys(credentialValues).length > 0
+            : Object.keys(credentialValues).length > 0 || Object.keys(credentialSecretIds).length > 0
               ? "api_key"
               : "none");
     const credentialSecretRefs: CreateToolConnection["credentialSecretRefs"] =
@@ -2262,8 +2263,45 @@ export function toolAccessService(
           ? []
           : galleryEntry && !remoteMcpConnector
             ? credentialFieldsFor(galleryEntry, method?.key)
-            : linkCredentialFields({ ...Object.fromEntries(retainedCredentialSecretRefs.filter((ref) => ref.configPath.startsWith("headers.") || ref.configPath === "credentials.authorization").map((ref) => [ref.configPath, "retained"])), ...credentialValues });
+            : linkCredentialFields({ ...Object.fromEntries(retainedCredentialSecretRefs.filter((ref) => ref.configPath.startsWith("headers.") || ref.configPath === "credentials.authorization").map((ref) => [ref.configPath, "retained"])), ...Object.fromEntries(Object.keys(credentialSecretIds).map((configPath) => [configPath, "linked"])), ...credentialValues });
+      const knownFieldPaths = new Set(credentialFields.map((field) => field.configPath));
+      const unknownSecretIdPaths = Object.keys(credentialSecretIds).filter((configPath) => !knownFieldPaths.has(configPath));
+      if (unknownSecretIdPaths.length > 0) {
+        throw badRequest(`This connection method has no credential field ${unknownSecretIdPaths.join(", ")}`);
+      }
       for (const field of credentialFields) {
+        const linkedSecretId = credentialSecretIds[field.configPath];
+        if (linkedSecretId) {
+          // Reference an existing secret (e.g. a Vault external reference)
+          // instead of storing a value. It must be this company's own active,
+          // company-scoped secret; it is never copied, and a failed connect
+          // does not delete it (it is not in createdSecretIds).
+          if (requestedGrantKind !== "organization") {
+            throw badRequest("Existing secrets can only back an organization (shared) credential");
+          }
+          const linked = await secrets.getById(linkedSecretId);
+          if (!linked || linked.companyId !== companyId || linked.scope !== "company" || linked.status !== "active") {
+            throw badRequest(`Credential secret for ${field.configPath} must be an active company secret of this company`);
+          }
+          credentialSecretRefs.push({
+            secretId: linked.id,
+            versionSelector: "latest",
+            configPath: field.configPath,
+            required: field.required ?? true,
+            label: field.label,
+          });
+          if (field.placement === "header" && field.key) {
+            credentialRefs.push({
+              name: field.configPath,
+              secretId: linked.id,
+              version: "latest",
+              placement: "header",
+              key: field.key,
+              prefix: field.prefix ?? null,
+            });
+          }
+          continue;
+        }
         const value = credentialValues[field.configPath];
         const retainedSecretRef = retainedCredentialSecretRefs.find(
           (ref) => ref.configPath === field.configPath,

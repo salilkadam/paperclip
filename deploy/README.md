@@ -210,13 +210,16 @@ the instance (see `deploy/scripts/brev-heartbeat.sh`).
 - **Source of truth:** Vault `secret/t6-apps/bionic-org/sandbox`
   (`brev_ssh_private_key`, `brev_ssh_public_key`, `brev_known_hosts`,
   `brev_host`, `brev_ssh_user`, `brev_instance`).
-- **Runtime copy:** Paperclip secret `a2c362be-7cfe-4a41-9f20-e4245c3aebe2`
-  (bound to the environment at `sshPrivateKey`, version `latest`). It is
-  encrypted with the Vault-sourced master key.
-- **Sync / rotate / disaster recovery:** `deploy/scripts/sync-brev-sandbox-key.sh`
-  pipes the key from Vault to `POST /api/secrets/:id/rotate`, then probes the
-  environment from every company. The key is never written to disk, a pod env
-  var, or the log.
+- **Runtime:** since 2026-10-25 the environment's `sshPrivateKey` is the
+  read-only HashiCorp Vault external reference `939ce914-e849-4737-b895-6a7f8ffa4f9f`
+  (`t6-apps/bionic-org/sandbox#brev_ssh_private_key`, Bionic AI Solutions). The server
+  reads the key from Vault at use time (doc/SECRETS-VAULT-PROVIDER.md); nothing is copied.
+- **Rotate:** generate a new key, add its public key to `~/.ssh/authorized_keys` on the
+  host, `vault kv patch secret/t6-apps/bionic-org/sandbox brev_ssh_private_key=@id ...`,
+  then `paperclipai environment probe 4123fb2c-ee70-4cc7-97bb-b0354ee66de3`. Remove the
+  old authorized_keys line after the probe passes. `sync-brev-sandbox-key.sh` (the old
+  copy-into-Paperclip script) is retired. The former copy `a2c362be-…` stays unbound until
+  the Vault soak ends (rollback: point `sshPrivateKey` back at it).
 - **Why not an ESO env var:** local agent processes inherit the app pod
   environment, and an agent must never hold the host key.
 - **Cross-company use:** the environment is instance-scoped, and the secret is
@@ -482,7 +485,7 @@ renewal is how `t6-apps/vault/admin_token` died.
   defects (an over-broad policy, a denied write) that must be caught.
 - Users: `probe-bionic-vault-token.sh` (proves allowed **and** denied
   capabilities; exit 1 on any mismatch), `switch-tenant-client-*`,
-  `sync-brev-sandbox-key.sh`, `setup-ghost-connections.sh`,
+  `setup-ghost-connections.sh` (copy mode only),
   `setup-ghost-plugin.sh`, `test-ghost-connections-local.sh`.
 - Admin-level scripts (`setup-vault-ops-role.sh`, `setup-vault-jwt.sh`,
   `setup-vault-secrets.sh`) take an operator admin token from `VAULT_TOKEN_FILE`

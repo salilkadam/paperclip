@@ -8,9 +8,15 @@
 # Per company it:
 #   1. resolves the company by name (exactly one match, or it stops);
 #   2. creates an Apps v2 remote-MCP connection "Ghost blog" with an
-#      X-API-Key header. The value is that company's OWN gateway key, read from
-#      Vault t6-apps/mcp/config:apikey_ghost_<site>_key, and Paperclip stores it
-#      as a company secret (write-only; never read back);
+#      X-API-Key header backed by that company's OWN gateway key in Vault
+#      t6-apps/mcp/config:apikey_ghost_<site>_key. Default (GHOST_KEY_MODE=ref):
+#      a read-only Vault external-reference secret "Ghost gateway key (<site>)"
+#      — Paperclip reads the key from Vault at call time, so a key rotated in
+#      Vault needs no script run and this script never reads the key itself.
+#      Needs the server's HashiCorp Vault provider (doc/SECRETS-VAULT-PROVIDER.md).
+#      GHOST_KEY_MODE=copy keeps the old behaviour (read the key via
+#      lib/vault-ops.sh and store a copy; used by test-ghost-connections-local.sh,
+#      whose throwaway server has no Vault);
 #   3. gives every agent in the company access ("finish"): reads, drafts, edits,
 #      tags and image upload enabled; gh_publish_post, gh_unpublish_post and
 #      gh_delete_post are ASK FIRST (board approval card before they run);
@@ -21,8 +27,10 @@
 # only its company's Kong consumer in allowed_consumers (Deploy repo,
 # deploy-ghost.sh). A Bionic agent's key is refused on the Reliora blog.
 #
-# Re-running: an existing active "Ghost blog" connection is left as it is
-# (access is re-applied). Pass --rotate to push the current Vault key again.
+# Re-running: an existing connection that already uses the reference is left
+# as it is (access is re-applied); one still holding a copied key is
+# reconnected onto the reference. In copy mode, --rotate pushes the current
+# Vault key again.
 #
 # Requires: curl jq kubectl; kubeconfig (Vault access via lib/vault-ops.sh, no static token) and
 # PAPERCLIP_BOARD_KEY_FILE — a 0600 file holding a board API key of an instance
@@ -43,6 +51,8 @@ KNOWN_TOOLS=(gh_list_sites gh_site_info gh_list_posts gh_get_post gh_create_post
              gh_publish_post gh_unpublish_post gh_delete_post gh_list_tags gh_create_tag gh_upload_image)
 # site:company-name-match (case-insensitive prefix; must match exactly one company)
 SITES=("bionic:Bionic AI Solutions" "reliora:Reliora")
+KEY_MODE="${GHOST_KEY_MODE:-ref}"
+[[ "$KEY_MODE" == ref || "$KEY_MODE" == copy ]] || { echo "GHOST_KEY_MODE must be ref or copy" >&2; exit 2; }
 ROTATE=0; DRY=0
 for a in "$@"; do
   case "$a" in
@@ -62,7 +72,8 @@ source "$(cd "$(dirname "$0")" && pwd)/lib/vault-ops.sh"
 [[ "$(stat -c %a "$PAPERCLIP_BOARD_KEY_FILE")" == 600 ]] || die "$PAPERCLIP_BOARD_KEY_FILE must be mode 0600"
 
 WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf "$WORK"; vault_ops_logout' EXIT
-vault_ops_login   # short-lived Vault token via the bionic-org-ops ServiceAccount
+# Only copy mode reads the key; ref mode never touches Vault itself.
+if [[ "$KEY_MODE" == copy ]]; then vault_ops_login; fi   # short-lived token via the bionic-org-ops ServiceAccount
 # curl reads the Authorization header from a file (-H @file): the key never
 # reaches argv.
 printf 'Authorization: Bearer %s\n' "$(tr -d '\r\n' < "$PAPERCLIP_BOARD_KEY_FILE")" > "$WORK/auth"
@@ -105,7 +116,41 @@ for entry in "${SITES[@]}"; do
     [[ "$url" == "$MCP_URL" ]] || die "$cname: existing '$CONN_NAME' points at '${url:-?}', not $MCP_URL; rename or archive it first"
   fi
 
-  if [[ -z "$conn_id" || $ROTATE -eq 1 ]]; then
+  if [[ "$KEY_MODE" == ref ]]; then
+    # One read-only Vault external reference per company, found by its key.
+    ref_key="ghost_gateway_key_${site}"
+    sid="$(api GET "/companies/$cid/secrets" | jq -r --arg k "$ref_key" \
+      '[(if type=="array" then . else .secrets end)[] | select(.key==$k and .status=="active")] |
+       if length>1 then "MULTI" else (.[0].id // empty) end')"
+    [[ "$sid" != MULTI ]] || die "$cname has more than one active '$ref_key' secret"
+    if [[ -z "$sid" ]]; then
+      [[ $DRY -eq 1 ]] && { log "  dry-run: would link Vault ref t6-apps/mcp/config#apikey_ghost_${site}_key and ${conn_id:+re}connect"; continue; }
+      jq -n --arg n "Ghost gateway key ($site)" --arg k "$ref_key" --arg r "t6-apps/mcp/config#apikey_ghost_${site}_key" \
+        '{name:$n, key:$k, provider:"vault", managedMode:"external_reference", externalRef:$r,
+          description:"Read-only reference to Vault; rotate the key in Vault, no script run needed."}' > "$WORK/link.json"
+      sid="$(api POST "/companies/$cid/secrets" "$WORK/link.json" | jq -r '.id // empty')"
+      [[ -n "$sid" ]] || die "$cname: linking the Vault reference failed"
+      log "  linked Vault reference $sid"
+    fi
+    uses_ref=0
+    if [[ -n "$conn_id" ]]; then
+      jq -e --arg s "$sid" '.[0] | [(.credentialSecretRefs // [])[] | .secretId] | index($s)' <<<"$existing" >/dev/null && uses_ref=1
+    fi
+    if [[ $uses_ref -eq 0 ]]; then
+      [[ $DRY -eq 1 ]] && { log "  dry-run: would ${conn_id:+re}connect onto the Vault reference"; continue; }
+      jq -n --arg link "$MCP_URL" --arg name "$CONN_NAME" --arg re "$conn_id" --arg s "$sid" '
+        {link:$link, name:$name, authMode:"custom_headers", grantKind:"organization",
+         credentialSecretIds:{"headers.X-API-Key":$s}}
+        + (if $re != "" then {reconnectConnectionId:$re} else {} end)' > "$WORK/connect.json"
+      out="$(api POST "/companies/$cid/tools/apps/connect" "$WORK/connect.json")"
+      conn_id="$(jq -r '.connectionId' <<<"$out")"
+      [[ -n "$conn_id" && "$conn_id" != null ]] || die "connect returned no connectionId"
+      log "  connection $conn_id now uses the Vault reference"
+    else
+      log "  connection $conn_id already uses the Vault reference; re-applying access"
+      [[ $DRY -eq 1 ]] && continue
+    fi
+  elif [[ -z "$conn_id" || $ROTATE -eq 1 ]]; then
     [[ $DRY -eq 1 ]] && { log "  dry-run: would ${conn_id:+re}connect"; continue; }
     key="$(vault_get t6-apps/mcp/config "apikey_ghost_${site}_key")"
     # The key reaches jq through its environment (env.*), never through argv.
