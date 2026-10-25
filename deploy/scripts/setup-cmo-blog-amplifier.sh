@@ -8,6 +8,7 @@
 #      reporting subtree) for the CMO, COO and CLO: PUT /agents/:id/team-authority.
 #      Agents that already hold a company-wide grant (CEO, CIO) are not touched;
 #   2. ensures a "Marketing" project led by the CMO;
+#   2a. adds the routine's skills to the marketer (mode "add", never replace);
 #   3. ensures the routine "Daily blog -> LinkedIn" assigned to the CMO's
 #      marketing report (exactly one direct report of the CMO, or it stops),
 #      with the inputs the blog-linkedin-amplifier skill needs in its
@@ -37,11 +38,12 @@ SITES=(
   "reliora|Reliora Inc|https://blog-reliora.baisoln.com|Reliora Inc|#reliora-board"
 )
 C_LEVEL_NAMES=(CMO COO CLO)
+MARKETER_SKILLS=(paperclipai/paperclip/blog-linkedin-amplifier paperclipai/paperclip/trypost)
 DRY=0
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "unknown argument: $a" >&2; exit 2 ;;
   esac
 done
@@ -91,6 +93,18 @@ for entry in "${SITES[@]}"; do
   [[ -n "$marketer" ]] || die "$cname: expected exactly one direct report of the CMO (the marketer)"
   log "  marketer: $(jq -r --arg m "$marketer" '.[] | select(.id == $m) | .name' <<<"$agents")"
 
+  # 2a. the marketer needs the routine's skills; mode "add" keeps every other
+  #     assigned skill (other setups manage those).
+  jq -n --argjson k "$(printf '%s\n' "${MARKETER_SKILLS[@]}" | jq -R . | jq -s .)" '{mode: "add", desiredSkills: $k}' > "$WORK/s.json"
+  skills="$(write POST "/agents/$marketer/skills/sync" "$WORK/s.json")"
+  if (( ! DRY )); then
+    for k in "${MARKETER_SKILLS[@]}"; do
+      jq -e --arg k "$k" '[.entries[]? | select(.key == $k and .desired)] | length == 1' <<<"$skills" >/dev/null \
+        || die "$cname: marketer skill $k is not desired after sync"
+    done
+    log "  marketer skills: ${MARKETER_SKILLS[*]} desired"
+  fi
+
   # 2. Marketing project
   projects="$(api GET "/companies/$cid/projects")"
   pid="$(jq -r '(if type == "object" then .projects else . end) | [.[] | select(.name == "Marketing" and (.archivedAt == null))] | .[0].id // ""' <<<"$projects")"
@@ -112,7 +126,7 @@ Use the **blog-linkedin-amplifier** skill. Inputs:
 - Public blog base URL: $blog_url
 - Company LinkedIn page: **$page**
 - Personal LinkedIn profile for the repost: **$PERSONAL_PROFILE** (the only personal profile you may post to)
-- Board Slack channel: \`$chan\`, posted by the CMO's Slack bot (cmo-$site). If you have no Slack tools yourself, create the "Slack board note" subtask for your manager (the CMO) so its bot posts it there.
+- Board Slack channel: \`$chan\`. Send the board note by following the company's **board-approval-notify** skill. If that skill is not available to you, post with your Slack tools, or create the "Slack board note" subtask for your manager (the CMO), whose bot (cmo-$site) posts it.
 
 Pick one new draft blog, publish it, and schedule its company and personal LinkedIn
 posts. All of this goes through ONE board decision (Approve all on this task).
