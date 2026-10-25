@@ -58,12 +58,13 @@ for a in "$@"; do
   case "$a" in
     --rotate) ROTATE=1 ;;
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown argument: $a" >&2; exit 2 ;;
   esac
 done
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+[[ $ROTATE -eq 0 || "$KEY_MODE" == copy ]] || die "--rotate only applies to GHOST_KEY_MODE=copy; in ref mode rotate the key in Vault"
 log() { echo "[ghost-connections] $*"; }
 for b in curl jq kubectl; do command -v "$b" >/dev/null || die "$b is required"; done
 # shellcheck source=lib/vault-ops.sh
@@ -146,6 +147,10 @@ for entry in "${SITES[@]}"; do
       conn_id="$(jq -r '.connectionId' <<<"$out")"
       [[ -n "$conn_id" && "$conn_id" != null ]] || die "connect returned no connectionId"
       log "  connection $conn_id now uses the Vault reference"
+      # A previously copied key (copy mode) is no longer referenced; it is left
+      # in place for the operator to remove (Secrets page), not deleted here.
+      old_ids="$(jq -r --arg s "$sid" '.[0] // {} | [(.credentialSecretRefs // [])[] | select(.secretId != $s) | .secretId] | join(" ")' <<<"$existing")"
+      [[ -z "$old_ids" ]] || log "  previous copied key secret(s) now unreferenced: $old_ids (remove after checking)"
     else
       log "  connection $conn_id already uses the Vault reference; re-applying access"
       [[ $DRY -eq 1 ]] && continue

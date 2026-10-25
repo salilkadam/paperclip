@@ -1150,6 +1150,19 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
         credentialSecretIds: { "headers.X-Api-Key": secretId },
       }), label).rejects.toThrow(/must be an active company secret of this company/);
     }
+    // Reconnecting with a NEW value must not overwrite the linked secret
+    // (Paperclip does not own it): a fresh owned secret takes its place.
+    const linkedBefore = await secrets.getById(linked.id);
+    await service.reconnectGalleryApp(result.connectionId, company.id, {
+      credentialValues: { "headers.X-Api-Key": "phx_fixture_secret" },
+    });
+    const linkedAfter = await secrets.getById(linked.id);
+    expect(linkedAfter!.latestVersion).toBe(linkedBefore!.latestVersion);
+    const [reconnected] = await db.select().from(toolConnections).where(eq(toolConnections.id, result.connectionId));
+    const newRef = reconnected!.credentialSecretRefs.find((ref) => ref.configPath === "headers.X-Api-Key");
+    expect(newRef?.secretId).not.toBe(linked.id);
+    expect((await secrets.getById(newRef!.secretId))!.key.startsWith("tool_app.")).toBe(true);
+
     await expect(service.connectGalleryApp(company.id, {
       link: MCP_URL,
       name: "Fixture personal",
