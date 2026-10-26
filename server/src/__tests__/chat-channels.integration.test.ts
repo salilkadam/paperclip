@@ -8907,6 +8907,99 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     expect(await resolveConnectorAssignments(db, continued)).toEqual([]);
     await expect(executeSlackTool(db, continued, "slack_history", { channel: "CCONTINUE" }, provider as typeof fetch)).rejects.toThrow();
   });
+  it("does not record private-read boundaries when listing channels; reading history still does", async () => {
+    const { executeSlackTool } = await import("../services/connectors/slack.js");
+    await instanceSettingsService(db).updateExperimental({ enableChatConnectors: true });
+    const f = await seedCompany();
+    const { callbacks, endpoint } = await configuredSlackEndpoint(f, { allowUnlinkedPeople: false });
+    const [principal] = await db.insert(chatExternalPrincipals).values({ companyId: f.companyId, provider: "slack", providerAccountId: "T-PAPERCLIP", externalId: "ULIST" }).returning();
+    await db.insert(chatIdentityLinks).values({ companyId: f.companyId, endpointId: endpoint.id, principalId: principal.id, paperclipUserId: "owner-user", status: "linked", confirmedAt: new Date() });
+    const thread = makeThread({ channelId: "slack:GLIST", id: "slack:GLIST:7300.1" });
+    await deliverMessage({ callbacks, endpointId: endpoint.id, thread: thread.thread, message: makeMessage({ id: "7300.1", text: "@maya list channels", mentioned: true, userId: "ULIST" }), trigger: "mention" });
+    const [conversation] = await readChatConversationsByEndpointId(endpoint.id);
+    const [action] = await db.select().from(chatActions).where(and(eq(chatActions.endpointId, endpoint.id), eq(chatActions.kind, "inbound_wakeup")));
+    const [run] = await db.insert(heartbeatRuns).values({ companyId: f.companyId, agentId: f.assignedAgentId, status: "running", contextSnapshot: { issueId: conversation.issueId } }).returning();
+    await initializeRunIdentity(db, { companyId: f.companyId, runId: run.id, issueId: conversation.issueId!, responsibleUserId: "owner-user", messageIds: [String(action.payload.commentId)], cause: "instruction" });
+    const binding = { companyId: f.companyId, agentId: f.assignedAgentId, issueId: conversation.issueId!, runId: run.id };
+    const provider = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = String(input).split("/").at(-1);
+      if (method === "users.info") return Response.json({ ok: true, user: { id: "ULIST", team_id: "T-PAPERCLIP" } });
+      if (method === "conversations.list") return Response.json({ ok: true, channels: [{ id: "GLIST", is_member: true }, { id: "GHIDDEN", is_member: true }, { id: "GBOARD", is_member: true }] });
+      if (method === "conversations.info") {
+        const id = new URLSearchParams(String(init?.body ?? "")).get("channel");
+        return Response.json({ ok: true, channel: { id, name: `private-${id}`, is_member: true, is_private: true } });
+      }
+      if (method === "conversations.members") return Response.json({ ok: true, members: ["ULIST"] });
+      if (method === "conversations.history") return Response.json({ ok: true, messages: [{ ts: "7300.2", text: "private context" }] });
+      throw new Error(`Unexpected Slack method ${method}`);
+    });
+    const privateSources = async () => (await db.select().from(chatActions).where(and(
+      eq(chatActions.endpointId, endpoint.id), eq(chatActions.kind, "slack_private_source"),
+      sql`${chatActions.payload}->>'issueId' = ${conversation.issueId}`,
+    ))).length;
+    // A channel-origin task sees only its own private channel (existing rule).
+    await db.insert(chatEndpointResources).values({ companyId: f.companyId, endpointId: endpoint.id, type: "channel", providerResourceId: "GBOARD", label: "Board", enabled: true, availability: "available" });
+    const before = await privateSources();
+    const listed = await executeSlackTool(db, binding, "slack_channels", {}, provider as typeof fetch) as { channels: Array<{ id: string }> };
+    expect(listed).toMatchObject({ sourceTrust: "untrusted" });
+    expect(listed.channels.map(channel => channel.id)).toEqual(["GLIST"]);
+    expect(await privateSources()).toBe(before);
+    await executeSlackTool(db, binding, "slack_history", { channel: "GLIST" }, provider as typeof fetch);
+    expect(await privateSources()).toBe(before + 1);
+  }, 60_000);
+
+  it("lets a task created by another agent's run use Slack, unless its origin task holds private Slack research", async () => {
+    const { executeConnectorTool, resolveConnectorAssignments } = await import("../services/connector-runtime.js");
+    await instanceSettingsService(db).updateExperimental({ enableChatConnectors: true });
+    const f = await seedCompany();
+    const { endpoint } = await configuredSlackEndpoint(f, { allowUnlinkedPeople: false });
+    // Production bots are active; this fixture only becomes active on a first
+    // inbound message, which a board/agent-created task never has.
+    await db.update(chatEndpoints).set({ status: "active" }).where(eq(chatEndpoints.id, endpoint.id));
+    const [principal] = await db.insert(chatExternalPrincipals).values({ companyId: f.companyId, provider: "slack", providerAccountId: "T-PAPERCLIP", externalId: "UDERIVED" }).returning();
+    await db.insert(chatIdentityLinks).values({ companyId: f.companyId, endpointId: endpoint.id, principalId: principal.id, paperclipUserId: "owner-user", status: "linked", confirmedAt: new Date() });
+    // Production shape (REL-3057 -> REL-3060): another agent works the origin
+    // task and creates the derived task for the bot's agent; the derived run's
+    // identity context points at the creator's context. No chat message anywhere.
+    const [originTask, derivedTask] = await db.insert(issues).values([
+      { companyId: f.companyId, title: "Daily blog -> LinkedIn", assigneeAgentId: f.replacementAgentId },
+      { companyId: f.companyId, title: "Slack board note", assigneeAgentId: f.assignedAgentId },
+    ]).returning();
+    const [originRun] = await db.insert(heartbeatRuns).values({ companyId: f.companyId, agentId: f.replacementAgentId, status: "running", invocationSource: "assignment", responsibleUserId: "owner-user", contextSnapshot: { issueId: originTask.id } }).returning();
+    const originContext = await initializeRunIdentity(db, { companyId: f.companyId, runId: originRun.id, issueId: originTask.id, responsibleUserId: "owner-user", cause: "issue_assigned" });
+    const [derivedRun] = await db.insert(heartbeatRuns).values({ companyId: f.companyId, agentId: f.assignedAgentId, status: "running", invocationSource: "assignment", responsibleUserId: "owner-user", contextSnapshot: { issueId: derivedTask.id } }).returning();
+    await initializeRunIdentity(db, { companyId: f.companyId, runId: derivedRun.id, issueId: derivedTask.id, responsibleUserId: "owner-user", parentContextId: originContext.id, cause: "issue_assigned" });
+    const binding = { companyId: f.companyId, agentId: f.assignedAgentId, issueId: derivedTask.id, runId: derivedRun.id };
+    expect((await resolveConnectorAssignments(db, binding)).map(assignment => assignment.key)).toEqual(["slack"]);
+
+    // An ordinary task lists private channels only when they are destinations it
+    // may post to: GBOARD is an enabled channel of this connection, GHIDDEN is a
+    // private channel the requester and bot share but this task cannot post to.
+    const { executeSlackTool } = await import("../services/connectors/slack.js");
+    await db.insert(chatEndpointResources).values({ companyId: f.companyId, endpointId: endpoint.id, type: "channel", providerResourceId: "GBOARD", label: "Board", enabled: true, availability: "available" });
+    const directory = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = String(input).split("/").at(-1);
+      const channel = new URLSearchParams(String(init?.body ?? "")).get("channel");
+      if (method === "users.info") return Response.json({ ok: true, user: { id: "UDERIVED", team_id: "T-PAPERCLIP" } });
+      if (method === "conversations.list") return Response.json({ ok: true, channels: [{ id: "GHIDDEN", is_member: true }, { id: "GBOARD", is_member: true }, { id: "CPUBLIC", is_member: true }] });
+      if (method === "conversations.info") return Response.json({ ok: true, channel: { id: channel, name: `name-${channel}`, is_member: true, is_private: channel !== "CPUBLIC" } });
+      if (method === "conversations.members") return Response.json({ ok: true, members: ["UDERIVED"] });
+      throw new Error(`Unexpected Slack method ${method}`);
+    });
+    const listed = await executeSlackTool(db, binding, "slack_channels", {}, directory as typeof fetch) as { channels: Array<{ id: string }> };
+    expect(listed.channels.map(channel => channel.id).sort()).toEqual(["CPUBLIC", "GBOARD"]);
+
+    await db.insert(chatActions).values({
+      companyId: f.companyId, endpointId: endpoint.id, kind: "slack_private_source", status: "processed",
+      providerActionId: `slack-private:${originTask.id}:GSECRET:UDERIVED`, payload: { issueId: originTask.id, channelId: "GSECRET", requesterId: "UDERIVED", allowedDmChannel: null },
+    });
+    expect(await resolveConnectorAssignments(db, binding)).toEqual([]);
+    // The specific refusal reaches the caller instead of "no longer assigned or authorized".
+    await expect(executeConnectorTool(db, binding, "slack_channels", {})).rejects.toMatchObject({
+      status: 403, message: "Private Slack research in an originating task cannot be delivered from a derived task",
+    });
+  }, 60_000);
+
   it("binds Slack tools to the admitted linked request, recovers its provenance and revokes retained access", async () => {
     const { resolveConnectorAssignments, executeConnectorTool, applyConnectorSkills, prepareConnectorSkillDelivery } = await import("../services/connector-runtime.js");
     const { executeSlackTool } = await import("../services/connectors/slack.js");
@@ -9010,6 +9103,16 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await request(cliApp).post(`/api/companies/${randomUUID()}/slack/tasks/${binding.issueId}/tools`).send({ tool: "slack_history", arguments: { channel: "COTHER" } }).expect(403);
     await request(cliApp).post(`/api/companies/${binding.companyId}/slack/tasks/${randomUUID()}/tools`).send({ tool: "slack_history", arguments: { channel: "COTHER" } }).expect(403);
     await request(cliApp).post(`/api/companies/${binding.companyId}/slack/tasks/${binding.issueId}/tools`).send({ tool: "slack_history", arguments: { channel: "COTHER", token: "forged" } }).expect(400);
+    // A refusal raised inside the tool gateway used to come back as 500
+    // "Internal server error"; the route now answers it with its own status,
+    // message and reasonCode, like the gateway route does.
+    await request(cliApp).post(`/api/companies/${binding.companyId}/slack/tasks/${binding.issueId}/tools`)
+      .send({ tool: "slack_post_message", arguments: { channel: "COTHER", text: "Not an enabled destination", idempotencyKey: randomUUID() } })
+      .expect(response => {
+        expect(response.status, response.text).toBe(403);
+        expect(response.body.error).toMatch(/Responses are disabled in this channel/);
+        expect(typeof response.body.reasonCode).toBe("string");
+      });
     const send = { channel: "CTOOLS", thread_ts: "7100.1", text: "Recorded the decision.", idempotencyKey: randomUUID() };
     await expect(executeConnectorTool(db, binding, "slack_post_message", send)).resolves.toMatchObject({ status: "completed" });
     await executeConnectorTool(db, binding, "slack_post_message", send);
@@ -9171,7 +9274,11 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await db.insert(toolProfileBindings).values(removedBinding);
     await db.update(chatIdentityLinks).set({ status: "revoked", revokedAt: new Date() }).where(eq(chatIdentityLinks.principalId, principal.id));
     await expect(resolveConnectorAssignments(db, recovered)).resolves.toEqual([]);
-    await expect(executeConnectorTool(db, recovered, "slack_history", { channel: "CTOOLS" })).rejects.toThrow("no longer assigned");
+    // The specific refusal now reaches the agent (it used to read "This connector
+    // is no longer assigned or authorized" for every cause).
+    await expect(executeConnectorTool(db, recovered, "slack_history", { channel: "CTOOLS" })).rejects.toMatchObject({
+      status: 403, message: "This accepted chat message is no longer authorized to start work",
+    });
     await service.shutdown();
   });
 

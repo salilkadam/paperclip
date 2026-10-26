@@ -107,8 +107,10 @@ describe("PaperclipRunnerToolAuthority", () => {
     const authority = new PaperclipRunnerToolAuthority(db, { companyId, agentId, issueId, runId, connectorAssignments });
     expect(authority.definitions().some(tool => tool.name === "slack_history")).toBe(true);
     expect(authority.definitions().some(tool => String(tool.name).startsWith("agentmail_"))).toBe(false);
+    // The connector now explains why it is unavailable instead of the generic
+    // "no longer assigned or authorized"; here no Slack authority is registered.
     await expect(authority.execute({ tool: "slack_history", callId: randomUUID(), arguments: { channel: "CEXAMPLE" } }))
-      .rejects.toThrow("This connector is no longer assigned or authorized");
+      .rejects.toThrow("Slack task authority is unavailable");
   });
 
   it("advertises only real bindings and reads the bound task", async () => {

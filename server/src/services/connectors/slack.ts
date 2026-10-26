@@ -8,6 +8,7 @@ import { measureRunPhase } from "../execution-preparation-timing.js";
 import { measureRunTransaction } from "../execution-transaction-timing.js";
 import { prepareSlackEndpoints } from "./slack-endpoint-preparation.js";
 import {
+  chatEndpointResources,
   toolProfiles,
   toolProfileBindings,
   toolProfileEntries,
@@ -175,6 +176,21 @@ export async function executeSlackTool(
       exclude_archived: true,
     });
     const channels: SlackObject[] = [];
+    // Private channels and group DMs are listed only when they are destinations
+    // this task may post to anyway: an enabled channel of this connection, or
+    // the task's own conversation channel. Listing records no read boundary
+    // (see below), so this keeps unrelated private channel names out of the
+    // agent's context mechanically rather than by instruction.
+    const enabledResources = new Set((await db
+      .select({ id: chatEndpointResources.providerResourceId })
+      .from(chatEndpointResources)
+      .where(and(
+        eq(chatEndpointResources.companyId, authority.endpoint.companyId),
+        eq(chatEndpointResources.endpointId, authority.endpoint.id),
+        eq(chatEndpointResources.availability, "available"),
+        eq(chatEndpointResources.enabled, true),
+      ))).map(row => row.id));
+    const conversationChannel = authority.conversation?.externalConversationId.replace(/^slack:/, "") ?? null;
     for (const channel of objects(result.channels)) {
       if (channel.is_member !== true && channel.is_im !== true) continue;
       try {
@@ -198,7 +214,18 @@ export async function executeSlackTool(
               )
           )
             continue;
-          await recordSlackReadBoundary(db, authority, authorized);
+          if (
+            authorized.is_im !== true &&
+            authorized.id !== conversationChannel &&
+            !enabledResources.has(String(authorized.id))
+          )
+            continue;
+          // Listing returns only ids and names, never message content, so it
+          // records no private-read boundary. It used to record one for every
+          // private channel and DM the bot belongs to, and because publication
+          // requires every recorded source to match the destination, one
+          // listing blocked the task from posting anywhere. Content reads
+          // (history, threads, bounded search) still record boundaries.
         }
         channels.push({
           id: authorized.id,
@@ -223,6 +250,9 @@ export async function executeSlackTool(
       nextCursor: nextCursor(result),
       coverage:
         "Current bot memberships accessible to the linked requester; more pages may remain.",
+      // Advisory for the model only (no code enforces this field): private
+      // channel names are metadata and must not be repeated in posts elsewhere.
+      sourceTrust: "untrusted",
     };
   }
   if (name === "slack_user") {
@@ -480,6 +510,23 @@ export async function executeSlackTool(
 }
 
 /** Both native and CLI calls enter the same existing policy/approval gateway. */
+/**
+ * resolve() turns every Slack authority refusal into "no resources". Re-run the
+ * authority check so the specific 403 reaches the agent; if authority passes
+ * (the gap is a disabled tool profile or a stale catalog), keep the generic
+ * refusal. Never returns normally.
+ */
+export async function explainSlackUnavailable(
+  db: Db,
+  binding: Partial<SlackTaskBinding> & { companyId: string; agentId: string },
+): Promise<never> {
+  if (binding.runId && binding.issueId) {
+    await resolveSlackTaskAuthority(db, binding as SlackTaskBinding);
+    throw forbidden("Slack tools are not enabled for this agent's connection (tool profile or catalog)");
+  }
+  throw forbidden("This connector is no longer assigned or authorized");
+}
+
 export async function executeGovernedSlackTool(
   db: Db,
   binding: SlackTaskBinding,
