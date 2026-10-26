@@ -8994,7 +8994,11 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = directory as typeof fetch;
     try {
-      await expect(executeConnectorTool(db, binding, "slack_channels", {})).resolves.toMatchObject({ sourceTrust: "untrusted" });
+      const viaGateway = await executeConnectorTool(db, binding, "slack_channels", {});
+      // The gateway wraps the tool result; the listing (and its trust marker) is inside.
+      expect(JSON.stringify(viaGateway)).toContain('"sourceTrust":"untrusted"');
+      expect(JSON.stringify(viaGateway)).toContain("GBOARD");
+      expect(JSON.stringify(viaGateway)).not.toContain("GHIDDEN");
     } finally { globalThis.fetch = originalFetch; }
 
     await db.insert(chatActions).values({
