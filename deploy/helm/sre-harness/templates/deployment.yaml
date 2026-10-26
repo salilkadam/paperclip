@@ -95,26 +95,29 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.ui.port }}
+          # dsh binds loopback only (upstream safety); kubelet probes go
+          # over the pod IP and would be refused, so the probe has to be an
+          # exec that dials 127.0.0.1 from inside the container. Use bash's
+          # /dev/tcp, not `node -e`: the kubelet exec-probe timeout is
+          # hardcoded at 1s (ExecProbeTimeout gate removed in k8s 1.30), and
+          # a Node cold start - ~25ms idle, easily >1s under CPU pressure on
+          # the control-plane node this pod pins to - blew that budget 107
+          # readiness-probe timeouts in 3.5 days. bash /dev/tcp connects in
+          # ~1ms and leaves no room for process-spawn jitter.
           readinessProbe:
-            # dsh binds loopback only (upstream safety); kubelet probes go
-            # over the pod IP, so use an exec probe that dials 127.0.0.1.
             exec:
               command:
-                - node
-                - -e
-                - >-
-                  require('net').connect({{ .Values.ui.port }},
-                  '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))
+                - bash
+                - -c
+                - exec 3<>/dev/tcp/127.0.0.1/{{ .Values.ui.port }} 2>/dev/null
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             exec:
               command:
-                - node
-                - -e
-                - >-
-                  require('net').connect({{ .Values.ui.port }},
-                  '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))
+                - bash
+                - -c
+                - exec 3<>/dev/tcp/127.0.0.1/{{ .Values.ui.port }} 2>/dev/null
             initialDelaySeconds: 30
             periodSeconds: 20
           {{- if .Values.gpuai.enabled }}

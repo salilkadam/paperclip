@@ -276,8 +276,12 @@ remediate:
   enabled: true
   # Hard cap: diagnosis + CI on the GPU host can take tens of minutes, and a
   # full `pnpm install/typecheck/test/build` cycle alone has been observed near
-  # 30 minutes. 3600 was tight enough to kill a healthy run mid-CI.
-  activeDeadlineSeconds: 5400
+  # 30 minutes. 3600 was tight enough to kill a healthy run mid-CI; 5400 then
+  # killed another on 2026-10-26 (sre-harness-remediate-1793016081,
+  # DeadlineExceeded). A remediation budget must cover clone + diagnose +
+  # full CI + PR open, so keep >=2x margin over the longest plausible healthy
+  # run; throttleHours below still bounds how often one can be dispatched.
+  activeDeadlineSeconds: 10800
   # Never dispatch a second remediation if any remediate job started within
   # this many hours (a chronic WARN must not summon an army).
   throttleHours: 6
