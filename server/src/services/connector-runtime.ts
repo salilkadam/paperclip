@@ -1,7 +1,7 @@
 import { SPEKO_SKILL } from "./voice/speko-skill.js";
 import { spekoAssignedResources } from "./voice/speko-agent-tools.js";
 import { SLACK_TOOLS } from "@paperclipai/shared";
-import { slackAssignedResource, executeGovernedSlackTool } from "./connectors/slack.js";
+import { slackAssignedResource, executeGovernedSlackTool, explainSlackUnavailable } from "./connectors/slack.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +59,13 @@ interface ConnectorDefinition {
     name: string,
     value: unknown,
   ) => Promise<unknown>;
+  /**
+   * Called only when resolve() found nothing. Must throw: the connector's own
+   * specific refusal when it has one, otherwise the generic one. Agents could
+   * not tell an unlinked user from a missing bot when every refusal read "no
+   * longer assigned or authorized".
+   */
+  explainUnavailable?: (db: Db, binding: ToolBinding) => Promise<never>;
 }
 
 // Trusted connector packages declare their contributions here. Assignments and
@@ -81,6 +88,7 @@ const connectors: ConnectorDefinition[] = [
     tools: SLACK_TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
     resolve: slackAssignedResource,
     execute: executeGovernedSlackTool,
+    explainUnavailable: explainSlackUnavailable,
   },
   {
     key: "agentmail",
@@ -168,8 +176,11 @@ export async function executeConnectorTool(
   const connector = connectors.find((entry) =>
     entry.tools.some((tool) => tool.name === name),
   );
-  if (!connector || !(await connector.resolve(db, binding)).length)
+  if (!connector) throw forbidden("This connector is no longer assigned or authorized");
+  if (!(await connector.resolve(db, binding)).length) {
+    if (connector.explainUnavailable) await connector.explainUnavailable(db, binding);
     throw forbidden("This connector is no longer assigned or authorized");
+  }
   return connector.execute(db, binding, name, value);
 }
 

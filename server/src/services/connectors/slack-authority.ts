@@ -157,7 +157,7 @@ export async function slackRunOrigin(db: Db, binding: SlackTaskBinding) {
     throw forbidden(
       "Slack tools require the bound task and an accepted linked user",
     );
-  return { ...captured, sourceMessageId: await chatRunSourceMessageId(db, captured.run, { context: captured.context }) };
+  return { ...captured, sourceMessageId: await chatRunSourceMessageId(db, captured.run, { context: captured.context, allowForeignOriginWithoutChatSource: true }) };
 }
 
 /** Enumerate only this agent's connections; each still needs live run/user authority. */

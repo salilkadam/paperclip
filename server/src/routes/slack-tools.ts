@@ -149,8 +149,9 @@ export function slackToolRoutes(db: Db, publicBaseUrl?: string) {
       const call = slackToolCallSchema.parse(req.body);
       if (!call.tool.startsWith("slack_"))
         throw forbidden("Expected a Slack tool");
-      res.set("Cache-Control", "no-store").json(
-        await executeConnectorTool(
+      let result: unknown;
+      try {
+        result = await executeConnectorTool(
           db,
           {
             companyId,
@@ -161,8 +162,25 @@ export function slackToolRoutes(db: Db, publicBaseUrl?: string) {
           },
           call.tool,
           call.arguments,
-        ),
-      );
+        );
+      } catch (error) {
+        // The governed Slack path runs through the tool gateway, whose error
+        // type is not an HttpError, so the error middleware answered 500
+        // "Internal server error" and agents never saw the refusal. Answer it
+        // here the way the gateway route does. Only this route boundary
+        // converts: approval flows rely on the original error and reasonCode.
+        const { ToolGatewayHttpError } = await import("../services/tool-gateway.js");
+        if (error instanceof ToolGatewayHttpError && error.status < 500) {
+          res.status(error.status).set("Cache-Control", "no-store").json({
+            ...error.details,
+            error: error.message,
+            reasonCode: error.reasonCode,
+          });
+          return;
+        }
+        throw error;
+      }
+      res.set("Cache-Control", "no-store").json(result);
     },
   );
   return router;

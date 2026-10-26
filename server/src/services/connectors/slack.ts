@@ -198,7 +198,12 @@ export async function executeSlackTool(
               )
           )
             continue;
-          await recordSlackReadBoundary(db, authority, authorized);
+          // Listing returns only ids and names, never message content, so it
+          // records no private-read boundary. It used to record one for every
+          // private channel and DM the bot belongs to, and because publication
+          // requires every recorded source to match the destination, one
+          // listing blocked the task from posting anywhere. Reads of content
+          // (history, threads, search, channel info) still record boundaries.
         }
         channels.push({
           id: authorized.id,
@@ -223,6 +228,8 @@ export async function executeSlackTool(
       nextCursor: nextCursor(result),
       coverage:
         "Current bot memberships accessible to the linked requester; more pages may remain.",
+      // Private channel names are sensitive metadata: never repeat them in a post.
+      sourceTrust: "untrusted",
     };
   }
   if (name === "slack_user") {
@@ -480,6 +487,23 @@ export async function executeSlackTool(
 }
 
 /** Both native and CLI calls enter the same existing policy/approval gateway. */
+/**
+ * resolve() turns every Slack authority refusal into "no resources". Re-run the
+ * authority check so the specific 403 reaches the agent; if authority passes
+ * (the gap is a disabled tool profile or a stale catalog), keep the generic
+ * refusal. Never returns normally.
+ */
+export async function explainSlackUnavailable(
+  db: Db,
+  binding: Partial<SlackTaskBinding> & { companyId: string; agentId: string },
+): Promise<never> {
+  if (binding.runId && binding.issueId) {
+    await resolveSlackTaskAuthority(db, binding as SlackTaskBinding);
+    throw forbidden("Slack tools are not enabled for this agent's connection (tool profile or catalog)");
+  }
+  throw forbidden("This connector is no longer assigned or authorized");
+}
+
 export async function executeGovernedSlackTool(
   db: Db,
   binding: SlackTaskBinding,
