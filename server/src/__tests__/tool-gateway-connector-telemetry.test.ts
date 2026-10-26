@@ -65,7 +65,7 @@ vi.mock("../services/activity-log.js", async (importOriginal) => {
   };
 });
 
-const { createToolGatewayService } = await import(
+const { createToolGatewayService, toolActionApprovalTtlMs } = await import(
   "../services/tool-gateway.js"
 );
 
@@ -502,6 +502,38 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.[1]).toMatchObject({ status: "succeeded", origin: "agent" });
   }, 40_000);
+
+  it("approval cards expire after PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES (default 60)", async () => {
+    const expiryAfterGatedCall = async (ttl: string | undefined) => {
+      if (ttl === undefined) delete process.env.PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES;
+      else process.env.PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES = ttl;
+      await db.delete(toolActionRequests);
+      const f = await fixture();
+      await db.insert(toolPolicies).values({ companyId: f.company.id, name: "Review ttl tool", policyType: "require_approval",
+        selectors: { connectionId: f.remoteTool.connection.id }, priority: 1 });
+      const before = Date.now();
+      await f.gateway.executeTool({ sessionToken: f.session.token, tool: f.tool.name, parameters: { key: "ttl", value: ttl ?? "default" } })
+        .then(() => { throw new Error("expected approval_required"); }, (error) => expect(error).toMatchObject({ reasonCode: "approval_required" }));
+      const [pending] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.status, "pending"));
+      return (pending!.expiresAt!.getTime() - before) / 60_000;
+    };
+    try {
+      expect(await expiryAfterGatedCall(undefined)).toBeCloseTo(60, 0);
+      expect(await expiryAfterGatedCall("1440")).toBeCloseTo(1440, 0);
+      expect(await expiryAfterGatedCall("not-a-number")).toBeCloseTo(60, 0);
+    } finally {
+      delete process.env.PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES;
+    }
+  });
+
+  it("parses PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES within 5..10080 minutes", () => {
+    expect(toolActionApprovalTtlMs(undefined)).toBe(60 * 60_000);
+    expect(toolActionApprovalTtlMs(" ")).toBe(60 * 60_000);
+    expect(toolActionApprovalTtlMs("1440")).toBe(1440 * 60_000);
+    expect(toolActionApprovalTtlMs("5")).toBe(5 * 60_000);
+    expect(toolActionApprovalTtlMs("10080")).toBe(10080 * 60_000);
+    for (const bad of ["4", "10081", "0", "-1", "1.5", "abc"]) expect(toolActionApprovalTtlMs(bad), bad).toBe(60 * 60_000);
+  });
 
   it("labels connection-test executions as setup_test", async () => {
     const f = await fixture();
