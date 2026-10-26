@@ -154,10 +154,30 @@ const support = await getEmbeddedPostgresTestSupport();
     const [connection] = await db.insert(toolConnections).values({ companyId: f.company.id, applicationId: application.id, uid: randomUUID(), name: "Slack", transport: "chat_sdk", connectionPurpose: "channel", enabled: true, status: "active" }).returning();
     // The origin task's own bot (the creator's), not the CMO's: boundaries are
     // per endpoint, the derived-task check must look across all of them.
-    const [endpoint] = await db.insert(chatEndpoints).values({ companyId: f.company.id, connectionId: connection.id, provider: "slack", publicId: randomUUID(), assignedAgentId: f.creator.id, status: "active", providerAccountId: "T1", botExternalId: "B1" }).returning();
+    const [endpoint] = await db.insert(chatEndpoints).values({ companyId: f.company.id, connectionId: connection.id, provider: "slack", publicId: randomUUID(), assignedAgentId: f.creator.id, status: "active", providerAccountId: `T-${randomUUID()}`, botExternalId: `B-${randomUUID()}` }).returning();
     await db.insert(chatActions).values({
       companyId: f.company.id, endpointId: endpoint.id, kind: "slack_private_source", status: "processed",
       providerActionId: `slack-private:${f.originTask.id}:C1:U1`, payload: { issueId: f.originTask.id, channelId: "C1", requesterId: "U1", allowedDmChannel: null },
+    });
+    await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({
+      status: 403, message: "Private Slack research in an originating task cannot be delivered from a derived task",
+    });
+  });
+
+  it("refuses a derived task when a deeper ancestor task holds private Slack research", async () => {
+    // G (grand-origin) read a private channel; G's run created O; O's run created D.
+    const f = await derivedFixture();
+    const [grandTask] = await db.insert(issues).values({ companyId: f.company.id, title: "Grand origin", assigneeAgentId: f.creator.id }).returning();
+    const [grandRun] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.creator.id, status: "succeeded", nativeIssueId: grandTask.id, responsibleUserId: "requester" }).returning();
+    const [grandContext] = await db.insert(runIdentityContexts).values({ companyId: f.company.id, runId: grandRun.id, revision: 1, responsibleUserId: "requester", cause: "issue_assigned", correlationId: "dispatch" }).returning();
+    await db.update(runIdentityContexts).set({ parentContextId: grandContext.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+    expect(await chatRunSourceMessageId(db, f.run, slackOnly)).toBeNull();
+    const [application] = await db.insert(toolApplications).values({ companyId: f.company.id, name: "Slack", type: "chat" }).returning();
+    const [connection] = await db.insert(toolConnections).values({ companyId: f.company.id, applicationId: application.id, uid: randomUUID(), name: "Slack", transport: "chat_sdk", connectionPurpose: "channel", enabled: true, status: "active" }).returning();
+    const [endpoint] = await db.insert(chatEndpoints).values({ companyId: f.company.id, connectionId: connection.id, provider: "slack", publicId: randomUUID(), assignedAgentId: f.creator.id, status: "active", providerAccountId: `T-${randomUUID()}`, botExternalId: `B-${randomUUID()}` }).returning();
+    await db.insert(chatActions).values({
+      companyId: f.company.id, endpointId: endpoint.id, kind: "slack_private_source", status: "processed",
+      providerActionId: `slack-private:${grandTask.id}:C2:U1`, payload: { issueId: grandTask.id, channelId: "C2", requesterId: "U1", allowedDmChannel: null },
     });
     await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({
       status: 403, message: "Private Slack research in an originating task cannot be delivered from a derived task",

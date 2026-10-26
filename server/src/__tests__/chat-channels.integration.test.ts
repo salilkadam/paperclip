@@ -8921,11 +8921,14 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     const [run] = await db.insert(heartbeatRuns).values({ companyId: f.companyId, agentId: f.assignedAgentId, status: "running", contextSnapshot: { issueId: conversation.issueId } }).returning();
     await initializeRunIdentity(db, { companyId: f.companyId, runId: run.id, issueId: conversation.issueId!, responsibleUserId: "owner-user", messageIds: [String(action.payload.commentId)], cause: "instruction" });
     const binding = { companyId: f.companyId, agentId: f.assignedAgentId, issueId: conversation.issueId!, runId: run.id };
-    const provider = vi.fn(async (input: RequestInfo | URL) => {
+    const provider = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const method = String(input).split("/").at(-1);
       if (method === "users.info") return Response.json({ ok: true, user: { id: "ULIST", team_id: "T-PAPERCLIP" } });
-      if (method === "conversations.list") return Response.json({ ok: true, channels: [{ id: "GLIST", is_member: true }] });
-      if (method === "conversations.info") return Response.json({ ok: true, channel: { id: "GLIST", name: "board-private", is_member: true, is_private: true } });
+      if (method === "conversations.list") return Response.json({ ok: true, channels: [{ id: "GLIST", is_member: true }, { id: "GHIDDEN", is_member: true }, { id: "GBOARD", is_member: true }] });
+      if (method === "conversations.info") {
+        const id = new URLSearchParams(String(init?.body ?? "")).get("channel");
+        return Response.json({ ok: true, channel: { id, name: `private-${id}`, is_member: true, is_private: true } });
+      }
       if (method === "conversations.members") return Response.json({ ok: true, members: ["ULIST"] });
       if (method === "conversations.history") return Response.json({ ok: true, messages: [{ ts: "7300.2", text: "private context" }] });
       throw new Error(`Unexpected Slack method ${method}`);
@@ -8934,8 +8937,13 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       eq(chatActions.endpointId, endpoint.id), eq(chatActions.kind, "slack_private_source"),
       sql`${chatActions.payload}->>'issueId' = ${conversation.issueId}`,
     ))).length;
+    // GBOARD is an enabled destination of this connection; GHIDDEN is a private
+    // channel the requester and bot share but the task cannot post to.
+    await db.insert(chatEndpointResources).values({ companyId: f.companyId, endpointId: endpoint.id, type: "channel", providerResourceId: "GBOARD", label: "Board", enabled: true, availability: "available" });
     const before = await privateSources();
-    expect(await executeSlackTool(db, binding, "slack_channels", {}, provider as typeof fetch)).toMatchObject({ channels: [{ id: "GLIST", private: true }], sourceTrust: "untrusted" });
+    const listed = await executeSlackTool(db, binding, "slack_channels", {}, provider as typeof fetch) as { channels: Array<{ id: string }> };
+    expect(listed).toMatchObject({ sourceTrust: "untrusted" });
+    expect(listed.channels.map(channel => channel.id).sort()).toEqual(["GBOARD", "GLIST"]);
     expect(await privateSources()).toBe(before);
     await executeSlackTool(db, binding, "slack_history", { channel: "GLIST" }, provider as typeof fetch);
     expect(await privateSources()).toBe(before + 1);

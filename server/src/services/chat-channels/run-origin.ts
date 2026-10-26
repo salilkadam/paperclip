@@ -9,7 +9,7 @@ type Run = Pick<typeof heartbeatRuns.$inferSelect,
 type Context = typeof runIdentityContexts.$inferSelect;
 
 /** Upper bound on the identity chain a derived task may carry; a longer chain fails closed. */
-const MAX_FOREIGN_ORIGIN_CHAIN = 10_000;
+const MAX_FOREIGN_ORIGIN_CHAIN = 256;
 
 /**
  * A task created by one agent run for another (or for another task) carries the
@@ -33,7 +33,9 @@ async function assertForeignOriginCarriesNoChatSource(db: Db, run: Run, start: C
       eq(heartbeatRuns.id, context.runId),
       eq(heartbeatRuns.companyId, run.companyId),
     )).limit(1);
-    if (!contextRun) throw forbidden("Chat requester provenance changed");
+    // Contexts outlive runs by design; a deleted originating run (for example
+    // after its agent was removed) cannot be verified, so refuse, but say why.
+    if (!contextRun) throw forbidden("Chat provenance could not be verified: an originating run is no longer available");
     if (typeof contextRun.issueId === "string") issueIds.add(contextRun.issueId);
     if (!context.parentContextId) break;
     [context] = await db.select().from(runIdentityContexts).where(and(
