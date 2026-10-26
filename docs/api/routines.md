@@ -133,8 +133,8 @@ Three trigger kinds:
 }
 ```
 
-Signing modes: `bearer` (default), `hmac_sha256`, `github_hmac`, and `none`.
-The replay window applies to `hmac_sha256` only: 30–86400 seconds (default 300).
+Signing modes: `bearer` (default), `hmac_sha256`, `github_hmac`, `ghost_hmac`, and `none`.
+The replay window applies to `hmac_sha256` and `ghost_hmac`: 30–86400 seconds (default 300).
 Creating a webhook returns `trigger` and one-time `secretMaterial` containing
 `webhookUrl` and `webhookSecret`. Save the secret before closing the dialog.
 Routine details retain the URL; rotate the secret if its value is lost.
@@ -204,6 +204,7 @@ request using its own secret; an agent or board API key is not a substitute.
 | `bearer` | `Authorization: Bearer <webhookSecret>` |
 | `hmac_sha256` | `X-Paperclip-Timestamp` (Unix seconds or milliseconds) and `X-Paperclip-Signature: sha256=<hex>`; HMAC-SHA256 over the timestamp string, a dot, and the exact body bytes |
 | `github_hmac` | `X-Hub-Signature-256: sha256=<hex>`; HMAC-SHA256 over the exact body bytes, without a timestamp. `X-Paperclip-Signature` is also accepted. Configure GitHub to send JSON. |
+| `ghost_hmac` | Ghost CMS webhooks: `X-Ghost-Signature: sha256=<hex>, t=<ms>`; HMAC-SHA256 over the exact body bytes followed by the 13-digit millisecond timestamp (Ghost 6.x `webhook-trigger.js`). In Ghost admin, add the webhook under Settings → Integrations → a custom integration, with the generated URL as Target URL and `webhookSecret` as Secret. A redelivery of the same signed request is rejected as a replay. Rejection reasons are recorded on the `routine.webhook_rejected` activity. |
 | `none` | No signature. Anyone with the generated URL can fire the trigger; keep it private. |
 
 For a bearer trigger:

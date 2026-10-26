@@ -96,13 +96,14 @@ const activityGateScopeOptions = [
 ];
 
 const triggerKinds = ["schedule", "webhook"];
-const signingModes = ["app_webhook", "bearer", "hmac_sha256", "github_hmac", "none"];
+const signingModes = ["app_webhook", "bearer", "hmac_sha256", "github_hmac", "ghost_hmac", "none"];
 const signingModeDescriptions: Record<string, string> = {
   bearer: "Send Authorization: Bearer <secret> with each request.",
   hmac_sha256: "Send X-Paperclip-Timestamp and X-Paperclip-Signature: sha256=<hex>, signing timestamp + a dot + the exact JSON body.",
   github_hmac: "Accept GitHub-style X-Hub-Signature-256 header (HMAC over raw body, no timestamp).",
   app_webhook: "Accept a bearer token or an HMAC-SHA256 signature over the exact request body in X-Hub-Signature or X-Hub-Signature-256.",
   fireflies_hmac: "Signed webhook (legacy).",
+  ghost_hmac: "Accept Ghost webhooks: X-Ghost-Signature (sha256=<hex>, t=<ms>), HMAC over the exact body then the timestamp. Paste the secret into the Ghost webhook's Secret field.",
   none: "No authentication — the webhook URL itself acts as a shared secret.",
 };
 const SIGNING_MODES_WITHOUT_REPLAY_WINDOW = new Set(["app_webhook", "bearer", "github_hmac", "fireflies_hmac", "none"]);

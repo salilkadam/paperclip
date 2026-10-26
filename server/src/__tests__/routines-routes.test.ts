@@ -195,6 +195,19 @@ describe("routine routes", () => {
     }));
   });
 
+  it("forwards Ghost's X-Ghost-Signature and the exact raw JSON to the public handler", async () => {
+    const app = await createApp({ type: "none" });
+    // Ghost 6.71 webhook-trigger.js: body = JSON.stringify(payload), Content-Type application/json
+    const raw = JSON.stringify({ event: "post.added", post: { current: { id: "p1", status: "draft", title: "Ünïcode — draft" } } });
+    mockRoutineService.firePublicTrigger.mockResolvedValue({ status: "issue_created" });
+    const res = await request(app).post("/api/routine-triggers/public/ghost-public/fire")
+      .set("Content-Type", "application/json").set("X-Ghost-Signature", "sha256=fixture, t=1793002616000").send(raw);
+    expect(res.status).toBeLessThan(300);
+    expect(mockRoutineService.firePublicTrigger).toHaveBeenCalledWith("ghost-public", expect.objectContaining({
+      ghostSignatureHeader: "sha256=fixture, t=1793002616000", rawBody: Buffer.from(raw), payload: JSON.parse(raw),
+    }));
+  });
+
   beforeEach(() => {
     vi.resetModules();
     vi.doUnmock("@paperclipai/shared/telemetry");
