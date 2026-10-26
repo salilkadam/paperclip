@@ -107,6 +107,9 @@ spec:
                   '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))
             initialDelaySeconds: 5
             periodSeconds: 10
+            # Cold-starting a node -e process under the 100m CPU limit can
+            # exceed kubelet's 1s default probe timeout, flapping readiness.
+            timeoutSeconds: 5
           livenessProbe:
             exec:
               command:
@@ -117,6 +120,9 @@ spec:
                   '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))
             initialDelaySeconds: 30
             periodSeconds: 20
+            # Same 1s-default rationale as the readiness probe: a slow probe
+            # that is merely late must not count toward a container restart.
+            timeoutSeconds: 5
           {{- if .Values.gpuai.enabled }}
           env:
             # GPU-AI gateway key for the dsh llm-pi-ai gpuai provider
