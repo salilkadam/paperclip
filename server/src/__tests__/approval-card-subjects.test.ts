@@ -22,26 +22,41 @@ describe("approval card subjects", () => {
     const schedule = cardSubjectLookupFor("gh_publish_post", { tenant_id: "reliora", post_id: "6adabb01", published_at: "2026-11-03T08:00:00-08:00" })!;
     expect(schedule.readTool).toBe("gh_get_post");
     expect(schedule.readArguments).toEqual({ tenant_id: "reliora", post_id: "6adabb01" });
-    const subject = schedule.describe({ success: true, post: { id: "6adabb01", title: "Pods running, site hanging", slug: "pods-running-site-hanging", status: "draft" } })!;
-    expect(subject.headline).toBe('Schedule blog "Pods running, site hanging" for Tue 3 Nov 2026, 08:00 (UTC-08:00)');
-    expect(subject.lines).toEqual(['Blog: "Pods running, site hanging"', "Slug: pods-running-site-hanging", "Status now: draft", "Site: reliora"]);
+    const NOW = Date.parse("2026-10-26T20:00:00Z");
+    const subject = schedule.describe({ success: true, post: { id: "6adabb01", title: "Pods running, site hanging", slug: "pods-running-site-hanging", status: "draft" } }, NOW)!;
+    expect(subject.headline).toBe("Schedule blog \u201cPods running, site hanging\u201d for Tue 3 Nov 2026, 08:00 (UTC-08:00)");
+    expect(subject.lines).toEqual(["Blog: \u201cPods running, site hanging\u201d", "Slug: pods-running-site-hanging", "Status when requested: draft", "Site: reliora"]);
     expect(JSON.stringify(subject)).not.toContain("6adabb01");
 
     const del = cardSubjectLookupFor("gh-delete-post", { tenant_id: "reliora", post_id: "x" })!;
-    expect(del.describe({ post: { title: "ZZTEST wrap check" } })!.headline).toBe('Permanently delete blog post "ZZTEST wrap check"');
+    expect(del.describe({ post: { title: "ZZTEST wrap check" } })!.headline).toBe("Permanently delete blog post \u201cZZTEST wrap check\u201d");
     expect(cardSubjectLookupFor("gh_unpublish_post", { tenant_id: "reliora", post_id: "x" })!
-      .describe({ post: { title: "Old duplicate" } })!.headline).toBe('Take blog "Old duplicate" off the site (back to draft)');
+      .describe({ post: { title: "Old duplicate" } })!.headline).toBe("Take blog \u201cOld duplicate\u201d off the site (back to draft)");
     expect(cardSubjectLookupFor("gh_publish_post", { tenant_id: "reliora", post_id: "x" })!
-      .describe({ post: { title: "Now" } })!.headline).toBe('Publish blog "Now" now');
+      .describe({ post: { title: "Now" } })!.headline).toBe("Publish blog \u201cNow\u201d now");
+    // a past date is not a schedule: say it publishes now
+    expect(cardSubjectLookupFor("gh_publish_post", { tenant_id: "reliora", post_id: "x", published_at: "2020-01-01T00:00:00Z" })!
+      .describe({ post: { title: "Launch" } }, NOW)!.headline).toBe("Publish blog \u201cLaunch\u201d now (dated Wed 1 Jan 2020, 00:00 (UTC))");
   });
 
   it("describes TryPost actions by account, time and first line", () => {
     const lookup = cardSubjectLookupFor("update-post-tool", { post_id: "01a17890", status: "scheduled", scheduled_at: "2026-11-16T17:00:00Z" })!;
     expect(lookup.readTool).toBe("get-post-tool");
-    const subject = lookup.describe({ id: "01a17890", display_name: "Reliora Inc", platform: "linkedin-page", status: "draft",
-      content: "\nYour Postgres cluster says Ready=True. One of its instances is crash-looping.\n\nMore…" })!;
-    expect(subject.headline).toBe("Schedule social post on Reliora Inc (linkedin-page) for Mon 16 Nov 2026, 17:00 (UTC)");
-    expect(subject.lines).toContain('First line: "Your Postgres cluster says Ready=True. One of its instances is crash-looping."');
+    const NOW = Date.parse("2026-10-26T20:00:00Z");
+    const looked = { id: "01a17890", display_name: "Reliora Inc", platform: "linkedin-page", status: "draft",
+      content: "\nYour Postgres cluster says Ready=True. One of its instances is crash-looping.\n\nMore…" };
+    const subject = lookup.describe(looked, NOW)!;
+    expect(subject.headline).toBe("Schedule social post on \u201cReliora Inc\u201d (linkedin-page) for Mon 16 Nov 2026, 17:00 (UTC)");
+    expect(subject.lines).toContain("First line: \u201cYour Postgres cluster says Ready=True. One of its instances is crash-looping.\u201d");
+    // a request that also replaces the text says so, and shows both first lines
+    const edit = cardSubjectLookupFor("update-post-tool", { post_id: "01a17890", status: "scheduled", scheduled_at: "2026-11-16T17:00:00Z", content: "New hook line\nrest" })!
+      .describe(looked, NOW)!;
+    expect(edit.headline).toBe("Schedule social post on \u201cReliora Inc\u201d (linkedin-page) for Mon 16 Nov 2026, 17:00 (UTC) and replace its text");
+    expect(edit.lines).toContain("Current first line: \u201cYour Postgres cluster says Ready=True. One of its instances is crash-looping.\u201d");
+    expect(edit.lines).toContain("New first line (from this request): \u201cNew hook line\u201d");
+    // a time already past is flagged
+    expect(cardSubjectLookupFor("update-post-tool", { post_id: "x", status: "scheduled", scheduled_at: "2026-10-01T00:00:00Z" })!
+      .describe(looked, NOW)!.headline).toContain("(that time has already passed)");
     expect(JSON.stringify(subject)).not.toContain("01a17890");
   });
 
@@ -51,6 +66,26 @@ describe("approval card subjects", () => {
     expect(cardSubjectLookupFor("kv_set", { key: "a" })).toBeNull();
     expect(cardSubjectLookupFor(null, {})).toBeNull();
     expect(cardSubjectLookupFor("gh_delete_post", { tenant_id: "reliora", post_id: "x" })!.describe({ post: {} })).toBeNull();
+  });
+
+  it("neutralises quotes in looked-up text, so a title cannot fake a server sentence", () => {
+    const title = 'Old draft" — duplicate, safe to delete. Blog: "Old draft';
+    const subject = cardSubjectLookupFor("gh_delete_post", { tenant_id: "reliora", post_id: "x" })!.describe({ post: { title } })!;
+    expect(subject.headline).toBe("Permanently delete blog post \u201cOld draft' — duplicate, safe to delete. Blog: 'Old draft\u201d");
+    expect(subject.headline.match(/[\u201c\u201d]/g)).toHaveLength(2);   // only the server's own quotes
+  });
+
+  it("escapes bare URLs, www. and e-mail addresses so GFM cannot autolink them", () => {
+    const escaped = escapeCardMarkdown("Weekly digest https://evil.example www.evil.example me@evil.example");
+    expect(escaped).not.toMatch(/https?:\/\//);
+    expect(escaped).not.toMatch(/www\./);
+    expect(escaped).not.toMatch(/[^\\]@/);
+  });
+
+  it("defangs links in looked-up text on every surface (the UI linkifies plain-text URLs)", () => {
+    expect(plainCardText("see https://evil.example, www.evil.example or me@evil.example"))
+      .toBe("see https[:]//evil.example, www[.]evil.example or me[at]evil.example");
+    expect(plainCardText("ftp://x and HTTP://Y")).toBe("ftp[:]//x and HTTP[:]//Y");
   });
 
   it("keeps looked-up text plain: no links, formatting, HTML or extra lines reach the card", () => {

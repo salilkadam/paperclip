@@ -192,6 +192,7 @@ import {
 import { extendApprovedExecutionWaitDeadline } from "./approved-execution-wait.js";
 import {
   cardSubjectLookupFor,
+  escapeCardMarkdown,
   lookedUpObject,
   sameUpstreamTool,
   subjectPreviewMarkdown,
@@ -2487,28 +2488,59 @@ export function createToolGatewayService(
 
   // A plain-language subject for an approval card (approval-card-subjects.ts):
   // the server looks up the object a gated call targets with a read-only tool on
-  // the same connection. Best effort and bounded (5 s); a failure never blocks the
-  // card, it is logged and the card says the lookup failed.
+  // the same connection. The lookup is held to the same rules as the agent's own
+  // calls: its tool policy must allow the read, and the read is recorded as its
+  // own invocation (audit, and no side effects on the gated call). Best effort
+  // and bounded: 5 s for the whole lookup; a failure never blocks the card, it is
+  // logged and the card says the lookup failed.
+  const CARD_SUBJECT_LOOKUP_MS = 5_000;
   async function lookupApprovalCardSubject(
     session: ToolGatewaySession,
     tool: ToolGatewayDescriptor,
     args: unknown,
-    invocationId: string,
   ): Promise<{ subject: CardSubject | null; failure: string | null }> {
     const lookup = cardSubjectLookupFor(tool.upstreamToolName, args);
     if (!lookup || !tool.connectionId) return { subject: null, failure: null };
-    try {
-      const readTool = (await connectedMcpToolsForCompany(session.companyId)).find((candidate) =>
+    const run = async (): Promise<{ subject: CardSubject | null; failure: string | null }> => {
+      const readTool = (await connectedMcpToolsForCompany(session.companyId, [tool.connectionId!])).find((candidate) =>
         candidate.connectionId === tool.connectionId &&
         candidate.risk === "read" &&
         sameUpstreamTool(candidate.upstreamToolName, lookup.readTool));
       if (!readTool) return { subject: null, failure: `no read-only ${lookup.readTool} tool on this connection` };
-      const execution = await executeRemoteHttpTool(session, readTool, lookup.readArguments, 5_000, invocationId);
-      const looked = lookedUpObject(execution.result);
-      const subject = looked ? lookup.describe(looked) : null;
-      return subject ? { subject, failure: null } : { subject: null, failure: `${lookup.readTool} returned nothing usable` };
+      const decisionInput = policyInputForTool({ session, tool: readTool, parameters: lookup.readArguments, consumeRateLimit: false });
+      const decision = await policyService.decide(decisionInput);
+      if (!decision.allowed) {
+        return { subject: null, failure: `the agent's tool policy does not allow ${lookup.readTool} (${decision.reasonCode})` };
+      }
+      const recorded = await policyService.recordInvocation(decisionInput, decision);
+      const lookupInvocationId = recorded.invocation.id;
+      const finish = (status: "succeeded" | "failed", errorMessage: string | null) => db.update(toolInvocations)
+        .set({ status, errorCode: status === "failed" ? "card_subject_lookup_failed" : null, errorMessage, completedAt: new Date(), updatedAt: new Date() })
+        .where(eq(toolInvocations.id, lookupInvocationId));
+      try {
+        const execution = await executeRemoteHttpTool(session, readTool, lookup.readArguments, CARD_SUBJECT_LOOKUP_MS, lookupInvocationId);
+        await finish("succeeded", null);
+        const looked = lookedUpObject(execution.result);
+        const subject = looked ? lookup.describe(looked) : null;
+        return subject ? { subject, failure: null } : { subject: null, failure: `${lookup.readTool} returned nothing usable` };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await finish("failed", message.slice(0, 500)).catch(() => undefined);
+        throw error;
+      }
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        run(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`lookup took longer than ${CARD_SUBJECT_LOOKUP_MS} ms`)), CARD_SUBJECT_LOOKUP_MS);
+        }),
+      ]);
     } catch (error) {
       return { subject: null, failure: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -2659,7 +2691,7 @@ export function createToolGatewayService(
 
     // Prosumer-facing card preview (M5/M7/M9). Respect an already-set custom preview
     // (e.g. OpenClaw-supplied), otherwise emit plain language with no technical vocab.
-    const cardSubject = await lookupApprovalCardSubject(input.session, input.tool, input.parameters, input.invocation.id);
+    const cardSubject = await lookupApprovalCardSubject(input.session, input.tool, input.parameters);
     if (cardSubject.failure) {
       logger.warn(
         { tool: input.tool.name, actionRequestId: actionRequest.id, reason: cardSubject.failure },
@@ -2691,7 +2723,7 @@ export function createToolGatewayService(
               ? `Approve: ${cardSubject.subject.headline}`
               : `Approve high-risk tool action: ${input.tool.name}`,
             summary: cardSubject.subject
-              ? `${cardSubject.subject.headline}. ${cardSubject.subject.lines.join(" · ")}. This is a ${input.tool.risk} action; approving runs the reviewed call exactly once.`
+              ? `${escapeCardMarkdown(cardSubject.subject.headline)}. ${cardSubject.subject.lines.map(escapeCardMarkdown).join(" · ")}. This is a ${input.tool.risk} action; approving runs the reviewed call exactly once.`
               : `${input.tool.name} is classified as ${input.tool.risk} and requires formal board approval before execution.`,
             recommendedAction:
               "Approve only if the reviewed arguments match the intended operation.",

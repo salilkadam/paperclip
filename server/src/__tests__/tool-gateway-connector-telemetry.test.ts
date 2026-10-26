@@ -581,11 +581,22 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
       expect(reads).toEqual([{ tenant_id: "reliora", post_id: "6adf5e0c" }]);
       const [card] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, issue.id));
       const payload = card!.payload as { prompt: string; toolAction: { previewMarkdown: string } };
-      expect(payload.prompt).toBe('Approve: Permanently delete blog post "ZZTEST wrap check](https://evil.example) DO NOT PUBLISH"?');
-      expect(payload.toolAction.previewMarkdown).toContain("Slug: zztest-wrap-check");
-      expect(payload.toolAction.previewMarkdown).not.toMatch(/(?<!\\)\]\(https:/);
+      expect(payload.prompt).toBe("Approve: Permanently delete blog post \u201cZZTEST wrap check](https[:]//evil.example) DO NOT PUBLISH\u201d?");
+      expect(payload.toolAction.previewMarkdown).toContain("Slug\\: zztest-wrap-check");
+      expect(payload.toolAction.previewMarkdown).not.toMatch(/https?:\/\//);
       const [formal] = await db.select().from(approvals).where(eq(approvals.companyId, company.id));
-      expect((formal!.payload as { title: string }).title).toBe('Approve: Permanently delete blog post "ZZTEST wrap check](https://evil.example) DO NOT PUBLISH"');
+      const formalPayload = formal!.payload as { title: string; summary: string };
+      expect(formalPayload.title).toBe("Approve: Permanently delete blog post \u201cZZTEST wrap check](https[:]//evil.example) DO NOT PUBLISH\u201d");
+      // the summary is rendered as Markdown on the Approvals pages: escaped, no link
+      expect(formalPayload.summary).toContain("\\]\\(https\\[\\:\\]\\/\\/evil\\.example\\)");
+      expect(formalPayload.summary).not.toMatch(/https?:\/\//);
+      // the lookup is its own recorded invocation; the gated call's record is untouched by it
+      const invocationRows = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, company.id));
+      const lookupRows = invocationRows.filter((row) => row.toolName !== del.name);
+      expect(lookupRows).toHaveLength(1);
+      expect(lookupRows[0]!.status).toBe("succeeded");
+      const gated = invocationRows.find((row) => row.toolName === del.name)!;
+      expect(gated.status).toBe("awaiting_approval");
 
       // a failed lookup never blocks the card: it falls back and says so
       lookupTitle = null;
@@ -595,6 +606,17 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
         .find((p) => !p.prompt.startsWith("Approve: Permanently"))!;
       expect(fallback.prompt).toMatch(/^Approve /);
       expect(fallback.toolAction.previewMarkdown).toContain("Could not look up what this targets");
+
+      // the agent's tool policy governs the lookup: a deny on gh_get_post means no lookup
+      lookupTitle = "Should never be read";
+      reads.length = 0;
+      await db.insert(toolPolicies).values({ companyId: company.id, name: "Block reads", policyType: "block",
+        selectors: { connectionId: remoteTool.connection.id, toolNames: ["gh_get_post"] }, priority: 0 });
+      await requestDelete("6adf5e0e");
+      expect(reads).toHaveLength(0);
+      const denied = (await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, issue.id)))
+        .map((row) => row.payload as { prompt: string }).filter((p) => p.prompt.includes("Should never be read"));
+      expect(denied).toHaveLength(0);
     } finally {
       await db.delete(issueApprovals);
       await db.delete(approvals);
