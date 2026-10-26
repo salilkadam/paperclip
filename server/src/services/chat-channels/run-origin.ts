@@ -74,9 +74,10 @@ export async function chatRunSourceMessageId(db: Db, run: Run, options: {
   allowLegacyWakeComment?: boolean;
   provider?: ChatProvider;
   /**
-   * Slack only: a parent context from another agent's run or another task ends
-   * the walk as "no chat source" when assertForeignOriginCarriesNoChatSource
-   * passes. Other callers (GitHub) keep the hard refusal.
+   * A parent context from another agent's run or another task ends the walk as
+   * "no chat source" when assertForeignOriginCarriesNoChatSource passes. Used by
+   * Slack task authority and by the GitHub guest check that every gateway tool
+   * listing runs; other GitHub callers keep the hard refusal.
    */
   allowForeignOriginWithoutChatSource?: boolean;
 } = {}): Promise<string | null> {

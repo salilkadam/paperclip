@@ -8988,6 +8988,14 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     });
     const listed = await executeSlackTool(db, binding, "slack_channels", {}, directory as typeof fetch) as { channels: Array<{ id: string }> };
     expect(listed.channels.map(channel => channel.id).sort()).toEqual(["CPUBLIC", "GBOARD"]);
+    // End to end through the tool gateway (what the agent's route call does). The
+    // gateway assembles the session's tool list, including the GitHub guest check;
+    // in production that check refused derived tasks and aborted every call.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = directory as typeof fetch;
+    try {
+      await expect(executeConnectorTool(db, binding, "slack_channels", {})).resolves.toMatchObject({ sourceTrust: "untrusted" });
+    } finally { globalThis.fetch = originalFetch; }
 
     await db.insert(chatActions).values({
       companyId: f.companyId, endpointId: endpoint.id, kind: "slack_private_source", status: "processed",

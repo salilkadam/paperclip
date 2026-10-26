@@ -404,7 +404,14 @@ export async function githubGuestBotConnectionForSession(
         eq(heartbeatRuns.id, session.runId),
       ),
     );
-  const commentId = run ? await chatRunSourceMessageId(db, run, { allowLegacyWakeComment: true, provider: "github" }) : null;
+  // A task created by another agent's run (or for another task) inherits that
+  // run's identity context. Without the opt-in this lookup refused the hop, and
+  // because the gateway asks it while assembling every session's tool list, the
+  // refusal aborted ALL gateway tool calls on such tasks (REL-3060's Slack note).
+  // The opt-in returns "no chat source" only when the foreign chain has no message
+  // and no private Slack research; a guest-originated task always carries the
+  // guest's message, so it still refuses, and the restriction never widens.
+  const commentId = run ? await chatRunSourceMessageId(db, run, { allowLegacyWakeComment: true, provider: "github", allowForeignOriginWithoutChatSource: true }) : null;
   if (typeof commentId !== "string") return null;
   const [source] = await db
     .select({

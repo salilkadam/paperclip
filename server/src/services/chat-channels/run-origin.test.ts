@@ -5,6 +5,7 @@ import { agents, chatActions, chatEndpoints, companies, createDb, heartbeatRuns,
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
 import { boundRunIssueId, boundRunIssueIdSql } from "../run-task-binding.js";
 import { chatRunSourceMessageId } from "./run-origin.js";
+import { githubGuestBotConnectionForSession } from "../chat-github-tools.js";
 
 const support = await getEmbeddedPostgresTestSupport();
 (support.supported ? describe : describe.skip)("channel task provenance", () => {
@@ -166,6 +167,17 @@ const support = await getEmbeddedPostgresTestSupport();
       status: 403, details: { code: "chat_provenance_foreign_message", contextId: f.originContext.id, contextRunId: f.originRun.id },
     });
     expect(await keys(chatRunSourceMessageId(db, f.run, slackOnly))).toEqual(["code", "contextId", "contextRunId", "runId"]);
+  });
+
+  it("lets the gateway's GitHub guest check pass a derived task without chat provenance", async () => {
+    // The gateway runs this check while assembling every session's tool list, so a
+    // refusal here aborted all tool calls on agent-created tasks in production.
+    const f = await derivedFixture();
+    const session = { companyId: f.company.id, agentId: f.assignee.id, runId: f.run.id, issueId: f.derivedTask.id };
+    await expect(githubGuestBotConnectionForSession(db, session)).resolves.toBeNull();
+    // A message beyond the boundary (a guest-originated chain carries one) still refuses.
+    await db.update(runIdentityContexts).set({ messageId: randomUUID() }).where(eq(runIdentityContexts.id, f.originContext.id));
+    await expect(githubGuestBotConnectionForSession(db, session)).rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_message" } });
   });
 
   it("refuses a derived task whose origin task holds private Slack research", async () => {
