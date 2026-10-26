@@ -8,27 +8,25 @@
 #   Salil Kadam personal repost  the same Monday / Wednesday 12:00 PT, a short
 #                                blurb with the live company post's link
 #
-#   1. "Reliora content calendar"         daily 07:00 PT: new Ghost drafts are
-#      brought to the house style, scheduled into the next free Sunday/Tuesday,
-#      and each gets its company LinkedIn post for the next day; a safety check
-#      pulls any LinkedIn post whose blog is not live.
+#   1. "Reliora content calendar" — ONE routine, ONE lane: it runs daily at
+#      07:00 PT and whenever Ghost reports a new post (webhook "Post created",
+#      signing mode ghost_hmac), with concurrencyPolicy coalesce_if_active so
+#      two runs never work at once (2026-10-26: two parallel runs requested the
+#      same six drafts with conflicting dates). New Ghost drafts are brought to
+#      the house style, scheduled into the next free Sunday/Tuesday, and each
+#      blog that Ghost reports scheduled or published gets its company LinkedIn
+#      post for the day after its publish date; a safety check pulls any
+#      LinkedIn post whose blog is not live by then. A draft that lands while a
+#      run waits for the board is picked up when the board's decision wakes the
+#      agent, or at the next 07:00 run.
+#      The webhook URL and secret are written to WEBHOOK_URL_FILE (0600) when the
+#      trigger is created, never printed; add them in Ghost admin: Settings >
+#      Integrations > custom integration > Add webhook, event "Post created".
 #   2. "Reliora content calendar: repost" Mon/Wed 09:30 and 11:30 PT: once a
 #      company post is live, the personal repost is prepared.
-#   Separate routines because a run waits in_review for the board's approvals
-#   and skip_if_active would otherwise skip the Monday/Wednesday repost.
-#   3. "Reliora content calendar: new draft" — the same steps, run as soon as Ghost
-#      reports a new post (Ghost webhook "Post created" -> this routine's webhook
-#      trigger), so the board's approval cards and #reliora-board note arrive
-#      within minutes of a draft landing. always_enqueue: a draft that arrives
-#      while an earlier batch waits for approval is not skipped. Signing mode
-#      "ghost_hmac": Paperclip verifies Ghost's X-Ghost-Signature, so only Ghost
-#      (holding the secret) can start a run. The webhook URL and secret are
-#      written to WEBHOOK_URL_FILE (0600), never printed; add them in Ghost
-#      admin: Settings > Integrations > custom integration > Add webhook,
-#      event "Post created", Target URL + Secret from that file.
-#   4. pauses Reliora's older "Daily blog -> LinkedIn" routine, which would
-#      otherwise compete for the same drafts;
-#   5. reads everything back and fails if any value differs.
+#   3. archives the retired "Reliora content calendar: new draft" routine if one
+#      still exists, and pauses Reliora's older "Daily blog -> LinkedIn" routine.
+#   4. reads everything back and fails if any value differs.
 #
 # Every go-live (scheduling a blog, a company post, a repost) stays a board
 # approval card (Ghost + TryPost ask-first policies); the board approves with
@@ -56,7 +54,7 @@ DRY=0
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown argument: $a" >&2; exit 2 ;;
   esac
 done
@@ -83,6 +81,9 @@ write() { if (( DRY )); then log "  DRY-RUN would $1 $2"; echo '{}'; else api "$
 read -r -d '' CAL_DESC <<'EOF' || true
 The owner's standing content practice for reliora.ai. Use the **trypost** skill (tool gateway) and the
 Ghost blog tools (`gh_*`, tenant `reliora`). Times are America/Los_Angeles.
+This routine runs daily at 07:00 and whenever Ghost reports a new post. Only one run is active at a time:
+a new post that arrives while this task waits for the board does not start another run; you pick it up
+after the board's decision (section E).
 
 | What | When |
 |---|---|
@@ -126,22 +127,26 @@ to this task: that is expected. Request each once, never retry. The board approv
 
 ## C. Company LinkedIn post for each scheduled blog
 
-For each blog that is scheduled or published and does **not** carry the Ghost tag `#linkedin`:
+Only for blogs whose Ghost status is **scheduled** or **published** right now. Check each with `gh_get_post`;
+never assume. A draft does not qualify, even when its schedule card is pending on this task: its company post
+is requested on the run after the board approves the schedule. For each qualifying blog that does **not**
+carry the Ghost tag `#linkedin`:
 1. Guard: `list-posts-tool` with `search` = the blog slug and `channels` = [Reliora Inc page id]. A hit means
    it already has its post: tag it `#linkedin` (step 4) and move on.
 2. Draft the post (`create-post-tool`, account "Reliora Inc", `status: "draft"`): a hook line, a 2 to 4 sentence
    summary, the takeaway, the link `https://reliora.ai/blog/<slug>` (never the Ghost host), 3 to 5 hashtags.
    Check it with `preview-post-tool`.
-3. Request it: `update-post-tool` with `status: "scheduled"` and `scheduled_at` = the day after the blog's publish
-   day (Monday for Sunday, Wednesday for Tuesday) at 09:00 America/Los_Angeles, in UTC.
+3. Request it: `update-post-tool` with `status: "scheduled"` and `scheduled_at` = 09:00 America/Los_Angeles (in UTC)
+   on the day after the blog's `published_at` **as Ghost reports it** (Monday for a Sunday blog, Wednesday for a
+   Tuesday blog). Never earlier than that day.
 4. Tag the blog `#linkedin`: `gh_update_post` with tags = its existing tags + `#linkedin`. The tag is exactly
    `#linkedin` with the `#` (internal). Never send `linkedin` without the `#`: it shows publicly on reliora.ai.
 
 ## D. Safety check
 
-For every Reliora Inc page post scheduled within the next 36 hours that links `reliora.ai/blog/<slug>`: if that
-blog is not published, or not scheduled to publish before the post, pull the post back with `update-post-tool`
-`status: "draft"` and say so. A post must never link a blog that is not live.
+For every Reliora Inc page post that is scheduled (any date) and links `reliora.ai/blog/<slug>`: check the blog with
+`gh_get_post`. If it is not published, or not scheduled to publish at least 12 hours before the post, pull the post
+back with `update-post-tool` `status: "draft"` and say so. A post must never link a blog that is not live.
 
 ## E. Report
 
@@ -149,7 +154,9 @@ If you requested anything, post one note to the board per the **board-approval-n
 the task link, each blog with its publish day and each company post with its time, and "Approve all on this task".
 Then set the task to `in_review` and end the run. Nothing new: comment "No new drafts" and mark the task done.
 After the board's decision, check the result (`gh_get_post` status `scheduled`, `get-post-tool` status
-`scheduled`), record it, and mark the task done.
+`scheduled`) and record it. Then, before closing, run sections A to D again in this task: drafts that landed
+while it waited, and company posts for blogs that are now scheduled. If that requests anything, report it (this
+section) and wait again; otherwise mark the task done.
 EOF
 
 read -r -d '' REP_DESC <<'EOF' || true
@@ -188,14 +195,15 @@ pid="$(jq -r '(if type == "object" then .projects else . end) | [.[] | select(.n
 [[ -n "$pid" ]] || die "no Marketing project (run setup-cmo-blog-amplifier.sh first)"
 log "== $COMPANY: marketer $(jq -r --arg m "$marketer" '.[] | select(.id == $m) | .name' <<<"$agents"), project $pid"
 
-# ensure_routine TITLE DESC CRON LABEL -> routine id on stdout
+# ensure_routine TITLE DESC CRON LABEL CONCURRENCY -> sets LAST_RID
+LAST_RID=""
 ensure_routine() {
-  local title="$1" desc="$2" cron="$3" label="$4" rid detail
+  local title="$1" desc="$2" cron="$3" label="$4" conc="$5" rid detail
   routines="$(api GET "/companies/$cid/routines")"
   rid="$(jq -r --arg t "$title" '[.[] | select(.title == $t and .status != "archived")] | .[0].id // ""' <<<"$routines")"
-  jq -n --arg t "$title" --arg d "$desc" --arg a "$marketer" --arg p "$pid" '{title: $t, description: $d,
+  jq -n --arg t "$title" --arg d "$desc" --arg a "$marketer" --arg p "$pid" --arg c "$conc" '{title: $t, description: $d,
     assigneeAgentId: $a, projectId: $p, priority: "medium", status: "active",
-    concurrencyPolicy: "skip_if_active", catchUpPolicy: "skip_missed"}' > "$WORK/r.json"
+    concurrencyPolicy: $c, catchUpPolicy: "skip_missed"}' > "$WORK/r.json"
   if [[ -z "$rid" ]]; then
     rid="$(write POST "/companies/$cid/routines" "$WORK/r.json" | jq -r '.id // "DRY-RUN"')"; log "  $title: created $rid"
   else
@@ -209,58 +217,53 @@ ensure_routine() {
     fi
     if (( ! DRY )); then
       detail="$(api GET "/routines/$rid")"
-      jq -e --arg a "$marketer" --arg p "$pid" --arg c "$cron" --arg z "$TZ_NAME" --arg d "$desc" '
-        .assigneeAgentId == $a and .projectId == $p and .status == "active" and .concurrencyPolicy == "skip_if_active"
+      jq -e --arg a "$marketer" --arg p "$pid" --arg c "$cron" --arg z "$TZ_NAME" --arg d "$desc" --arg k "$conc" '
+        .assigneeAgentId == $a and .projectId == $p and .status == "active" and .concurrencyPolicy == $k
         and .description == $d
         and ([.triggers[] | select(.kind == "schedule" and .enabled and .cronExpression == $c and .timezone == $z)] | length == 1)' \
         <<<"$detail" >/dev/null || die "$title: read-back does not match: $(jq -c '{status, assigneeAgentId, projectId, concurrencyPolicy, triggers: [.triggers[] | {cronExpression, timezone, enabled}]}' <<<"$detail")"
       log "  $title: verified; next run $(jq -r '[.triggers[] | select(.kind == "schedule")][0].nextRunAt' <<<"$detail")"
     fi
   fi
+  LAST_RID="$rid"
 }
 
-ensure_routine "$CAL_TITLE" "$CAL_DESC" "$CAL_CRON" "daily 07:00 PT"
-ensure_routine "$REP_TITLE" "$REP_DESC" "$REP_CRON" "Mon/Wed 09:30 and 11:30 PT"
+ensure_routine "$CAL_TITLE" "$CAL_DESC" "$CAL_CRON" "daily 07:00 PT" "coalesce_if_active"
+cal_id="$LAST_RID"
+ensure_routine "$REP_TITLE" "$REP_DESC" "$REP_CRON" "Mon/Wed 09:30 and 11:30 PT" "skip_if_active"
 
-# 3. on a new Ghost post: the same steps, now, via a webhook trigger
-NEW_DESC="Ghost reported a new post on the Reliora blog. Run the calendar now, so the board's approval cards and the #reliora-board note arrive within minutes of a draft landing.
-
-$CAL_DESC"
-routines="$(api GET "/companies/$cid/routines")"
-nid="$(jq -r --arg t "$NEW_TITLE" '[.[] | select(.title == $t and .status != "archived")] | .[0].id // ""' <<<"$routines")"
-jq -n --arg t "$NEW_TITLE" --arg d "$NEW_DESC" --arg a "$marketer" --arg p "$pid" '{title: $t, description: $d,
-  assigneeAgentId: $a, projectId: $p, priority: "high", status: "active",
-  concurrencyPolicy: "always_enqueue", catchUpPolicy: "skip_missed"}' > "$WORK/n.json"
-if [[ -z "$nid" ]]; then
-  nid="$(write POST "/companies/$cid/routines" "$WORK/n.json" | jq -r '.id // "DRY-RUN"')"; log "  $NEW_TITLE: created $nid"
-else
-  write PATCH "/routines/$nid" "$WORK/n.json" >/dev/null; log "  $NEW_TITLE: updated $nid"
-fi
-if [[ "$nid" != DRY-RUN ]]; then
-  detail="$(api GET "/routines/$nid")"
-  if jq -e '[.triggers[]? | select(.kind == "webhook")] | length >= 1' <<<"$detail" >/dev/null; then
-    log "  $NEW_TITLE: webhook trigger exists (URL kept in $WEBHOOK_URL_FILE from its creation)"
+# the Ghost webhook: on the calendar routine itself, so it shares the one lane
+if [[ "$cal_id" != DRY-RUN ]]; then
+  detail="$(api GET "/routines/$cal_id")"
+  if jq -e '[.triggers[]? | select(.kind == "webhook" and .signingMode == "ghost_hmac")] | length >= 1' <<<"$detail" >/dev/null; then
+    log "  $CAL_TITLE: Ghost webhook trigger exists (URL and secret kept in $WEBHOOK_URL_FILE from its creation)"
   else
     jq -n '{kind: "webhook", label: "Ghost: Post created", signingMode: "ghost_hmac", replayWindowSec: 300, enabled: true}' > "$WORK/w.json"
-    created="$(write POST "/routines/$nid/triggers" "$WORK/w.json")"
+    created="$(write POST "/routines/$cal_id/triggers" "$WORK/w.json")"
     if (( ! DRY )); then
       url="$(jq -r '.secretMaterial.webhookUrl // empty' <<<"$created")"
       secret="$(jq -r '.secretMaterial.webhookSecret // empty' <<<"$created")"
-      [[ "$url" == https://* ]] || die "$NEW_TITLE: webhook trigger created without an https URL"
-      [[ -n "$secret" ]] || die "$NEW_TITLE: webhook trigger created without a signing secret"
+      [[ "$url" == https://* ]] || die "$CAL_TITLE: webhook trigger created without an https URL"
+      [[ -n "$secret" ]] || die "$CAL_TITLE: webhook trigger created without a signing secret"
       ( umask 077; printf 'Ghost admin > Settings > Integrations > custom integration > Add webhook\nEvent: Post created\nTarget URL: %s\nSecret: %s\n' "$url" "$secret" > "$WEBHOOK_URL_FILE" )
       unset secret
-      log "  $NEW_TITLE: webhook trigger created; URL and secret written to $WEBHOOK_URL_FILE (0600)"
+      log "  $CAL_TITLE: Ghost webhook trigger created; URL and secret written to $WEBHOOK_URL_FILE (0600). Update Ghost admin."
     fi
   fi
   if (( ! DRY )); then
-    detail="$(api GET "/routines/$nid")"
-    jq -e --arg a "$marketer" --arg d "$NEW_DESC" '.assigneeAgentId == $a and .status == "active"
-      and .concurrencyPolicy == "always_enqueue" and .description == $d
-      and ([.triggers[] | select(.kind == "webhook" and .enabled and .signingMode == "ghost_hmac")] | length == 1)' <<<"$detail" >/dev/null \
-      || die "$NEW_TITLE: read-back does not match: $(jq -c '{status, concurrencyPolicy, triggers: [.triggers[] | {kind, enabled, signingMode}]}' <<<"$detail")"
-    log "  $NEW_TITLE: verified"
+    detail="$(api GET "/routines/$cal_id")"
+    jq -e '([.triggers[] | select(.kind == "webhook" and .enabled and .signingMode == "ghost_hmac")] | length == 1)' <<<"$detail" >/dev/null \
+      || die "$CAL_TITLE: expected exactly one enabled ghost_hmac webhook trigger: $(jq -c '[.triggers[] | {kind, enabled, signingMode}]' <<<"$detail")"
+    log "  $CAL_TITLE: one lane verified (schedule + Ghost webhook, coalesce_if_active)"
   fi
+fi
+
+# the retired separate webhook routine must not run in parallel with the calendar
+routines="$(api GET "/companies/$cid/routines")"
+retired="$(jq -r --arg t "$NEW_TITLE" '[.[] | select(.title == $t and .status != "archived")] | .[0].id // ""' <<<"$routines")"
+if [[ -n "$retired" ]]; then
+  jq -n '{status: "archived"}' > "$WORK/x.json"; write PATCH "/routines/$retired" "$WORK/x.json" >/dev/null
+  log "  '$NEW_TITLE' ($retired): archived (retired; its webhook moved to '$CAL_TITLE')"
 fi
 
 # the older daily routine would compete for the same drafts
