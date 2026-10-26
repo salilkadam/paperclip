@@ -194,6 +194,7 @@ import {
   cardSubjectLookupFor,
   escapeCardMarkdown,
   lookedUpObject,
+  plainToolLabel,
   sameUpstreamTool,
   subjectPreviewMarkdown,
   type CardSubject,
@@ -2721,10 +2722,10 @@ export function createToolGatewayService(
           payload: {
             title: cardSubject.subject
               ? `Approve: ${cardSubject.subject.headline}`
-              : `Approve high-risk tool action: ${input.tool.name}`,
+              : `Approve: ${plainToolLabel(input.tool)}`,
             summary: cardSubject.subject
               ? `${escapeCardMarkdown(cardSubject.subject.headline)}. ${cardSubject.subject.lines.map(escapeCardMarkdown).join(" · ")}. This is a ${input.tool.risk} action; approving runs the reviewed call exactly once.`
-              : `${input.tool.name} is classified as ${input.tool.risk} and requires formal board approval before execution.`,
+              : `${escapeCardMarkdown(plainToolLabel(input.tool))} is a ${input.tool.risk} action. Paperclip could not look up what it acts on; check the reviewed arguments in the details. Approving runs that exact call once.`,
             recommendedAction:
               "Approve only if the reviewed arguments match the intended operation.",
             risks: [
@@ -2766,7 +2767,7 @@ export function createToolGatewayService(
           version: 1,
           prompt: cardSubject.subject
             ? `Approve: ${cardSubject.subject.headline}?`
-            : `Approve ${input.tool.displayName?.trim() || input.tool.name}?`,
+            : `Approve: ${plainToolLabel(input.tool)}?`,
           acceptLabel: "Approve action",
           rejectLabel: "Reject action",
           rejectRequiresReason: false,
@@ -2777,7 +2778,7 @@ export function createToolGatewayService(
             type: "custom",
             key: `tool-action:${actionRequest.id}`,
             revisionId: canonicalArgumentsHash,
-            label: input.tool.name,
+            label: cardSubject.subject ? cardSubject.subject.headline : plainToolLabel(input.tool),
           },
           toolAction: {
             version: 1,

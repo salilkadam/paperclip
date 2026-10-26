@@ -3845,7 +3845,7 @@ rl.on("line", (line) => {
         continuationPolicy: "wake_assignee",
         payload: {
           version: 1,
-          prompt: "Approve KV Set?",
+          prompt: expect.stringMatching(/^Approve: KV Set \(Remote app .+\)\?$/),
           detailsMarkdown: expect.stringContaining('"value":"original"'),
           target: {
             type: "custom",

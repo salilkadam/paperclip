@@ -602,10 +602,20 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
       lookupTitle = null;
       await requestDelete("6adf5e0d");
       const cards = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, issue.id));
-      const fallback = cards.map((row) => row.payload as { prompt: string; toolAction: { previewMarkdown: string } })
+      const fallback = cards.map((row) => row.payload as { prompt: string; target: { label: string }; toolAction: { previewMarkdown: string } })
         .find((p) => !p.prompt.startsWith("Approve: Permanently"))!;
-      expect(fallback.prompt).toMatch(/^Approve /);
+      // ...in plain words: the action and the app, never the raw gateway tool id
+      expect(fallback.prompt).toMatch(/^Approve: Gh delete post \(.+\)\?$/);
       expect(fallback.toolAction.previewMarkdown).toContain("Could not look up what this targets");
+      const fallbackFormal = (await db.select().from(approvals).where(eq(approvals.companyId, company.id)))
+        .map((row) => row.payload as { title: string; summary: string })
+        .find((p) => !p.title.startsWith("Approve: Permanently"))!;
+      expect(fallbackFormal.title).toMatch(/^Approve: Gh delete post \(.+\)$/);
+      expect(fallbackFormal.summary).toContain("could not look up what it acts on");
+      expect(fallback.target.label).toMatch(/^Gh delete post \(.+\)$/);
+      for (const text of [fallback.prompt, fallback.target.label, fallbackFormal.title, fallbackFormal.summary]) {
+        expect(text).not.toContain(del.name);
+      }
 
       // the agent's tool policy governs the lookup: a deny on gh_get_post means no lookup
       lookupTitle = "Should never be read";

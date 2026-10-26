@@ -43,6 +43,30 @@ export function plainCardText(value: unknown, max = 160): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
+/**
+ * A tool named for the board when Paperclip cannot say what it acts on: its catalog
+ * display name (minus a trailing "Tool") and the app it belongs to, e.g.
+ * "Delete Post (TryPost)" instead of
+ * "mcp.app-gallery-link-2de1c4d0-…-49852674:delete-post-tool". Display names come
+ * from the provider's catalog, so they get the same plain-text treatment as
+ * looked-up values.
+ */
+export function plainToolLabel(tool: {
+  name: string; displayName?: string | null; upstreamToolName?: string | null; applicationDisplayName?: string | null;
+}): string {
+  const humanize = (raw: string) => {
+    const words = raw.replace(/[-_]+/g, " ").trim().replace(/\s+tool$/i, "");
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : "";
+  };
+  // a catalog title can itself be an identifier ("gh_delete_post"): humanize that too
+  const rawDisplay = tool.displayName?.trim() ?? "";
+  const display = /^[\w.-]+$/.test(rawDisplay) && /[-_]/.test(rawDisplay) ? humanize(rawDisplay) : rawDisplay.replace(/\s+tool$/i, "");
+  const fromName = tool.upstreamToolName?.trim() || tool.name.split(":").pop() || tool.name;
+  const action = plainCardText(display || humanize(fromName), 80) || "Tool action";
+  const app = tool.applicationDisplayName?.trim();
+  return app ? `${action} (${plainCardText(app, 40)})` : action;
+}
+
 /** An untrusted looked-up value, quoted so it reads as data: “value”. */
 const quoted = (value: unknown, max = 140) => `\u201c${plainCardText(value, max)}\u201d`;
 
@@ -67,6 +91,37 @@ export function formatWhen(value: unknown): string | null {
   const mm = String(local.getUTCMinutes()).padStart(2, "0");
   const zone = offset ? `UTC${offset[1]}${offset[2]}:${offset[3]}` : "UTC";
   return `${WEEKDAYS[local.getUTCDay()]} ${local.getUTCDate()} ${MONTHS[local.getUTCMonth()]} ${local.getUTCFullYear()}, ${hh}:${mm} (${zone})`;
+}
+
+/**
+ * The same instant in a named IANA timezone (a TryPost account's own zone), so the
+ * board reads the time the post goes out where the account posts:
+ * "2026-11-11 17:00:00" + "America/Los_Angeles" -> "Wed 11 Nov 2026, 09:00 (PST)".
+ * Times without an offset are UTC (TryPost's convention). Unknown zone or
+ * unparseable time -> null, and callers fall back to formatWhen.
+ */
+export function formatWhenIn(value: unknown, timeZone: unknown): string | null {
+  if (typeof value !== "string" || typeof timeZone !== "string" || !timeZone.trim()) return null;
+  const iso = value.trim().replace(" ", "T");
+  const at = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+  if (Number.isNaN(at)) return null;
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timeZone.trim(), weekday: "short", day: "numeric", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short",
+    }).formatToParts(new Date(at));
+  } catch {
+    return null;
+  }
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  // en-GB gives "GMT-8" where en-US gives the familiar "PST"; take only the zone name from en-US
+  let zone = part("timeZoneName");
+  try {
+    zone = new Intl.DateTimeFormat("en-US", { timeZone: timeZone.trim(), timeZoneName: "short" })
+      .formatToParts(new Date(at)).find((p) => p.type === "timeZoneName")?.value || zone;
+  } catch { /* keep the en-GB name */ }
+  return `${part("weekday")} ${part("day")} ${part("month")} ${part("year")}, ${part("hour")}:${part("minute")} (${zone})`;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
@@ -131,9 +186,9 @@ function ghostSubject(action: string, args: Record<string, unknown>): CardSubjec
 // ---- TryPost social posts ---------------------------------------------------------------
 const changesText = (args: Record<string, unknown>) => typeof args.content === "string" || args.media !== undefined;
 
-const TRYPOST_ACTIONS: Record<string, (account: string, args: Record<string, unknown>, now: number) => string | null> = {
-  "update-post-tool": (account, args, now) => {
-    const when = formatWhen(args.scheduled_at);
+const TRYPOST_ACTIONS: Record<string, (account: string, args: Record<string, unknown>, now: number, timeZone: unknown) => string | null> = {
+  "update-post-tool": (account, args, now, timeZone) => {
+    const when = formatWhenIn(args.scheduled_at, timeZone) ?? formatWhen(args.scheduled_at);
     const edit = changesText(args) ? " and replace its text" : "";
     if (args.status === "scheduled") {
       if (!when) return `Schedule social post on ${account}${edit}`;
@@ -172,7 +227,8 @@ function tryPostSubject(action: string, args: Record<string, unknown>): CardSubj
         lines.push(`First line: ${quoted(current)}`);
       }
       if (typeof post.status === "string") lines.push(`Status when requested: ${plainCardText(post.status, 20)}`);
-      const text = headline(account, args, now);
+      const timeZone = asRecord(post.social_account)?.timezone;
+      const text = headline(account, args, now, timeZone);
       return text ? { headline: text, lines } : null;
     },
   };
