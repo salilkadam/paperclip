@@ -4,7 +4,12 @@ import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
-import { createBufferedTextFileWriter, runDatabaseBackup, runDatabaseRestore } from "./backup-lib.js";
+import {
+  createBufferedTextFileWriter,
+  runDatabaseBackup,
+  runDatabaseRestore,
+  splitLibpqPassword,
+} from "./backup-lib.js";
 import { ensurePostgresDatabase } from "./client.js";
 import {
   EMBEDDED_POSTGRES_TEST_TIMEOUT_MS,
@@ -75,6 +80,27 @@ describe("createBufferedTextFileWriter", () => {
   });
 });
 
+describe("splitLibpqPassword", () => {
+  it("moves a password with an unescaped @ out of the URI and into PGPASSWORD", () => {
+    const split = splitLibpqPassword("postgresql://paperclip:p@ss!xK9m@db.example:5432/bionicorg");
+    expect(split.env.PGPASSWORD).toBe("p@ss!xK9m");
+    expect(split.connectionString).toBe("postgresql://paperclip@db.example:5432/bionicorg");
+  });
+
+  it("decodes a percent-encoded password and keeps query parameters", () => {
+    const split = splitLibpqPassword("postgresql://u:p%40ss@db.example:5432/app?sslmode=require");
+    expect(split.env.PGPASSWORD).toBe("p@ss");
+    expect(split.connectionString).toBe("postgresql://u@db.example:5432/app?sslmode=require");
+  });
+
+  it("leaves a passwordless URI and keyword/value conninfo untouched", () => {
+    const uri = "postgresql://u@db.example:5432/app";
+    expect(splitLibpqPassword(uri)).toEqual({ connectionString: uri, env: {} });
+    const conninfo = "host=/var/run/postgresql dbname=app user=u password=p@ss";
+    expect(splitLibpqPassword(conninfo)).toEqual({ connectionString: conninfo, env: {} });
+  });
+});
+
 describeEmbeddedPostgres("runDatabaseBackup", () => {
   it("preserves a post-pg_dump verification error without falling back or pruning", async () => {
     const connectionString = await createTempDatabase();
@@ -105,6 +131,48 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     } finally {
       if (previous === undefined) delete process.env.PAPERCLIP_PG_DUMP_PATH;
       else process.env.PAPERCLIP_PG_DUMP_PATH = previous;
+    }
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
+  it("uses pg_dump and psql when the password contains an unescaped @", async () => {
+    // libpq splits URI userinfo at the first "@" while postgres.js splits at
+    // the last one. A raw "@" in the password must not push engine "auto" into
+    // the silent JavaScript fallback (which starves the server event loop on
+    // every hourly backup).
+    const source = await createTempDatabase();
+    const role = `at_pwd_fixture_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
+    const password = "p@ss!xK9m";
+    const sourceSql = postgres(source, { max: 1, onnotice: () => {} });
+    try {
+      await sourceSql.unsafe(`
+        CREATE SCHEMA at_pwd_fixture;
+        CREATE TABLE at_pwd_fixture.records (id integer PRIMARY KEY, value text NOT NULL);
+        INSERT INTO at_pwd_fixture.records (id, value) VALUES (1, 'raw-at');
+        CREATE ROLE ${role} LOGIN SUPERUSER PASSWORD '${password}';
+      `);
+    } finally {
+      await sourceSql.end();
+    }
+    const { hostname, port, pathname } = new URL(source);
+    const rawAtUrl = `postgres://${role}:${password}@${hostname}:${port}${pathname}`;
+
+    const backup = await runDatabaseBackup({
+      connectionString: rawAtUrl,
+      backupDir: createTempDir("at-password-backup-"),
+      retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+    });
+    const dump = gunzipSync(fs.readFileSync(backup.backupFile)).toString("utf8");
+    expect(dump).toContain("-- PostgreSQL database dump");
+    expect(dump).toContain("raw-at");
+
+    const target = await createSiblingDatabase(source, "at_pwd_restore_target");
+    const rawAtTargetUrl = `postgres://${role}:${password}@${hostname}:${port}/at_pwd_restore_target`;
+    await runDatabaseRestore({ connectionString: rawAtTargetUrl, backupFile: backup.backupFile });
+    const targetSql = postgres(rawAtTargetUrl, { max: 1, onnotice: () => {} });
+    try {
+      expect(await targetSql`SELECT value FROM at_pwd_fixture.records`).toEqual([{ value: "raw-at" }]);
+    } finally {
+      await targetSql.end();
     }
   }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
 

@@ -321,16 +321,45 @@ async function waitForChildExit(child: ReturnType<typeof spawn>, label: string):
   }
 }
 
+export function splitLibpqPassword(connectionString: string): {
+  connectionString: string;
+  env: Record<string, string>;
+} {
+  // libpq parses URI userinfo up to the first "@", while postgres.js splits at
+  // the last one. A password containing an unescaped "@" therefore poisons the
+  // host that pg_dump and psql parse, and engine "auto" silently falls back to
+  // the JavaScript dumper. Hand the CLIs the password via PGPASSWORD and pass a
+  // credential-free URI on the command line, which also keeps the password out
+  // of the process arguments.
+  let url: URL;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    // Keyword/value conninfo has no URL scheme; libpq parses it natively.
+    return { connectionString, env: {} };
+  }
+  if (!url.password) return { connectionString, env: {} };
+  let password: string;
+  try {
+    password = decodeURIComponent(url.password);
+  } catch {
+    password = url.password;
+  }
+  url.password = "";
+  return { connectionString: url.toString(), env: { PGPASSWORD: password } };
+}
+
 async function runPgDumpBackup(opts: {
   connectionString: string;
   backupFile: string;
   connectTimeout: number;
 }): Promise<void> {
   const pgDumpBin = process.env.PAPERCLIP_PG_DUMP_PATH || "pg_dump";
+  const target = splitLibpqPassword(opts.connectionString);
   const child = spawn(
     pgDumpBin,
     [
-      `--dbname=${opts.connectionString}`,
+      `--dbname=${target.connectionString}`,
       "--format=plain",
       "--clean",
       "--if-exists",
@@ -341,6 +370,7 @@ async function runPgDumpBackup(opts: {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
+        ...target.env,
         PGCONNECT_TIMEOUT: String(opts.connectTimeout),
       },
     },
@@ -358,10 +388,11 @@ async function runPgDumpBackup(opts: {
 
 async function restoreWithPsql(opts: RunDatabaseRestoreOptions, connectTimeout: number): Promise<void> {
   const psqlBin = process.env.PAPERCLIP_PSQL_PATH || "psql";
+  const target = splitLibpqPassword(opts.connectionString);
   const child = spawn(
     psqlBin,
     [
-      `--dbname=${opts.connectionString}`,
+      `--dbname=${target.connectionString}`,
       "--set=ON_ERROR_STOP=1",
       "--quiet",
       "--no-psqlrc",
@@ -370,6 +401,7 @@ async function restoreWithPsql(opts: RunDatabaseRestoreOptions, connectTimeout: 
       stdio: ["pipe", "ignore", "pipe"],
       env: {
         ...process.env,
+        ...target.env,
         PGCONNECT_TIMEOUT: String(connectTimeout),
       },
     },
