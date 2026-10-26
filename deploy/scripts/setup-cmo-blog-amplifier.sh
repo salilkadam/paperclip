@@ -32,10 +32,13 @@ API="${PAPERCLIP_API_BASE:-https://org.baisoln.com}"
 PERSONAL_PROFILE="${PERSONAL_LINKEDIN_PROFILE:-Salil Kadam}"
 ROUTINE_TITLE="Daily blog -> LinkedIn"
 CRON="0 8 * * *"; TZ_NAME="America/Los_Angeles"
-# site|company name|blog base URL|LinkedIn page display name|board Slack channel
+# site|company name|PUBLIC blog base URL|LinkedIn page display name|board Slack channel
+# The public base URL is the company website's blog (the site renders published
+# Ghost posts at <base>/<slug>), never the Ghost host blog-*.baisoln.com, which
+# is intranet-only. Empty = no public blog yet: the routine stops before drafting.
 SITES=(
-  "bionic|Bionic AI Solutions|https://blog-bionic.baisoln.com|Bionic AI Solutions|#bionic-board"
-  "reliora|Reliora Inc|https://blog-reliora.baisoln.com|Reliora Inc|#reliora-board"
+  "bionic|Bionic AI Solutions||Bionic AI Solutions|#bionic-board"
+  "reliora|Reliora Inc|https://reliora.ai/blog|Reliora Inc|#reliora-board"
 )
 C_LEVEL_NAMES=(CMO COO CLO)
 MARKETER_SKILLS=(paperclipai/paperclip/blog-linkedin-amplifier paperclipai/paperclip/trypost)
@@ -123,7 +126,17 @@ for entry in "${SITES[@]}"; do
 Use the **blog-linkedin-amplifier** skill. Inputs:
 
 - Ghost tenant_id: \`$site\`
-- Public blog base URL: $blog_url
+$(if [[ -n "$blog_url" ]]; then cat <<URL
+- Public blog base URL: $blog_url. Link posts ONLY to \`$blog_url/<slug>\`. Never link the Ghost host
+  (\`blog-$site.baisoln.com\`) or a draft preview URL: those are intranet-only and do not open for readers.
+  After the blog is published, open \`$blog_url/<slug>\` and confirm the page title is the post title
+  before closing the run; if it is not, pull both LinkedIn posts back to draft and say so.
+URL
+else cat <<NOURL
+- Public blog base URL: **none yet**. The company website does not show blog posts publicly yet.
+  Do not draft or schedule LinkedIn posts: comment "No public blog URL yet", mark the run done, and end.
+NOURL
+fi)
 - Company LinkedIn page: **$page**
 - Personal LinkedIn profile for the repost: **$PERSONAL_PROFILE** (the only personal profile you may post to)
 - Board Slack channel: \`$chan\`. Send the board note by following the company's **board-approval-notify** skill. If that skill is not available to you, post with your Slack tools, or create the "Slack board note" subtask for your manager (the CMO), whose bot (cmo-$site) posts it.
