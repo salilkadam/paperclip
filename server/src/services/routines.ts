@@ -2979,6 +2979,7 @@ export function routineService(
       signatureHeader?: string | null;
       hubSignatureHeader?: string | null;
       firefliesSignatureHeader?: string | null;
+      ghostSignatureHeader?: string | null;
       timestampHeader?: string | null;
       idempotencyKey?: string | null;
       rawBody?: Buffer | null;
@@ -3047,6 +3048,40 @@ export function routineService(
               normalizedBuf.length === expectedBuf.length &&
               crypto.timingSafeEqual(normalizedBuf, expectedBuf);
             if (!valid) throw unauthorized();
+          } else if (trigger.signingMode === "ghost_hmac") {
+            // Ghost webhooks: X-Ghost-Signature: "sha256=<hex>, t=<ms>", where the
+            // HMAC-SHA256 (keyed with the secret entered in Ghost's webhook form)
+            // covers the exact request body followed by the timestamp. Same replay
+            // window and replay key as hmac_sha256.
+            const secretValue = await resolveTriggerSecret(trigger, routine.companyId);
+            if (!input.rawBody) throw unauthorized();
+            const header = input.ghostSignatureHeader?.trim() ?? "";
+            const parts = new Map(header.split(",").map((part) => {
+              const at = part.indexOf("=");
+              return [part.slice(0, at).trim().toLowerCase(), part.slice(at + 1).trim()] as const;
+            }));
+            const providedSignature = parts.get("sha256") ?? "";
+            const providedTimestamp = parts.get("t") ?? "";
+            if (!/^[0-9a-f]{64}$/i.test(providedSignature) || !/^\d{10,16}$/.test(providedTimestamp)) throw unauthorized();
+            const tsMillis = normalizeWebhookTimestampMs(providedTimestamp);
+            if (tsMillis == null) throw unauthorized();
+            const replayWindowSec = trigger.replayWindowSec ?? 300;
+            if (Math.abs(Date.now() - tsMillis) > replayWindowSec * 1000) throw unauthorized();
+            const expectedHmac = crypto
+              .createHmac("sha256", secretValue)
+              .update(input.rawBody)
+              .update(providedTimestamp)
+              .digest("hex");
+            const providedBuf = Buffer.from(providedSignature.toLowerCase());
+            const expectedBuf = Buffer.from(expectedHmac);
+            const valid =
+              providedBuf.length === expectedBuf.length &&
+              crypto.timingSafeEqual(providedBuf, expectedBuf);
+            if (!valid) throw unauthorized();
+            hmacReplayKey = `webhook-ghost:${crypto
+              .createHash("sha256")
+              .update(`${trigger.id}:${providedTimestamp}:${expectedHmac}`)
+              .digest("hex")}`;
           } else if (trigger.signingMode === "bearer") {
             const secretValue = await resolveTriggerSecret(trigger, routine.companyId);
             const expected = `Bearer ${secretValue}`;

@@ -2593,6 +2593,49 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     ).rejects.toThrow();
   });
 
+  describe("ghost_hmac signing mode (Ghost webhooks)", () => {
+    // Exactly how Ghost signs (core webhook trigger): HMAC-SHA256 over the JSON
+    // body string followed by Date.now(), sent as "sha256=<hex>, t=<ms>".
+    const ghostSign = (secret: string, body: string, ts: number) =>
+      `sha256=${createHmac("sha256", secret).update(`${body}${ts}`).digest("hex")}, t=${ts}`;
+    const ghostPayload = { post: { current: { id: "6ade96de", status: "draft", title: "New draft" } } };
+
+    it("accepts a Ghost-signed delivery and rejects its replay", async () => {
+      const { routine, svc } = await seedFixture();
+      const { trigger, secretMaterial } = await svc.createTrigger(routine.id, { kind: "webhook", signingMode: "ghost_hmac" }, {});
+      const body = JSON.stringify(ghostPayload);
+      const request = { ghostSignatureHeader: ghostSign(secretMaterial!.webhookSecret, body, Date.now()), rawBody: Buffer.from(body), payload: ghostPayload };
+
+      await expect(svc.firePublicTrigger(trigger.publicId!, request)).resolves.toMatchObject({ source: "webhook", status: "issue_created" });
+      await expect(svc.firePublicTrigger(trigger.publicId!, request)).rejects.toThrow("Webhook replay detected");
+      const runs = await db.select({ id: routineRuns.id }).from(routineRuns).where(eq(routineRuns.triggerId, trigger.id));
+      expect(runs).toHaveLength(1);
+    });
+
+    it("rejects a wrong secret, a tampered body, a stale timestamp and a missing or malformed header", async () => {
+      const { routine, svc } = await seedFixture();
+      const { trigger, secretMaterial } = await svc.createTrigger(routine.id, { kind: "webhook", signingMode: "ghost_hmac", replayWindowSec: 300 }, {});
+      const secret = secretMaterial!.webhookSecret;
+      const body = JSON.stringify(ghostPayload);
+      const now = Date.now();
+      const attempts: Array<[string, Record<string, unknown>]> = [
+        ["wrong secret", { ghostSignatureHeader: ghostSign("not-the-secret", body, now), rawBody: Buffer.from(body) }],
+        ["tampered body", { ghostSignatureHeader: ghostSign(secret, body, now), rawBody: Buffer.from(body.replace("draft", "published")) }],
+        ["stale timestamp", { ghostSignatureHeader: ghostSign(secret, body, now - 301_000), rawBody: Buffer.from(body) }],
+        ["timestamp swapped", { ghostSignatureHeader: ghostSign(secret, body, now).replace(/t=\d+/, `t=${now + 1}`), rawBody: Buffer.from(body) }],
+        ["missing header", { rawBody: Buffer.from(body) }],
+        ["malformed header", { ghostSignatureHeader: "sha256=abc", rawBody: Buffer.from(body) }],
+        ["no raw body", { ghostSignatureHeader: ghostSign(secret, body, now), payload: ghostPayload }],
+        ["github-style header only", { hubSignatureHeader: `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`, rawBody: Buffer.from(body) }],
+      ];
+      for (const [label, request] of attempts) {
+        await expect(svc.firePublicTrigger(trigger.publicId!, { payload: ghostPayload, ...request }), label).rejects.toThrow();
+      }
+      const runs = await db.select({ id: routineRuns.id }).from(routineRuns).where(eq(routineRuns.triggerId, trigger.id));
+      expect(runs).toHaveLength(0);
+    });
+  });
+
   it("accepts any request with none signing mode", async () => {
     const { routine, svc } = await seedFixture();
     const { trigger } = await svc.createTrigger(
