@@ -8937,13 +8937,12 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       eq(chatActions.endpointId, endpoint.id), eq(chatActions.kind, "slack_private_source"),
       sql`${chatActions.payload}->>'issueId' = ${conversation.issueId}`,
     ))).length;
-    // GBOARD is an enabled destination of this connection; GHIDDEN is a private
-    // channel the requester and bot share but the task cannot post to.
+    // A channel-origin task sees only its own private channel (existing rule).
     await db.insert(chatEndpointResources).values({ companyId: f.companyId, endpointId: endpoint.id, type: "channel", providerResourceId: "GBOARD", label: "Board", enabled: true, availability: "available" });
     const before = await privateSources();
     const listed = await executeSlackTool(db, binding, "slack_channels", {}, provider as typeof fetch) as { channels: Array<{ id: string }> };
     expect(listed).toMatchObject({ sourceTrust: "untrusted" });
-    expect(listed.channels.map(channel => channel.id).sort()).toEqual(["GBOARD", "GLIST"]);
+    expect(listed.channels.map(channel => channel.id)).toEqual(["GLIST"]);
     expect(await privateSources()).toBe(before);
     await executeSlackTool(db, binding, "slack_history", { channel: "GLIST" }, provider as typeof fetch);
     expect(await privateSources()).toBe(before + 1);
@@ -8972,6 +8971,23 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await initializeRunIdentity(db, { companyId: f.companyId, runId: derivedRun.id, issueId: derivedTask.id, responsibleUserId: "owner-user", parentContextId: originContext.id, cause: "issue_assigned" });
     const binding = { companyId: f.companyId, agentId: f.assignedAgentId, issueId: derivedTask.id, runId: derivedRun.id };
     expect((await resolveConnectorAssignments(db, binding)).map(assignment => assignment.key)).toEqual(["slack"]);
+
+    // An ordinary task lists private channels only when they are destinations it
+    // may post to: GBOARD is an enabled channel of this connection, GHIDDEN is a
+    // private channel the requester and bot share but this task cannot post to.
+    const { executeSlackTool } = await import("../services/connectors/slack.js");
+    await db.insert(chatEndpointResources).values({ companyId: f.companyId, endpointId: endpoint.id, type: "channel", providerResourceId: "GBOARD", label: "Board", enabled: true, availability: "available" });
+    const directory = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = String(input).split("/").at(-1);
+      const channel = new URLSearchParams(String(init?.body ?? "")).get("channel");
+      if (method === "users.info") return Response.json({ ok: true, user: { id: "UDERIVED", team_id: "T-PAPERCLIP" } });
+      if (method === "conversations.list") return Response.json({ ok: true, channels: [{ id: "GHIDDEN", is_member: true }, { id: "GBOARD", is_member: true }, { id: "CPUBLIC", is_member: true }] });
+      if (method === "conversations.info") return Response.json({ ok: true, channel: { id: channel, name: `name-${channel}`, is_member: true, is_private: channel !== "CPUBLIC" } });
+      if (method === "conversations.members") return Response.json({ ok: true, members: ["UDERIVED"] });
+      throw new Error(`Unexpected Slack method ${method}`);
+    });
+    const listed = await executeSlackTool(db, binding, "slack_channels", {}, directory as typeof fetch) as { channels: Array<{ id: string }> };
+    expect(listed.channels.map(channel => channel.id).sort()).toEqual(["CPUBLIC", "GBOARD"]);
 
     await db.insert(chatActions).values({
       companyId: f.companyId, endpointId: endpoint.id, kind: "slack_private_source", status: "processed",
