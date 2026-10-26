@@ -211,6 +211,28 @@ const support = await getEmbeddedPostgresTestSupport();
       .rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
   });
 
+  it("refuses a guest wake carried in wakeCommentIds two hops beyond the boundary", async () => {
+    const f = await derivedFixture();
+    const [grandTask] = await db.insert(issues).values({ companyId: f.company.id, title: "Grand origin", assigneeAgentId: f.creator.id }).returning();
+    const { comment } = await inboundComment(f, { issueId: grandTask.id, provider: "github", guest: true, agentId: f.creator.id });
+    const [board] = await db.insert(issueComments).values({ companyId: f.company.id, issueId: grandTask.id, authorType: "user", authorUserId: "requester", body: "ok" }).returning();
+    const [grandRun] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.creator.id, status: "succeeded", issueId: grandTask.id, responsibleUserId: "requester", contextSnapshot: { issueId: grandTask.id, wakeCommentId: board.id, wakeCommentIds: [comment.id, board.id] } }).returning();
+    const [grandContext] = await db.insert(runIdentityContexts).values({ companyId: f.company.id, runId: grandRun.id, revision: 1, responsibleUserId: "requester", cause: "issue_commented", correlationId: "dispatch" }).returning();
+    await db.update(runIdentityContexts).set({ parentContextId: grandContext.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+    await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
+  });
+
+  it.each(["deleted", "other-task"])("does not accept a responsible user's board comment that is %s", async variant => {
+    const f = await derivedFixture();
+    const [elsewhere] = await db.insert(issues).values({ companyId: f.company.id, title: "Unrelated" }).returning();
+    const [board] = await db.insert(issueComments).values({
+      companyId: f.company.id, issueId: variant === "other-task" ? elsewhere.id : f.originTask.id, authorType: "user", authorUserId: "requester", body: "Draft",
+      ...(variant === "deleted" ? { deletedAt: new Date() } : {}),
+    }).returning();
+    await db.update(runIdentityContexts).set({ messageId: board.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+    await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_message" } });
+  });
+
   it("refuses a derived task whose origin carries an inbound chat message, even from the responsible user", async () => {
     const f = await derivedFixture();
     const { comment } = await inboundComment(f, { issueId: f.originTask.id, provider: "slack", guest: false, agentId: f.creator.id, authorUserId: "requester" });

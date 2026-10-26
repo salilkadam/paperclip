@@ -412,7 +412,7 @@ export async function githubGuestBotConnectionForSession(
   // in the foreign chain is a direct board comment by the responsible user and no
   // ancestor holds private Slack research. A guest's inbound comment (no author)
   // reaches the chain as an ancestor run's wakeCommentId and is refused, so a
-  // guest cannot launder instructions through a derived task.
+  // guest cannot launder instructions through a wake-linked derived task.
   const commentId = run ? await chatRunSourceMessageId(db, run, { allowLegacyWakeComment: true, provider: "github", allowForeignOriginWithoutChatSource: true }) : null;
   if (typeof commentId !== "string") return null;
   const [source] = await db
