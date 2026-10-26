@@ -195,6 +195,25 @@ const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
 
+// How long a board approval card for a gated tool call stays open before it
+// expires. Default 60 minutes. A deployment whose board decides once a day can
+// raise it with PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES (5 to 10080). An
+// unusable value falls back to the default and is logged, never ignored silently.
+const DEFAULT_TOOL_ACTION_APPROVAL_TTL_MINUTES = 60;
+let warnedToolActionApprovalTtl = false;
+export function toolActionApprovalTtlMs(raw: string | undefined = process.env.PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_TOOL_ACTION_APPROVAL_TTL_MINUTES * 60_000;
+  const minutes = Number(raw.trim());
+  if (!Number.isInteger(minutes) || minutes < 5 || minutes > 10_080) {
+    if (!warnedToolActionApprovalTtl) {
+      warnedToolActionApprovalTtl = true;
+      logger.warn({ value: raw }, "PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES must be an integer from 5 to 10080; using 60");
+    }
+    return DEFAULT_TOOL_ACTION_APPROVAL_TTL_MINUTES * 60_000;
+  }
+  return minutes * 60_000;
+}
+
 export function resolveCredentialGrantKind(
   policy: "shared" | "per_user" | "per_user_with_fallback" | "per_agent",
   actingUserId: string | null,
@@ -2541,7 +2560,7 @@ export function createToolGatewayService(
       );
     }
     const actionRequest = input.actionRequest;
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + toolActionApprovalTtlMs());
 
     let signedArguments: ReturnType<typeof signToolArguments>;
     try {
@@ -9582,7 +9601,7 @@ export function createToolGatewayService(
             canonicalArgumentsSummary: argumentValidation.summary,
             signedArguments,
             previewMarkdown,
-            expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+            expiresAt: new Date(Date.now() + toolActionApprovalTtlMs()),
             updatedAt: new Date(),
           })
           .where(eq(toolActionRequests.id, recorded.actionRequest.id));

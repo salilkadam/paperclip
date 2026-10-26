@@ -24,6 +24,9 @@ data:
   MINIO_USE_SSL: {{ tpl .Values.env.MINIO_USE_SSL . | quote }}
   MAIL_FROM: {{ .Values.env.MAIL_FROM | quote }}
   BIONIC_INTERNAL_BASE_URL: {{ .Values.env.BIONIC_INTERNAL_BASE_URL | quote }}
+  {{- with .Values.env.PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES }}
+  PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES: {{ . | quote }}
+  {{- end }}
   {{- with .Values.env.PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS }}
   # Per-plugin exact-hostname exceptions to the plugin HTTP private-network
   # block (server/src/services/plugin-host-services.ts). Loopback, link-local
