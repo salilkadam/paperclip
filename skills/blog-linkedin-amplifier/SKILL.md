@@ -36,6 +36,11 @@ Two facts make a repeat impossible:
 `gh_update_post` **replaces** the tag list. Always send the existing tags
 plus or minus `#linkedin`.
 
+The leading `#` is what makes the tag internal (Ghost slug `hash-linkedin`).
+**Never send `linkedin` without the `#`**: that creates a public tag that shows
+as a chip on the company website. If a post comes back with a plain `linkedin`
+tag, replace it with `#linkedin` in the same call. Do not "fix" `#linkedin`.
+
 ## Steps
 
 1. **One at a time.** The routine skips a run while the previous one is still
