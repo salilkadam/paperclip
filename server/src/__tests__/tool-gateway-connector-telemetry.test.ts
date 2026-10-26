@@ -4,6 +4,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   activityLog,
   agents,
+  approvals,
+  issueApprovals,
+  issueThreadInteractions,
   companies,
   companyMemberships,
   connectionGrants,
@@ -533,6 +536,92 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
     expect(toolActionApprovalTtlMs("5")).toBe(5 * 60_000);
     expect(toolActionApprovalTtlMs("10080")).toBe(10080 * 60_000);
     for (const bad of ["4", "10081", "0", "-1", "1.5", "abc"]) expect(toolActionApprovalTtlMs(bad), bad).toBe(60 * 60_000);
+  });
+
+  it("names a gated Ghost action by the post's title, looked up on the same connection", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { issue, run } = await createIssueAndRun(db, company.id, agent.id);
+    const remoteTool = await createRemoteMcpTool(db, company.id);
+    const entry = (toolName: string, riskLevel: "read" | "destructive") => ({
+      companyId: company.id, applicationId: remoteTool.application.id, connectionId: remoteTool.connection.id,
+      entryKind: "tool" as const, name: `${toolName}-${randomUUID()}`, toolName, title: toolName, description: toolName,
+      inputSchema: { type: "object", properties: { tenant_id: { type: "string" }, post_id: { type: "string" } }, required: ["tenant_id", "post_id"], additionalProperties: false },
+      annotations: { readOnlyHint: riskLevel === "read" }, riskLevel, isReadOnly: riskLevel === "read", isWrite: riskLevel !== "read",
+      isDestructive: riskLevel === "destructive", status: "active" as const, versionHash: randomUUID(),
+    });
+    await db.insert(toolCatalogEntries).values([entry("gh_delete_post", "destructive"), entry("gh_get_post", "read")]);
+    await allowAllToolsForAgent(db, company.id, agent.id);
+    await db.insert(toolPolicies).values({ companyId: company.id, name: "Ask first: delete", policyType: "require_approval",
+      selectors: { connectionId: remoteTool.connection.id, toolNames: ["gh_delete_post"] }, priority: 1 });
+
+    let lookupTitle: string | null = "ZZTEST wrap check](https://evil.example) DO NOT PUBLISH";
+    const reads: unknown[] = [];
+    const gateway = createToolGatewayService(db, {
+      toolActionSigningSecret: SIGNING_SECRET,
+      remoteHttpRequest: async (_url, init) => {
+        const body = JSON.parse(String(init.body ?? "{}"));
+        if (body?.method === "tools/call" && body.params?.name === "gh_get_post") {
+          reads.push(body.params.arguments);
+          if (lookupTitle === null) return new Response("upstream down", { status: 502 });
+          const text = JSON.stringify({ success: true, post: { id: "6adf5e0c", title: lookupTitle, slug: "zztest-wrap-check", status: "draft" } });
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text }] } }),
+            { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return mcpSuccessResponse(init);
+      },
+    });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const del = (await gateway.listToolsForSession(session.token)).find((tool) => tool.upstreamToolName === "gh_delete_post")!;
+    expect(del).toBeDefined();
+    const requestDelete = (postId: string) => gateway.executeTool({ sessionToken: session.token, tool: del.name, parameters: { tenant_id: "reliora", post_id: postId } })
+      .then(() => { throw new Error("expected approval_required"); }, (error) => expect(error).toMatchObject({ reasonCode: "approval_required" }));
+    try {
+      await requestDelete("6adf5e0c");
+      expect(reads).toEqual([{ tenant_id: "reliora", post_id: "6adf5e0c" }]);
+      const [card] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, issue.id));
+      const payload = card!.payload as { prompt: string; toolAction: { previewMarkdown: string } };
+      expect(payload.prompt).toBe("Approve: Permanently delete blog post \u201cZZTEST wrap check](https[:]//evil.example) DO NOT PUBLISH\u201d?");
+      expect(payload.toolAction.previewMarkdown).toContain("Slug\\: zztest-wrap-check");
+      expect(payload.toolAction.previewMarkdown).not.toMatch(/https?:\/\//);
+      const [formal] = await db.select().from(approvals).where(eq(approvals.companyId, company.id));
+      const formalPayload = formal!.payload as { title: string; summary: string };
+      expect(formalPayload.title).toBe("Approve: Permanently delete blog post \u201cZZTEST wrap check](https[:]//evil.example) DO NOT PUBLISH\u201d");
+      // the summary is rendered as Markdown on the Approvals pages: escaped, no link
+      expect(formalPayload.summary).toContain("\\]\\(https\\[\\:\\]\\/\\/evil\\.example\\)");
+      expect(formalPayload.summary).not.toMatch(/https?:\/\//);
+      // the lookup is its own recorded invocation; the gated call's record is untouched by it
+      const invocationRows = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, company.id));
+      const lookupRows = invocationRows.filter((row) => row.toolName !== del.name);
+      expect(lookupRows).toHaveLength(1);
+      expect(lookupRows[0]!.status).toBe("succeeded");
+      const gated = invocationRows.find((row) => row.toolName === del.name)!;
+      expect(gated.status).toBe("awaiting_approval");
+
+      // a failed lookup never blocks the card: it falls back and says so
+      lookupTitle = null;
+      await requestDelete("6adf5e0d");
+      const cards = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, issue.id));
+      const fallback = cards.map((row) => row.payload as { prompt: string; toolAction: { previewMarkdown: string } })
+        .find((p) => !p.prompt.startsWith("Approve: Permanently"))!;
+      expect(fallback.prompt).toMatch(/^Approve /);
+      expect(fallback.toolAction.previewMarkdown).toContain("Could not look up what this targets");
+
+      // the agent's tool policy governs the lookup: a deny on gh_get_post means no lookup
+      lookupTitle = "Should never be read";
+      reads.length = 0;
+      await db.insert(toolPolicies).values({ companyId: company.id, name: "Block reads", policyType: "block",
+        selectors: { connectionId: remoteTool.connection.id, toolNames: ["gh_get_post"] }, priority: 0 });
+      await requestDelete("6adf5e0e");
+      expect(reads).toHaveLength(0);
+      const denied = (await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, issue.id)))
+        .map((row) => row.payload as { prompt: string }).filter((p) => p.prompt.includes("Should never be read"));
+      expect(denied).toHaveLength(0);
+    } finally {
+      await db.delete(issueApprovals);
+      await db.delete(approvals);
+      await db.delete(issueThreadInteractions);
+    }
   });
 
   it("labels connection-test executions as setup_test", async () => {
