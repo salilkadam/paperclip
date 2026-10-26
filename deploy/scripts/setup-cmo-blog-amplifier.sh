@@ -137,6 +137,8 @@ else cat <<NOURL
   Do not draft or schedule LinkedIn posts: comment "No public blog URL yet", mark the run done, and end.
 NOURL
 fi)
+- Ledger tag: exactly \`#linkedin\` WITH the leading \`#\` (internal, Ghost slug hash-linkedin). Never send
+  \`linkedin\` without the \`#\`: it becomes a public tag shown on the company website.
 - Company LinkedIn page: **$page**
 - Personal LinkedIn profile for the repost: **$PERSONAL_PROFILE** (the only personal profile you may post to)
 - Board Slack channel: \`$chan\`. Send the board note by following the company's **board-approval-notify** skill. If that skill is not available to you, post with your Slack tools, or create the "Slack board note" subtask for your manager (the CMO), whose bot (cmo-$site) posts it.
