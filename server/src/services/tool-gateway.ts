@@ -190,6 +190,13 @@ import {
   verifyToolArgumentsSignature,
 } from "./tool-content-guards.js";
 import { extendApprovedExecutionWaitDeadline } from "./approved-execution-wait.js";
+import {
+  cardSubjectLookupFor,
+  lookedUpObject,
+  sameUpstreamTool,
+  subjectPreviewMarkdown,
+  type CardSubject,
+} from "./approval-card-subjects.js";
 
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
@@ -2478,6 +2485,33 @@ export function createToolGatewayService(
     );
   }
 
+  // A plain-language subject for an approval card (approval-card-subjects.ts):
+  // the server looks up the object a gated call targets with a read-only tool on
+  // the same connection. Best effort and bounded (5 s); a failure never blocks the
+  // card, it is logged and the card says the lookup failed.
+  async function lookupApprovalCardSubject(
+    session: ToolGatewaySession,
+    tool: ToolGatewayDescriptor,
+    args: unknown,
+    invocationId: string,
+  ): Promise<{ subject: CardSubject | null; failure: string | null }> {
+    const lookup = cardSubjectLookupFor(tool.upstreamToolName, args);
+    if (!lookup || !tool.connectionId) return { subject: null, failure: null };
+    try {
+      const readTool = (await connectedMcpToolsForCompany(session.companyId)).find((candidate) =>
+        candidate.connectionId === tool.connectionId &&
+        candidate.risk === "read" &&
+        sameUpstreamTool(candidate.upstreamToolName, lookup.readTool));
+      if (!readTool) return { subject: null, failure: `no read-only ${lookup.readTool} tool on this connection` };
+      const execution = await executeRemoteHttpTool(session, readTool, lookup.readArguments, 5_000, invocationId);
+      const looked = lookedUpObject(execution.result);
+      const subject = looked ? lookup.describe(looked) : null;
+      return subject ? { subject, failure: null } : { subject: null, failure: `${lookup.readTool} returned nothing usable` };
+    } catch (error) {
+      return { subject: null, failure: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   async function requestApprovalForRecordedToolCall(input: {
     invocation: typeof toolInvocations.$inferSelect;
     actionRequest: typeof toolActionRequests.$inferSelect | null;
@@ -2625,12 +2659,24 @@ export function createToolGatewayService(
 
     // Prosumer-facing card preview (M5/M7/M9). Respect an already-set custom preview
     // (e.g. OpenClaw-supplied), otherwise emit plain language with no technical vocab.
+    const cardSubject = await lookupApprovalCardSubject(input.session, input.tool, input.parameters, input.invocation.id);
+    if (cardSubject.failure) {
+      logger.warn(
+        { tool: input.tool.name, actionRequestId: actionRequest.id, reason: cardSubject.failure },
+        "approval card: could not look up a plain-language subject; the card shows the arguments only",
+      );
+    }
+    const humanizedPreview = buildHumanizedActionPreview({
+      tool: input.tool,
+      argumentsSummary: input.argumentsSummary,
+    });
     const previewMarkdown =
       actionRequest.previewMarkdown?.trim() ||
-      buildHumanizedActionPreview({
-        tool: input.tool,
-        argumentsSummary: input.argumentsSummary,
-      });
+      (cardSubject.subject
+        ? subjectPreviewMarkdown(cardSubject.subject, humanizedPreview)
+        : cardSubject.failure
+          ? `${humanizedPreview}\n\nCould not look up what this targets; check the arguments in the details.`
+          : humanizedPreview);
 
     let formalApprovalId: string | null = null;
     if (toolRequiresFormalApproval(input.tool)) {
@@ -2641,8 +2687,12 @@ export function createToolGatewayService(
           type: "request_board_approval",
           requestedByAgentId: input.session.agentId,
           payload: {
-            title: `Approve high-risk tool action: ${input.tool.name}`,
-            summary: `${input.tool.name} is classified as ${input.tool.risk} and requires formal board approval before execution.`,
+            title: cardSubject.subject
+              ? `Approve: ${cardSubject.subject.headline}`
+              : `Approve high-risk tool action: ${input.tool.name}`,
+            summary: cardSubject.subject
+              ? `${cardSubject.subject.headline}. ${cardSubject.subject.lines.join(" · ")}. This is a ${input.tool.risk} action; approving runs the reviewed call exactly once.`
+              : `${input.tool.name} is classified as ${input.tool.risk} and requires formal board approval before execution.`,
             recommendedAction:
               "Approve only if the reviewed arguments match the intended operation.",
             risks: [
@@ -2682,7 +2732,9 @@ export function createToolGatewayService(
         continuationPolicy: "wake_assignee",
         payload: {
           version: 1,
-          prompt: `Approve ${input.tool.displayName?.trim() || input.tool.name}?`,
+          prompt: cardSubject.subject
+            ? `Approve: ${cardSubject.subject.headline}?`
+            : `Approve ${input.tool.displayName?.trim() || input.tool.name}?`,
           acceptLabel: "Approve action",
           rejectLabel: "Reject action",
           rejectRequiresReason: false,
