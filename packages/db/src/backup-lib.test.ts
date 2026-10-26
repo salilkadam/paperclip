@@ -82,8 +82,8 @@ describe("createBufferedTextFileWriter", () => {
 
 describe("splitLibpqPassword", () => {
   it("moves a password with an unescaped @ out of the URI and into PGPASSWORD", () => {
-    const split = splitLibpqPassword("postgresql://paperclip:p@ss!xK9m@db.example:5432/bionicorg");
-    expect(split.env.PGPASSWORD).toBe("p@ss!xK9m");
+    const split = splitLibpqPassword("postgresql://paperclip:p@ssw0rd!X@db.example:5432/bionicorg");
+    expect(split.env.PGPASSWORD).toBe("p@ssw0rd!X");
     expect(split.connectionString).toBe("postgresql://paperclip@db.example:5432/bionicorg");
   });
 
@@ -141,7 +141,7 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     // every hourly backup).
     const source = await createTempDatabase();
     const role = `at_pwd_fixture_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
-    const password = "p@ss!xK9m";
+    const password = "p@ssw0rd!X";
     const sourceSql = postgres(source, { max: 1, onnotice: () => {} });
     try {
       await sourceSql.unsafe(`
