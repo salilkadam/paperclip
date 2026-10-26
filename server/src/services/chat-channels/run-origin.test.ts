@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agents, chatActions, chatEndpoints, companies, createDb, heartbeatRuns, issueComments, issues, runIdentityContexts, toolApplications, toolConnections } from "@paperclipai/db";
+import { agents, chatActions, chatConversations, chatDeliveries, chatEndpoints, chatMessageLinks, companies, createDb, heartbeatRuns, issueComments, issues, runIdentityContexts, toolApplications, toolConnections } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
 import { boundRunIssueId, boundRunIssueIdSql } from "../run-task-binding.js";
 import { chatRunSourceMessageId } from "./run-origin.js";
@@ -178,6 +178,71 @@ const support = await getEmbeddedPostgresTestSupport();
     // A message beyond the boundary (a guest-originated chain carries one) still refuses.
     await db.update(runIdentityContexts).set({ messageId: randomUUID() }).where(eq(runIdentityContexts.id, f.originContext.id));
     await expect(githubGuestBotConnectionForSession(db, session)).rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_message" } });
+  });
+
+  // Guest and chat provenance as production stores it: an inbound chat comment is
+  // linked through chat_message_links; a GitHub guest's comment has no author
+  // (system comment) and reaches the run only as contextSnapshot.wakeCommentId.
+  async function inboundComment(f: Awaited<ReturnType<typeof derivedFixture>>, options: {
+    issueId: string; provider: "github" | "slack"; guest: boolean; agentId: string; authorUserId?: string;
+  }) {
+    const [application] = await db.insert(toolApplications).values({ companyId: f.company.id, name: `${options.provider}-${randomUUID()}`, type: "chat" }).returning();
+    const [connection] = await db.insert(toolConnections).values({ companyId: f.company.id, applicationId: application.id, uid: randomUUID(), name: options.provider, transport: "chat_sdk", connectionPurpose: "channel", enabled: true, status: "active" }).returning();
+    const [endpoint] = await db.insert(chatEndpoints).values({ companyId: f.company.id, connectionId: connection.id, provider: options.provider, publicId: randomUUID(), assignedAgentId: options.agentId, status: "active", providerAccountId: `T-${randomUUID()}`, botExternalId: `B-${randomUUID()}` }).returning();
+    const [conversation] = await db.insert(chatConversations).values({ companyId: f.company.id, endpointId: endpoint.id, issueId: options.issueId, externalConversationId: `${options.provider}:${randomUUID()}`, externalLabel: "thread" }).returning();
+    const [comment] = await db.insert(issueComments).values({
+      companyId: f.company.id, issueId: options.issueId, body: "please do this",
+      ...(options.authorUserId ? { authorType: "user", authorUserId: options.authorUserId } : { authorType: "system" }),
+    }).returning();
+    const [delivery] = await db.insert(chatDeliveries).values({
+      companyId: f.company.id, endpointId: endpoint.id, conversationId: conversation.id, providerEventId: randomUUID(), deduplicationKey: randomUUID(),
+      eventKind: "message", state: "processed", normalizedEvent: { githubAuthority: { guest: options.guest } },
+    }).returning();
+    await db.insert(chatMessageLinks).values({ companyId: f.company.id, endpointId: endpoint.id, conversationId: conversation.id, deliveryId: delivery.id, commentId: comment.id, providerMessageId: randomUUID(), direction: "inbound" });
+    return { endpoint, comment };
+  }
+
+  it("refuses a derived task whose origin run was woken by a GitHub guest", async () => {
+    const f = await derivedFixture();
+    const { comment } = await inboundComment(f, { issueId: f.originTask.id, provider: "github", guest: true, agentId: f.creator.id });
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentId: comment.id } }).where(eq(heartbeatRuns.id, f.originRun.id));
+    await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
+    await expect(githubGuestBotConnectionForSession(db, { companyId: f.company.id, agentId: f.assignee.id, runId: f.run.id, issueId: f.derivedTask.id }))
+      .rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
+  });
+
+  it("refuses a derived task whose origin carries an inbound chat message, even from the responsible user", async () => {
+    const f = await derivedFixture();
+    const { comment } = await inboundComment(f, { issueId: f.originTask.id, provider: "slack", guest: false, agentId: f.creator.id, authorUserId: "requester" });
+    await db.update(runIdentityContexts).set({ messageId: comment.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+    await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_message" } });
+  });
+
+  it.each(["message", "wake"])("allows a derived task whose origin has a direct board comment by the responsible user (%s)", async where => {
+    const f = await derivedFixture();
+    const [board] = await db.insert(issueComments).values({ companyId: f.company.id, issueId: f.originTask.id, authorType: "user", authorUserId: "requester", body: "Draft the post" }).returning();
+    if (where === "message") await db.update(runIdentityContexts).set({ messageId: board.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+    else await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentId: board.id } }).where(eq(heartbeatRuns.id, f.originRun.id));
+    expect(await chatRunSourceMessageId(db, f.run, slackOnly)).toBeNull();
+    // Another user's board comment is not the requester's instruction.
+    await db.update(issueComments).set({ authorUserId: "someone-else" }).where(eq(issueComments.id, board.id));
+    await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("keeps a GitHub guest session restricted to its bot connection, on its own task and on a derived task it comments on", async () => {
+    const f = await derivedFixture();
+    // A guest-woken run on its own task (no parent context).
+    const own = await inboundComment(f, { issueId: f.originTask.id, provider: "github", guest: true, agentId: f.creator.id });
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentId: own.comment.id } }).where(eq(heartbeatRuns.id, f.originRun.id));
+    await db.update(heartbeatRuns).set({ activeIdentityContextId: f.originContext.id }).where(eq(heartbeatRuns.id, f.originRun.id));
+    await expect(githubGuestBotConnectionForSession(db, { companyId: f.company.id, agentId: f.creator.id, runId: f.originRun.id, issueId: f.originTask.id }))
+      .resolves.toBe(own.endpoint.connectionId);
+    // A guest comments on the derived task itself; its chain beyond the boundary is clean.
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id } }).where(eq(heartbeatRuns.id, f.originRun.id));
+    const derived = await inboundComment(f, { issueId: f.derivedTask.id, provider: "github", guest: true, agentId: f.assignee.id });
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.derivedTask.id, wakeCommentId: derived.comment.id } }).where(eq(heartbeatRuns.id, f.run.id));
+    await expect(githubGuestBotConnectionForSession(db, { companyId: f.company.id, agentId: f.assignee.id, runId: f.run.id, issueId: f.derivedTask.id }))
+      .resolves.toBe(derived.endpoint.connectionId);
   });
 
   it("refuses a derived task whose origin task holds private Slack research", async () => {

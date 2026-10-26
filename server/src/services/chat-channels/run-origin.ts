@@ -26,12 +26,35 @@ type Context = typeof runIdentityContexts.$inferSelect;
 const MAX_FOREIGN_ORIGIN_CHAIN = 256;
 
 /**
+ * True only for a comment the run's responsible user wrote directly on the board:
+ * authored by that user and not an inbound chat message (Slack, GitHub, email...).
+ * Everything else counts as outside provenance: guest comments (stored as
+ * system comments with no author), other users, inbound chat messages, and
+ * comments that cannot be found.
+ */
+async function isDirectBoardComment(db: Db, run: Run, commentId: string) {
+  const [comment] = await db.select({ authorType: issueComments.authorType, authorUserId: issueComments.authorUserId })
+    .from(issueComments).where(and(eq(issueComments.id, commentId), eq(issueComments.companyId, run.companyId))).limit(1);
+  if (!comment || comment.authorType !== "user" || !run.responsibleUserId || comment.authorUserId !== run.responsibleUserId) return false;
+  const [inbound] = await db.select({ id: chatMessageLinks.id }).from(chatMessageLinks).where(and(
+    eq(chatMessageLinks.companyId, run.companyId), eq(chatMessageLinks.commentId, commentId), eq(chatMessageLinks.direction, "inbound"),
+  )).limit(1);
+  return !inbound;
+}
+
+/**
  * A task created by one agent run for another (or for another task) carries the
  * creating run's identity context as its parent. Crossing that boundary is safe
- * for Slack only when nothing in the remaining chain is chat provenance and no
- * task in it holds private Slack research: the per-task `slack_private_source`
- * boundary is never copied to derived tasks, so without this check a derived
- * task could publish what its origin task read. Every anomaly fails closed.
+ * only when nothing in the remaining chain came from outside the board and no
+ * task in it holds private Slack research.
+ *
+ * Outside provenance is checked on BOTH places it is stored: a context's
+ * messageId (linked users) and an ancestor run's wake comments (guests: their
+ * inbound comments have no author, so they never become a context messageId and
+ * survive only as wakeCommentId). Only direct board comments by the responsible
+ * user pass. The per-task `slack_private_source` boundary is never copied to
+ * derived tasks, so it is checked across the whole ancestry. Every anomaly fails
+ * closed.
  */
 async function assertForeignOriginCarriesNoChatSource(db: Db, run: Run, start: Context) {
   const seen = new Set<string>();
@@ -42,10 +65,14 @@ async function assertForeignOriginCarriesNoChatSource(db: Db, run: Run, start: C
     seen.add(context.id);
     if (context.companyId !== run.companyId || context.status !== "accepted" ||
         context.responsibleUserId !== run.responsibleUserId) throw forbidden("Chat requester provenance changed");
-    if (context.messageId) throw inheritanceRefused({
+    if (context.messageId && !(await isDirectBoardComment(db, run, context.messageId))) throw inheritanceRefused({
       code: "chat_provenance_foreign_message", runId: run.id, contextId: context.id, contextRunId: context.runId,
     });
-    const [contextRun] = await db.select({ issueId: boundRunIssueIdSql() }).from(heartbeatRuns).where(and(
+    const [contextRun] = await db.select({
+      issueId: boundRunIssueIdSql(),
+      wakeCommentId: sql<unknown>`${heartbeatRuns.contextSnapshot}->'wakeCommentId'`,
+      wakeCommentIds: sql<unknown>`${heartbeatRuns.contextSnapshot}->'wakeCommentIds'`,
+    }).from(heartbeatRuns).where(and(
       eq(heartbeatRuns.id, context.runId),
       eq(heartbeatRuns.companyId, run.companyId),
     )).limit(1);
@@ -53,6 +80,13 @@ async function assertForeignOriginCarriesNoChatSource(db: Db, run: Run, start: C
     // after its agent was removed) cannot be verified, so refuse, but say why.
     if (!contextRun) throw forbidden("Chat provenance could not be verified: an originating run is no longer available");
     if (typeof contextRun.issueId === "string") issueIds.add(contextRun.issueId);
+    const wakeComments = [contextRun.wakeCommentId, ...(Array.isArray(contextRun.wakeCommentIds) ? contextRun.wakeCommentIds : [])]
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    for (const commentId of wakeComments) {
+      if (!(await isDirectBoardComment(db, run, commentId))) throw inheritanceRefused({
+        code: "chat_provenance_foreign_wake", runId: run.id, contextId: context.id, contextRunId: context.runId,
+      });
+    }
     if (!context.parentContextId) break;
     [context] = await db.select().from(runIdentityContexts).where(and(
       eq(runIdentityContexts.id, context.parentContextId),
