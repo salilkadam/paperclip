@@ -107,6 +107,12 @@ spec:
                   '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))
             initialDelaySeconds: 5
             periodSeconds: 10
+            # The probe pays full node cold-start (V8 boot) inside the
+            # probe budget. The 1s Kubernetes default is not enough when
+            # the container is under CPU load: 78 readiness timeouts in
+            # three days, all self-recovered. That is slow, not dead (same
+            # lesson bionic-org probes already record).
+            timeoutSeconds: 5
           livenessProbe:
             exec:
               command:
@@ -117,6 +123,7 @@ spec:
                   '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))
             initialDelaySeconds: 30
             periodSeconds: 20
+            timeoutSeconds: 5
           {{- if .Values.gpuai.enabled }}
           env:
             # GPU-AI gateway key for the dsh llm-pi-ai gpuai provider
