@@ -148,6 +148,26 @@ const support = await getEmbeddedPostgresTestSupport();
     await expect(chatRunSourceMessageId(db, f.run, { provider: "github", allowLegacyWakeComment: true })).rejects.toMatchObject({ status: 403 });
   });
 
+  it("says which inheritance check refused and on which run and contexts", async () => {
+    const f = await derivedFixture();
+    await expect(chatRunSourceMessageId(db, f.run)).rejects.toMatchObject({
+      status: 403,
+      details: {
+        code: "chat_provenance_foreign_origin", runId: f.run.id, parentContextId: f.originContext.id,
+        parentRunId: f.originRun.id, parentRunFound: true, parentRunAgentId: f.creator.id,
+        parentRunIssueId: f.originTask.id, boundIssueId: f.derivedTask.id, foreignOriginAllowed: false,
+      },
+    });
+    // Ids and booleans only: the exact key sets keep message content and user ids out.
+    const keys = async (call: Promise<unknown>) => call.then(() => [], (e: { details?: object }) => Object.keys(e.details ?? {}).sort());
+    expect(await keys(chatRunSourceMessageId(db, f.run))).toEqual(["agentId", "boundIssueId", "code", "foreignOriginAllowed", "originContextId", "parentContextId", "parentRunAgentId", "parentRunFound", "parentRunId", "parentRunIssueId", "runId"]);
+    await db.update(runIdentityContexts).set({ messageId: randomUUID() }).where(eq(runIdentityContexts.id, f.originContext.id));
+    await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({
+      status: 403, details: { code: "chat_provenance_foreign_message", contextId: f.originContext.id, contextRunId: f.originRun.id },
+    });
+    expect(await keys(chatRunSourceMessageId(db, f.run, slackOnly))).toEqual(["code", "contextId", "contextRunId", "runId"]);
+  });
+
   it("refuses a derived task whose origin task holds private Slack research", async () => {
     const f = await derivedFixture();
     const [application] = await db.insert(toolApplications).values({ companyId: f.company.id, name: "Slack", type: "chat" }).returning();
