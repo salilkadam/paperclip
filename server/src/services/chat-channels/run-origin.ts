@@ -3,6 +3,20 @@ import { chatActions, chatConversations, chatEndpoints, chatMessageLinks, heartb
 import type { ChatProvider } from "@paperclipai/shared";
 import { forbidden } from "../../errors.js";
 import { boundRunIssueId, boundRunIssueIdSql } from "../run-task-binding.js";
+import { logger } from "../../middleware/logger.js";
+
+/**
+ * Refuse with enough detail to tell which provenance check failed. These refusals
+ * reach agents as "cannot be inherited" with no other context, and the same text
+ * comes from two different checks; without the code and ids a production refusal
+ * cannot be diagnosed (REL-3060). Ids and booleans only, never message content.
+ */
+function inheritanceRefused(details: Record<string, unknown>) {
+  // Expected policy outcome for callers that did not opt in (GitHub): info, not warn.
+  const level = details.foreignOriginAllowed === false ? "info" : "warn";
+  logger[level]({ provenanceRefusal: details }, "chat provenance refused inheritance");
+  return forbidden("Chat tools cannot be inherited by another task", details);
+}
 
 type Run = Pick<typeof heartbeatRuns.$inferSelect,
   "id" | "companyId" | "agentId" | "responsibleUserId" | "activeIdentityContextId" | "nativeIssueId" | "issueId" | "contextSnapshot">;
@@ -28,7 +42,9 @@ async function assertForeignOriginCarriesNoChatSource(db: Db, run: Run, start: C
     seen.add(context.id);
     if (context.companyId !== run.companyId || context.status !== "accepted" ||
         context.responsibleUserId !== run.responsibleUserId) throw forbidden("Chat requester provenance changed");
-    if (context.messageId) throw forbidden("Chat tools cannot be inherited by another task");
+    if (context.messageId) throw inheritanceRefused({
+      code: "chat_provenance_foreign_message", runId: run.id, contextId: context.id, contextRunId: context.runId,
+    });
     const [contextRun] = await db.select({ issueId: boundRunIssueIdSql() }).from(heartbeatRuns).where(and(
       eq(heartbeatRuns.id, context.runId),
       eq(heartbeatRuns.companyId, run.companyId),
@@ -136,7 +152,19 @@ export async function chatRunSourceMessageId(db: Db, run: Run, options: {
         await assertForeignOriginCarriesNoChatSource(db, run, parent);
         return legacyMessageId;
       }
-      throw forbidden("Chat tools cannot be inherited by another task");
+      throw inheritanceRefused({
+        code: "chat_provenance_foreign_origin",
+        runId: run.id,
+        agentId: run.agentId,
+        boundIssueId: boundRunIssueId(run),
+        originContextId: origin.id,
+        parentContextId: parent.id,
+        parentRunId: parent.runId,
+        parentRunFound: Boolean(sourceRun),
+        parentRunAgentId: sourceRun?.agentId ?? null,
+        parentRunIssueId: sourceRun?.issueId ?? null,
+        foreignOriginAllowed: Boolean(options.allowForeignOriginWithoutChatSource),
+      });
     }
     if (options.allowLegacyWakeComment && sourceRun.responsibleUserId === run.responsibleUserId &&
         typeof sourceRun.wakeCommentId === "string") legacyMessageId ??= sourceRun.wakeCommentId;
