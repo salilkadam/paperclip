@@ -59,7 +59,7 @@ async function isDirectBoardComment(db: Db, run: Run, commentId: string, issueId
  * survive only as wakeCommentId). Only direct board comments by the responsible
  * user pass. This covers wake-linked chains: a run started without wake metadata
  * (a manual wake) that read outside content from the thread is not detected here
- * (accepted risk, see PR #33's disposition). The per-task `slack_private_source` boundary is never copied to
+ * (accepted risk, recorded with the PR that added this check). The per-task `slack_private_source` boundary is never copied to
  * derived tasks, so it is checked across the whole ancestry. Every anomaly fails
  * closed.
  */
