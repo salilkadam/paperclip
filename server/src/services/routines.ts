@@ -3000,6 +3000,7 @@ export function routineService(
         if (!routine) throw notFound("Routine not found");
         if (routine.status === "archived") throw conflict("Routine is archived");
         if (!trigger.enabled || (!trigger.setupPending && routine.status !== "active")) throw conflict("Routine trigger is not active");
+        let rejectReason: string | null = null;
         const recordDelivery = async (status: "received" | "rejected") => {
           const receivedAt = new Date().toISOString();
           await txDb.update(routineTriggers).set({ lastWebhookDelivery: { status, receivedAt, test: trigger.setupPending } }).where(eq(routineTriggers.id, trigger.id));
@@ -3007,7 +3008,8 @@ export function routineService(
             companyId: routine.companyId, actorType: "system", actorId: "routine-webhook",
             action: trigger.setupPending ? `routine.webhook_test_${status}` : `routine.webhook_${status}`,
             entityType: "routine", entityId: routine.id,
-            details: { triggerId: trigger.id, test: trigger.setupPending, result: status === "received" ? "passed" : "rejected" },
+            details: { triggerId: trigger.id, test: trigger.setupPending, result: status === "received" ? "passed" : "rejected",
+              ...(status === "rejected" && rejectReason ? { reason: rejectReason } : {}) },
           });
         };
         let hmacReplayKey: string | null = null;
@@ -3053,23 +3055,28 @@ export function routineService(
             // HMAC-SHA256 (keyed with the secret entered in Ghost's webhook form)
             // covers the exact request body followed by the timestamp. Same replay
             // window and replay key as hmac_sha256.
+            // The caller only ever sees 401; the reason is kept for the activity log
+            // so a legitimate Ghost that cannot get through is diagnosable.
+            const reject = (reason: string): never => { rejectReason = `ghost_hmac:${reason}`; throw unauthorized(); };
             const secretValue = await resolveTriggerSecret(trigger, routine.companyId);
-            if (!input.rawBody) throw unauthorized();
+            if (!input.rawBody || input.rawBody.length === 0) reject("empty_body");
+            const rawBody = input.rawBody!;
             const header = input.ghostSignatureHeader?.trim() ?? "";
+            if (!header) reject("missing_signature");
             const parts = new Map(header.split(",").map((part) => {
               const at = part.indexOf("=");
               return [part.slice(0, at).trim().toLowerCase(), part.slice(at + 1).trim()] as const;
             }));
             const providedSignature = parts.get("sha256") ?? "";
             const providedTimestamp = parts.get("t") ?? "";
-            if (!/^[0-9a-f]{64}$/i.test(providedSignature) || !/^\d{10,16}$/.test(providedTimestamp)) throw unauthorized();
-            const tsMillis = normalizeWebhookTimestampMs(providedTimestamp);
-            if (tsMillis == null) throw unauthorized();
+            // Ghost sends t = Date.now(): exactly 13 digits (milliseconds).
+            if (!/^[0-9a-f]{64}$/i.test(providedSignature) || !/^\d{13}$/.test(providedTimestamp)) reject("malformed_signature");
+            const tsMillis = Number(providedTimestamp);
             const replayWindowSec = trigger.replayWindowSec ?? 300;
-            if (Math.abs(Date.now() - tsMillis) > replayWindowSec * 1000) throw unauthorized();
+            if (Math.abs(Date.now() - tsMillis) > replayWindowSec * 1000) reject("timestamp_outside_window");
             const expectedHmac = crypto
               .createHmac("sha256", secretValue)
-              .update(input.rawBody)
+              .update(rawBody)
               .update(providedTimestamp)
               .digest("hex");
             const providedBuf = Buffer.from(providedSignature.toLowerCase());
@@ -3077,7 +3084,7 @@ export function routineService(
             const valid =
               providedBuf.length === expectedBuf.length &&
               crypto.timingSafeEqual(providedBuf, expectedBuf);
-            if (!valid) throw unauthorized();
+            if (!valid) reject("signature_mismatch");
             hmacReplayKey = `webhook-ghost:${crypto
               .createHash("sha256")
               .update(`${trigger.id}:${providedTimestamp}:${expectedHmac}`)

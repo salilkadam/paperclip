@@ -2594,8 +2594,9 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
   });
 
   describe("ghost_hmac signing mode (Ghost webhooks)", () => {
-    // Exactly how Ghost signs (core webhook trigger): HMAC-SHA256 over the JSON
-    // body string followed by Date.now(), sent as "sha256=<hex>, t=<ms>".
+    // Exactly how Ghost signs: Ghost 6.71.0 core/server/services/webhooks/webhook-trigger.js
+    //   const reqPayload = JSON.stringify(hookPayload); const ts = Date.now();
+    //   headers['X-Ghost-Signature'] = `sha256=${crypto.createHmac('sha256', secret).update(`${reqPayload}${ts}`).digest('hex')}, t=${ts}`;
     const ghostSign = (secret: string, body: string, ts: number) =>
       `sha256=${createHmac("sha256", secret).update(`${body}${ts}`).digest("hex")}, t=${ts}`;
     const ghostPayload = { post: { current: { id: "6ade96de", status: "draft", title: "New draft" } } };
@@ -2627,12 +2628,22 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
         ["malformed header", { ghostSignatureHeader: "sha256=abc", rawBody: Buffer.from(body) }],
         ["no raw body", { ghostSignatureHeader: ghostSign(secret, body, now), payload: ghostPayload }],
         ["github-style header only", { hubSignatureHeader: `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`, rawBody: Buffer.from(body) }],
+        ["seconds timestamp", { ghostSignatureHeader: ghostSign(secret, body, Math.floor(now / 1000)), rawBody: Buffer.from(body) }],
+        ["empty body", { ghostSignatureHeader: ghostSign(secret, "", now), rawBody: Buffer.alloc(0) }],
       ];
       for (const [label, request] of attempts) {
-        await expect(svc.firePublicTrigger(trigger.publicId!, { payload: ghostPayload, ...request }), label).rejects.toThrow();
+        await expect(svc.firePublicTrigger(trigger.publicId!, { payload: ghostPayload, ...request }), label).rejects.toMatchObject({ status: 401 });
       }
       const runs = await db.select({ id: routineRuns.id }).from(routineRuns).where(eq(routineRuns.triggerId, trigger.id));
       expect(runs).toHaveLength(0);
+      // each rejection is visible, with its reason, on the activity log
+      const reasons = (await db.select({ action: activityLog.action, details: activityLog.details }).from(activityLog))
+        .filter((row) => row.action === "routine.webhook_rejected")
+        .map((row) => (row.details as { reason?: string } | null)?.reason);
+      expect(reasons).toEqual(expect.arrayContaining([
+        "ghost_hmac:signature_mismatch", "ghost_hmac:timestamp_outside_window", "ghost_hmac:missing_signature",
+        "ghost_hmac:malformed_signature", "ghost_hmac:empty_body",
+      ]));
     });
   });
 
