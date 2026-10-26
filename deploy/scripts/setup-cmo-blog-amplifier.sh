@@ -32,13 +32,15 @@ API="${PAPERCLIP_API_BASE:-https://org.baisoln.com}"
 PERSONAL_PROFILE="${PERSONAL_LINKEDIN_PROFILE:-Salil Kadam}"
 ROUTINE_TITLE="Daily blog -> LinkedIn"
 CRON="0 8 * * *"; TZ_NAME="America/Los_Angeles"
-# site|company name|PUBLIC blog base URL|LinkedIn page display name|board Slack channel
+# site|company name|PUBLIC blog base URL|LinkedIn page display name|board Slack channel|daily routine on/off
 # The public base URL is the company website's blog (the site renders published
 # Ghost posts at <base>/<slug>), never the Ghost host blog-*.baisoln.com, which
 # is intranet-only. Empty = no public blog yet: the routine stops before drafting.
+# "off": the company runs a different calendar (Reliora: setup-reliora-content-calendar.sh),
+# so this script keeps its "Daily blog -> LinkedIn" routine PAUSED instead of re-activating it.
 SITES=(
-  "bionic|Bionic AI Solutions||Bionic AI Solutions|#bionic-board"
-  "reliora|Reliora Inc|https://reliora.ai/blog|Reliora Inc|#reliora-board"
+  "bionic|Bionic AI Solutions||Bionic AI Solutions|#bionic-board|on"
+  "reliora|Reliora Inc|https://reliora.ai/blog|Reliora Inc|#reliora-board|off"
 )
 C_LEVEL_NAMES=(CMO COO CLO)
 MARKETER_SKILLS=(paperclipai/paperclip/blog-linkedin-amplifier paperclipai/paperclip/trypost)
@@ -75,7 +77,8 @@ write() { if (( DRY )); then log "  DRY-RUN would $1 $2"; echo '{}'; else api "$
 companies="$(api GET /companies)"
 
 for entry in "${SITES[@]}"; do
-  IFS='|' read -r site cname blog_url page board_chan <<<"$entry"
+  IFS='|' read -r site cname blog_url page board_chan daily <<<"$entry"
+  rstatus=active; [[ "$daily" == off ]] && rstatus=paused
   log "== $cname ($site)"
   cid="$(jq -r --arg n "$cname" '[.[] | select(.name == $n and .status == "active")] | if length == 1 then .[0].id else "" end' <<<"$companies")"
   [[ -n "$cid" ]] || die "expected exactly one active company named '$cname'"
@@ -150,8 +153,8 @@ EOF
 )"
   routines="$(api GET "/companies/$cid/routines")"
   rid="$(jq -r --arg t "$ROUTINE_TITLE" '[.[] | select(.title == $t and .status != "archived")] | .[0].id // ""' <<<"$routines")"
-  jq -n --arg t "$ROUTINE_TITLE" --arg d "$desc" --arg a "$marketer" --arg p "$pid" '{title: $t, description: $d,
-    assigneeAgentId: $a, projectId: $p, priority: "medium", status: "active",
+  jq -n --arg t "$ROUTINE_TITLE" --arg d "$desc" --arg a "$marketer" --arg p "$pid" --arg s "$rstatus" '{title: $t, description: $d,
+    assigneeAgentId: $a, projectId: $p, priority: "medium", status: $s,
     concurrencyPolicy: "skip_if_active", catchUpPolicy: "skip_missed"}' > "$WORK/r.json"
   if [[ -z "$rid" ]]; then
     rid="$(write POST "/companies/$cid/routines" "$WORK/r.json" | jq -r '.id // "DRY-RUN"')"
@@ -175,12 +178,12 @@ EOF
     # 5. read back and compare
     if (( ! DRY )); then
       detail="$(api GET "/routines/$rid")"
-      jq -e --arg a "$marketer" --arg p "$pid" --arg c "$CRON" --arg z "$TZ_NAME" '
-        .assigneeAgentId == $a and .projectId == $p and .status == "active"
+      jq -e --arg a "$marketer" --arg p "$pid" --arg c "$CRON" --arg z "$TZ_NAME" --arg s "$rstatus" '
+        .assigneeAgentId == $a and .projectId == $p and .status == $s
         and .concurrencyPolicy == "skip_if_active"
         and ([.triggers[] | select(.kind == "schedule" and .enabled and .cronExpression == $c and .timezone == $z)] | length == 1)' \
         <<<"$detail" >/dev/null || die "$cname: routine read-back does not match: $(jq -c '{assigneeAgentId, projectId, status, concurrencyPolicy, triggers: [.triggers[] | {kind, enabled, cronExpression, timezone, nextRunAt}]}' <<<"$detail")"
-      log "  verified; next run $(jq -r '[.triggers[] | select(.kind == "schedule")][0].nextRunAt' <<<"$detail")"
+      log "  verified ($rstatus); next run $(jq -r '[.triggers[] | select(.kind == "schedule")][0].nextRunAt' <<<"$detail")"
     fi
   fi
 done
