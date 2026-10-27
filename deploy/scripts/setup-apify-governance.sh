@@ -145,12 +145,19 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
                             or ((.config.url // .transportConfig.url // .url // "")|test("mcp\\.apify\\.com")))]')"
   n="$(jq length <<<"$conns")"
   if [[ "$n" -eq 0 ]]; then log "$cname: no active Apify connection, skipped"; continue; fi
-  agent="$(api GET "/companies/$cid/agents" | jq -r '[.[] | select(.status=="idle" or .status=="active" or .status=="running")][0].id // empty')"
-  [[ -n "$agent" ]] || die "$cname has an Apify connection but no agent to prove the gate with"
+  agents="$(api GET "/companies/$cid/agents" | jq -c '[.[] | select(.status=="idle" or .status=="active" or .status=="running") | .id]')"
   existing="$(api GET "/companies/$cid/tools/policies" | jq '(.policies // .)')"
 
   for conn in $(jq -r '.[].id' <<<"$conns"); do
     log "$cname: Apify connection $conn"
+    # Prove the gate as an agent that can actually use this connection: an agent
+    # without access gets "off" for every tool, which would prove nothing.
+    agent="$(api GET "/tool-connections/$conn/installs" | jq -r --argjson live "$agents" \
+      '[(.installs // [])[] | select(.targetType=="agent") | .targetId | select(. as $a | $live | index($a))][0] // empty')"
+    if [[ -z "$agent" ]] && api GET "/tool-connections/$conn/installs" | jq -e '(.installs // []) | any(.targetType=="company")' >/dev/null; then
+      agent="$(jq -r '.[0] // empty' <<<"$agents")"
+    fi
+    [[ -n "$agent" ]] || die "$cname: no active agent has access to Apify connection $conn to prove the gate with"
     actors="$(actor_tools "$(api GET "/tool-connections/$conn/catalog")")"
     log "  catalog ok: $(jq length <<<"$actors") pinned actor tools, nothing outside the allowlist"
     desired_policies "$conn" "$actors" | jq -c '.[]' | while read -r want; do
