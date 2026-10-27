@@ -203,7 +203,11 @@ jq -n --argjson k "$(printf '%s\n' "${MARKETER_SKILLS[@]}" | jq -R . | jq -s .)"
 skills="$(write POST "/agents/$marketer/skills/sync" "$WORK/s.json")"
 if (( ! DRY )); then
   for k in "${MARKETER_SKILLS[@]}"; do
-    jq -e --arg k "$k" '[.entries[]? | select(.key == $k and .desired and (.state == "installed" or .state == "configured" or .state == "available"))] | length == 1' <<<"$skills" >/dev/null \
+    # para-memory-files is a core skill the runtime may already carry ("external": the name is taken by
+    # that installation, which is the same skill); for the routine skills, "external" would mean a stale
+    # copy shadows them, so it fails.
+    jq -e --arg k "$k" '[.entries[]? | select(.key == $k and .desired and (.state == "installed" or .state == "configured" or .state == "available"
+        or (.state == "external" and $k == "paperclipai/paperclip/para-memory-files")))] | length == 1' <<<"$skills" >/dev/null \
       || die "marketer skill $k is not desired and resolved after sync (is the server image new enough to bundle it?): $(jq -c --arg k "$k" '[.entries[]? | select(.key == $k)]' <<<"$skills")"
   done
   log "  marketer skills: ${MARKETER_SKILLS[*]} desired"
