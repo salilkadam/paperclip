@@ -125,8 +125,9 @@ to this task: that is expected. Request each once, never retry. The board approv
    Days already promised to drafts tagged `#calendar` count as taken (see the task that requested them).
    Check the date you chose against the list once more: if it is in the list, take the next free one.
 3. Request it: `gh_publish_post` with `tenant_id: "reliora"`, `post_id` and `published_at` (ISO 8601 with the
-   offset for THAT date: `-07:00` while US daylight time applies, `-08:00` from the first Sunday of November
-   to the second Sunday of March; e.g. `2026-10-27T08:00:00-07:00`, `2026-11-22T08:00:00-08:00`).
+   offset for THAT date: `-08:00` from the first Sunday of November until the second Sunday of March (that
+   Sunday's 08:00 is already `-07:00`), `-07:00` the rest of the year; e.g. `2026-11-03T08:00:00-08:00`,
+   `2027-03-14T08:00:00-07:00`).
    The approved call schedules it; it appears on reliora.ai at that time.
 4. Tag the draft `#calendar` right away (`gh_update_post`, tags = existing + `#calendar`, with the `#`), so no
    other run requests it again. If the board rejects the schedule, remove `#calendar` so it can be retried.

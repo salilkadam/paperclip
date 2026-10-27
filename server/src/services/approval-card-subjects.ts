@@ -2,7 +2,7 @@
 //
 // A gated tool call names its target by an opaque id (a Ghost post_id, a TryPost
 // post_id). The board decides from the card, so for actions on a known kind of
-// object the server looks the object up itself — with a read-only tool on the
+// object the server looks the object up itself — with a fixed read tool on the
 // same connection — and states what is being approved in plain words:
 //   Schedule blog "Pods running, site hanging" for Tue 3 Nov 2026, 08:00 (UTC-08:00)
 // The looked-up fields (a post's title, an account name, a first line) can still
@@ -15,7 +15,7 @@
 export type CardSubject = { headline: string; lines: string[] };
 
 export type CardSubjectLookup = {
-  /** Upstream name of the read-only tool to call on the same connection. */
+  /** Upstream name of the read tool to call on the same connection (fixed here, never caller-chosen). */
   readTool: string;
   readArguments: Record<string, unknown>;
   describe: (looked: Record<string, unknown>, now?: number) => CardSubject | null;

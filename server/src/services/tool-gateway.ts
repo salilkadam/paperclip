@@ -2490,8 +2490,8 @@ export function createToolGatewayService(
   }
 
   // A plain-language subject for an approval card (approval-card-subjects.ts):
-  // the server looks up the object a gated call targets with a read-only tool on
-  // the same connection. The lookup is held to the same rules as the agent's own
+  // the server looks up the object a gated call targets with a fixed read tool on
+  // the same connection (named by the lookup table, whatever risk the catalog gives it). The lookup is held to the same rules as the agent's own
   // calls: its tool policy must allow the read, and the read is recorded as its
   // own invocation (audit, and no side effects on the gated call). Best effort
   // and bounded: 5 s for the whole lookup; a failure never blocks the card, it is
@@ -2512,7 +2512,11 @@ export function createToolGatewayService(
         candidate.connectionId === tool.connectionId &&
         sameUpstreamTool(candidate.upstreamToolName, lookup.readTool));
       if (!readTool) return { subject: null, failure: `no ${lookup.readTool} tool on this connection` };
-      const decisionInput = policyInputForTool({ session, tool: readTool, parameters: lookup.readArguments, consumeRateLimit: false });
+      // Its own idempotency key: the read tool may be catalogued "write", and the default side-effect key
+      // would then collide with the agent's identical read in the same run (which would come back
+      // "replayed" with no result).
+      const decisionInput = policyInputForTool({ session, tool: readTool, parameters: lookup.readArguments, consumeRateLimit: false,
+        idempotencyKey: `card-subject:${randomUUID()}` });
       const decision = await policyService.decide(decisionInput);
       if (!decision.allowed) {
         return { subject: null, failure: `the agent's tool policy does not allow ${lookup.readTool} (${decision.reasonCode})` };

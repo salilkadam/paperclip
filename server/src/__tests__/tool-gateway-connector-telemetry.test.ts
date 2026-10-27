@@ -600,6 +600,24 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
       const gated = invocationRows.find((row) => row.toolName === del.name)!;
       expect(gated.status).toBe("awaiting_approval");
 
+      // the lookup never shares an idempotency key with the agent's own identical read (the read tool is
+      // catalogued "write", so the default side-effect key would collide): after the card, the agent's
+      // read of the same post runs upstream and returns its result, not a "replayed" null...
+      const getTool = (await gateway.listToolsForSession(session.token)).find((tool) => tool.upstreamToolName === "gh_get_post")!;
+      reads.length = 0;
+      const agentRead = await gateway.executeTool({ sessionToken: session.token, tool: getTool.name, parameters: { tenant_id: "reliora", post_id: "6adf5e0c" } });
+      expect(agentRead).not.toMatchObject({ status: "replayed" });
+      expect(reads).toHaveLength(1);
+      // ...and when the agent reads first, the card's lookup still runs as its own invocation
+      await gateway.executeTool({ sessionToken: session.token, tool: getTool.name, parameters: { tenant_id: "reliora", post_id: "6adf5e0f" } });
+      const readRowsBefore = (await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, company.id)))
+        .filter((row) => row.toolName === getTool.name).length;
+      await requestDelete("6adf5e0f");
+      const readRowsAfter = (await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, company.id)))
+        .filter((row) => row.toolName === getTool.name).length;
+      expect(readRowsAfter).toBe(readRowsBefore + 1);
+      expect(reads).toHaveLength(3);
+
       // a failed lookup never blocks the card: it falls back and says so
       lookupTitle = null;
       await requestDelete("6adf5e0d");
