@@ -90,7 +90,10 @@ probe() {
   fi
   [[ "$decision" == "$want" ]] || die "probe '$label' on connection $conn: expected $want, got $decision: $(head -c 300 <<<"$resp")"
   if [[ "$want" == allowed ]]; then
-    jq -e '.error != null and .result == null' <<<"$resp" >/dev/null \
+    # failed upstream = a gateway error, or a tool result whose JSON says success:false
+    # (the Ghost server answers an unknown site with 403 TenantAccessDenied as a result)
+    jq -e '(.error != null and .result == null)
+           or ((.result.content // "") | (if type == "string" then (fromjson? // {}) else {} end) | .success == false)' <<<"$resp" >/dev/null \
       || die "probe '$label' on connection $conn ran upstream and did NOT fail: a real post may exist; delete it: $(head -c 400 <<<"$resp")"
   fi
   log "  probe ok: $label -> $decision"
