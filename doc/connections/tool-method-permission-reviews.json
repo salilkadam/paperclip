@@ -2917,6 +2917,25 @@
       "evidenceLimit": "Provider docs and public OAuth metadata name 83 tools, mark publish/approve/reject/delete/rotate as destructive, and gate admin and publish-directly tools per workspace role. Only the single mcp:use scope exists, so it cannot narrow a connection to read-only.",
       "reviewedAt": "2026-10-16",
       "liveProof": "not-run"
+    },
+    {
+      "app": "apify",
+      "method": "mcp-api-key",
+      "auth": "api_key",
+      "policy": "provider-key",
+      "requestedScopes": [],
+      "capability": "write",
+      "supportedActions": "Run the 15 pinned social-reading actors (LinkedIn, X, Instagram, Threads, TikTok, Facebook, YouTube posts, comments, engagers and profile/channel stats) and read their results with get-actor-run, get-dataset-items, get-key-value-store-record and abort-actor-run. Every actor run bills the company's Apify account per result. search-actors, call-actor and all other actors are not exposed.",
+      "evidence": [
+        "https://docs.apify.com/platform/integrations/mcp",
+        "https://docs.apify.com/platform/integrations/api",
+        "https://mcp.apify.com",
+        "https://github.com/apify/apify-mcp-server"
+      ],
+      "evidenceLimit": "Apify's MCP docs state that a ?tools= list of actor names exposes only those actors plus get-actor-run, get-dataset-items, get-key-value-store-record and abort-actor-run, and that the token goes in an Authorization: Bearer header. An unauthenticated tools/list POST to the pinned URL returned HTTP 401 invalid_token on 2026-10-27, confirming that the endpoint requires the token. No live tools/list or actor run was made with a real token, so the exposed tool names and per-result billing are documented, not observed. Risk tier S3, not FIRST-30 row 20's S2: each run spends money on the company's account, the actors collect third-party personal data (profiles, commenters, engagers), and an unscoped token can read any dataset or key-value store and abort any run in the account by ID. The actor allowlist limits which actors run, not spend or data reach. The server source confirms that actor-only selectors load no tool categories (tools_loader.ts) and gives the exact tool-name rule (actor_tool_naming.ts: 64-char cap, 4-hex sha256 suffix). deploy/scripts/setup-apify-governance.sh checks the synced catalog against that exact allowlist, blocks abort-actor-run, get-key-value-store-record and every other server tool by name, and rate-limits actor runs per company and connection (default 60/day). Accepted risk: get-actor-run and get-dataset-items accept any id the token can reach; recommend a scoped token.",
+      "reviewedAt": "2026-10-27",
+      "liveProof": "not-run",
+      "keyPermissions": "Create a token under Console → Settings → API & Integrations. A standard token acts for the whole Apify account. You can turn on Limit token permissions to scope it to running these actors and reading the storage their runs create; a scoped token was not tested with the MCP server. Every run bills the account per result."
     }
   ]
 }

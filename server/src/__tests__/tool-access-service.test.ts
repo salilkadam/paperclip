@@ -5379,6 +5379,7 @@ describeEmbeddedPostgres("tool access service", () => {
         "tavily",
         "windsor-ai",
         "trypost",
+        "apify",
       ]),
     );
     for (const slug of ["openrouter", "bedrock", "responses-api", "messages-api", "chat-completions-api", "local"]) {
@@ -19713,7 +19714,7 @@ describeEmbeddedPostgres("tool access service", () => {
           transport: "mcp_remote",
           status: "draft",
           config: { url: "https://mcp.example/github" },
-          warnings: [expect.stringContaining("Paperclip secret")],
+          warnings: [expect.stringContaining("Bionic secret")],
         }),
         expect.objectContaining({
           name: "local",
@@ -19723,7 +19724,7 @@ describeEmbeddedPostgres("tool access service", () => {
             importedCommand: "npx",
             importedArgs: ["-y", "@example/local-mcp"],
           },
-          warnings: [expect.stringContaining("approved Paperclip template")],
+          warnings: [expect.stringContaining("approved Bionic template")],
         }),
       ]),
     );

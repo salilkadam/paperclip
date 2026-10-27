@@ -714,6 +714,14 @@
       "provider": "TryPost",
       "catalogVisible": true,
       "localAsset": "/brands/apps/trypost.png"
+    },
+    {
+      "slug": "apify",
+      "provider": "Apify",
+      "catalogVisible": true,
+      "localAsset": "/brands/apps/apify.svg",
+      "sourceUrl": "https://apify.com/img/apify-logo/apify-symbol-200x200.svg",
+      "retrievedAt": "2026-10-27"
     }
   ]
 }
