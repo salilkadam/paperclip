@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "packageName": "@paperclipai/teams-catalog",
   "packageVersion": "0.1.0",
-  "generatedAt": "2026-10-08T10:35:56.448Z",
+  "generatedAt": "2026-10-27T01:53:54.432Z",
   "teams": [
     {
       "id": "paperclipai:bundled:company-defaults:core-exec-team",
@@ -534,6 +534,791 @@
       "trustLevel": "markdown_only",
       "compatibility": "compatible",
       "contentHash": "sha256:06822cec5f2b6910cb37ba0ebd5e04ed5c7e34f77225564ddddc2470779cdaa6"
+    },
+    {
+      "id": "paperclipai:optional:content:social-content-studio",
+      "key": "paperclipai/optional/content/social-content-studio",
+      "kind": "optional",
+      "category": "content",
+      "slug": "social-content-studio",
+      "name": "Social Content Studio",
+      "description": "A Content Marketer agent with the per-channel social skill packs (LinkedIn, X, Instagram, YouTube, Threads, TikTok, Facebook), a social content project, and a recurring planning routine. Publishes only through TryPost with board approval.",
+      "path": "catalog/optional/content/social-content-studio",
+      "entrypoint": "TEAM.md",
+      "schema": "agentcompanies/v1",
+      "defaultInstall": false,
+      "recommendedForCompanyTypes": [
+        "agency",
+        "marketing",
+        "startup"
+      ],
+      "tags": [
+        "content",
+        "marketing",
+        "social-media",
+        "routines"
+      ],
+      "counts": {
+        "agents": 1,
+        "projects": 1,
+        "tasks": 0,
+        "routines": 1,
+        "localSkills": 0,
+        "catalogSkills": 71,
+        "externalSkillSources": 0
+      },
+      "rootAgentSlugs": [
+        "content-marketer"
+      ],
+      "agentSlugs": [
+        "content-marketer"
+      ],
+      "projectSlugs": [
+        "social-content"
+      ],
+      "requiredSkills": [
+        {
+          "type": "catalog",
+          "ref": "facebook-marketing",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:facebook-marketing",
+          "catalogSkillKey": "paperclipai/optional/facebook/facebook-marketing"
+        },
+        {
+          "type": "catalog",
+          "ref": "fb-audience-insights",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:fb-audience-insights",
+          "catalogSkillKey": "paperclipai/optional/facebook/fb-audience-insights"
+        },
+        {
+          "type": "catalog",
+          "ref": "fb-content-planner",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:fb-content-planner",
+          "catalogSkillKey": "paperclipai/optional/facebook/fb-content-planner"
+        },
+        {
+          "type": "catalog",
+          "ref": "fb-engagement-drafter",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:fb-engagement-drafter",
+          "catalogSkillKey": "paperclipai/optional/facebook/fb-engagement-drafter"
+        },
+        {
+          "type": "catalog",
+          "ref": "fb-hook-extractor",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:fb-hook-extractor",
+          "catalogSkillKey": "paperclipai/optional/facebook/fb-hook-extractor"
+        },
+        {
+          "type": "catalog",
+          "ref": "fb-humanizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:fb-humanizer",
+          "catalogSkillKey": "paperclipai/optional/facebook/fb-humanizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "fb-page-optimizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:fb-page-optimizer",
+          "catalogSkillKey": "paperclipai/optional/facebook/fb-page-optimizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "fb-post-writer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:fb-post-writer",
+          "catalogSkillKey": "paperclipai/optional/facebook/fb-post-writer"
+        },
+        {
+          "type": "catalog",
+          "ref": "fb-repurposer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:facebook:fb-repurposer",
+          "catalogSkillKey": "paperclipai/optional/facebook/fb-repurposer"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-audience-insights",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-audience-insights",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-audience-insights"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-caption-writer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-caption-writer",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-caption-writer"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-carousel-planner",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-carousel-planner",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-carousel-planner"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-content-planner",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-content-planner",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-content-planner"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-hashtag-strategist",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-hashtag-strategist",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-hashtag-strategist"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-hook-extractor",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-hook-extractor",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-hook-extractor"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-humanizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-humanizer",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-humanizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-profile-optimizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-profile-optimizer",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-profile-optimizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "ig-repurposer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:ig-repurposer",
+          "catalogSkillKey": "paperclipai/optional/instagram/ig-repurposer"
+        },
+        {
+          "type": "catalog",
+          "ref": "instagram-marketing",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:instagram:instagram-marketing",
+          "catalogSkillKey": "paperclipai/optional/instagram/instagram-marketing"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-comment-drafter",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-comment-drafter",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-comment-drafter"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-content-planner",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-content-planner",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-content-planner"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-employee-advocacy",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-employee-advocacy",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-employee-advocacy"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-engager-analytics",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-engager-analytics",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-engager-analytics"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-hook-extractor",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-hook-extractor",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-hook-extractor"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-humanizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-humanizer",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-humanizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-interviewer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-interviewer",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-interviewer"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-marketing",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-marketing",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-marketing"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-post-writer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-post-writer",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-post-writer"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-profile-optimizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-profile-optimizer",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-profile-optimizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-reply-handler",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-reply-handler",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-reply-handler"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-repurposer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-repurposer",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-repurposer"
+        },
+        {
+          "type": "catalog",
+          "ref": "linkedin-thread-monitor",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:linkedin:linkedin-thread-monitor",
+          "catalogSkillKey": "paperclipai/optional/linkedin/linkedin-thread-monitor"
+        },
+        {
+          "type": "catalog",
+          "ref": "social-core",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:social:social-core",
+          "catalogSkillKey": "paperclipai/optional/social/social-core"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-audience-insights",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-audience-insights",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-audience-insights"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-content-planner",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-content-planner",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-content-planner"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-hook-extractor",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-hook-extractor",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-hook-extractor"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-humanizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-humanizer",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-humanizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-marketing",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-marketing",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-marketing"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-post-writer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-post-writer",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-post-writer"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-profile-optimizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-profile-optimizer",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-profile-optimizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-reply-drafter",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-reply-drafter",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-reply-drafter"
+        },
+        {
+          "type": "catalog",
+          "ref": "threads-repurposer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:threads:threads-repurposer",
+          "catalogSkillKey": "paperclipai/optional/threads/threads-repurposer"
+        },
+        {
+          "type": "catalog",
+          "ref": "tiktok-marketing",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tiktok-marketing",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tiktok-marketing"
+        },
+        {
+          "type": "catalog",
+          "ref": "tt-audience-insights",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tt-audience-insights",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tt-audience-insights"
+        },
+        {
+          "type": "catalog",
+          "ref": "tt-caption-writer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tt-caption-writer",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tt-caption-writer"
+        },
+        {
+          "type": "catalog",
+          "ref": "tt-content-planner",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tt-content-planner",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tt-content-planner"
+        },
+        {
+          "type": "catalog",
+          "ref": "tt-hook-scripter",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tt-hook-scripter",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tt-hook-scripter"
+        },
+        {
+          "type": "catalog",
+          "ref": "tt-humanizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tt-humanizer",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tt-humanizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "tt-profile-optimizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tt-profile-optimizer",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tt-profile-optimizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "tt-repurposer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tt-repurposer",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tt-repurposer"
+        },
+        {
+          "type": "catalog",
+          "ref": "tt-trend-mapper",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:tiktok:tt-trend-mapper",
+          "catalogSkillKey": "paperclipai/optional/tiktok/tt-trend-mapper"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-audience-insights",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-audience-insights",
+          "catalogSkillKey": "paperclipai/optional/x/x-audience-insights"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-content-planner",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-content-planner",
+          "catalogSkillKey": "paperclipai/optional/x/x-content-planner"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-hook-extractor",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-hook-extractor",
+          "catalogSkillKey": "paperclipai/optional/x/x-hook-extractor"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-humanizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-humanizer",
+          "catalogSkillKey": "paperclipai/optional/x/x-humanizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-marketing",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-marketing",
+          "catalogSkillKey": "paperclipai/optional/x/x-marketing"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-post-writer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-post-writer",
+          "catalogSkillKey": "paperclipai/optional/x/x-post-writer"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-profile-optimizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-profile-optimizer",
+          "catalogSkillKey": "paperclipai/optional/x/x-profile-optimizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-reply-drafter",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-reply-drafter",
+          "catalogSkillKey": "paperclipai/optional/x/x-reply-drafter"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-repurposer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-repurposer",
+          "catalogSkillKey": "paperclipai/optional/x/x-repurposer"
+        },
+        {
+          "type": "catalog",
+          "ref": "x-thread-builder",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:x:x-thread-builder",
+          "catalogSkillKey": "paperclipai/optional/x/x-thread-builder"
+        },
+        {
+          "type": "catalog",
+          "ref": "youtube-marketing",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:youtube-marketing",
+          "catalogSkillKey": "paperclipai/optional/youtube/youtube-marketing"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-audience-insights",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-audience-insights",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-audience-insights"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-channel-optimizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-channel-optimizer",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-channel-optimizer"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-community-post-writer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-community-post-writer",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-community-post-writer"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-content-planner",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-content-planner",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-content-planner"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-description-writer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-description-writer",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-description-writer"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-hook-scripter",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-hook-scripter",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-hook-scripter"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-repurposer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-repurposer",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-repurposer"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-thumbnail-brief",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-thumbnail-brief",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-thumbnail-brief"
+        },
+        {
+          "type": "catalog",
+          "ref": "yt-title-optimizer",
+          "agentSlugs": [
+            "content-marketer"
+          ],
+          "resolved": true,
+          "catalogSkillId": "paperclipai:optional:youtube:yt-title-optimizer",
+          "catalogSkillKey": "paperclipai/optional/youtube/yt-title-optimizer"
+        }
+      ],
+      "envInputs": [],
+      "sourceRefs": [],
+      "files": [
+        {
+          "path": "TEAM.md",
+          "kind": "team",
+          "sizeBytes": 1821,
+          "sha256": "2bbce1f9df370cce338d5ed792ecf2af0e998de071cd7b3c1319a3d09d8e6773"
+        },
+        {
+          "path": "agents/content-marketer/AGENTS.md",
+          "kind": "agent",
+          "sizeBytes": 2370,
+          "sha256": "ac6f639998f88e3f02203ab39a2a123ac5a380d47f1e8fe7300b250fdee87cef"
+        },
+        {
+          "path": "projects/social-content/PROJECT.md",
+          "kind": "project",
+          "sizeBytes": 434,
+          "sha256": "c4b75532d660f15bfd51e6ba27342e025094390de822a725446d79710dd7eec9"
+        },
+        {
+          "path": "projects/social-content/tasks/weekly-social-plan/TASK.md",
+          "kind": "task",
+          "sizeBytes": 628,
+          "sha256": "c0fcdbe56394c274df5ffb7887aef8be2a28c5dd20f798c1bf88fdc73cbbbb96"
+        }
+      ],
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "contentHash": "sha256:8a4590ddcddf7c0144266a42c53656d037b31f0a3d460234bfda488c22a7017c"
     }
   ]
 }
