@@ -194,7 +194,9 @@ import {
   cardSubjectLookupFor,
   escapeCardMarkdown,
   lookedUpObject,
+  plainToolLabel,
   sameUpstreamTool,
+  unlookedActionHeadline,
   subjectPreviewMarkdown,
   type CardSubject,
 } from "./approval-card-subjects.js";
@@ -1044,7 +1046,8 @@ function buildHumanizedActionPreview(input: {
   tool: ToolGatewayDescriptor;
   argumentsSummary: ReturnType<typeof summarizeToolValue>;
 }): string {
-  const actionName = input.tool.displayName?.trim() || input.tool.name;
+  // plain words, escaped: catalog titles come from the provider and this is Markdown
+  const actionName = escapeCardMarkdown(plainToolLabel(input.tool));
   const trustLine =
     input.tool.risk === "destructive"
       ? `${actionName}. This can permanently change or remove data.`
@@ -2698,6 +2701,12 @@ export function createToolGatewayService(
         "approval card: could not look up a plain-language subject; the card shows the arguments only",
       );
     }
+    // What the board reads first: the looked-up subject, else the known action's
+    // plain verb, else the tool and app in plain words, never the gateway tool id.
+    const plainAction =
+      cardSubject.subject?.headline ??
+      unlookedActionHeadline(input.tool.upstreamToolName, input.parameters) ??
+      plainToolLabel(input.tool);
     const humanizedPreview = buildHumanizedActionPreview({
       tool: input.tool,
       argumentsSummary: input.argumentsSummary,
@@ -2719,12 +2728,10 @@ export function createToolGatewayService(
           type: "request_board_approval",
           requestedByAgentId: input.session.agentId,
           payload: {
-            title: cardSubject.subject
-              ? `Approve: ${cardSubject.subject.headline}`
-              : `Approve high-risk tool action: ${input.tool.name}`,
+            title: `Approve: ${plainAction}`,
             summary: cardSubject.subject
               ? `${escapeCardMarkdown(cardSubject.subject.headline)}. ${cardSubject.subject.lines.map(escapeCardMarkdown).join(" · ")}. This is a ${input.tool.risk} action; approving runs the reviewed call exactly once.`
-              : `${input.tool.name} is classified as ${input.tool.risk} and requires formal board approval before execution.`,
+              : `${escapeCardMarkdown(plainAction)}. This is a ${input.tool.risk} action and Paperclip could not look up what it acts on: the exact arguments are on the approval card in the task's thread. Approving runs that exact call once.`,
             recommendedAction:
               "Approve only if the reviewed arguments match the intended operation.",
             risks: [
@@ -2764,9 +2771,7 @@ export function createToolGatewayService(
         continuationPolicy: "wake_assignee",
         payload: {
           version: 1,
-          prompt: cardSubject.subject
-            ? `Approve: ${cardSubject.subject.headline}?`
-            : `Approve ${input.tool.displayName?.trim() || input.tool.name}?`,
+          prompt: `Approve: ${plainAction}?`,
           acceptLabel: "Approve action",
           rejectLabel: "Reject action",
           rejectRequiresReason: false,
@@ -2777,14 +2782,14 @@ export function createToolGatewayService(
             type: "custom",
             key: `tool-action:${actionRequest.id}`,
             revisionId: canonicalArgumentsHash,
-            label: input.tool.name,
+            label: plainAction,
           },
           toolAction: {
             version: 1,
             actionRequestId: actionRequest.id,
             invocationId: input.invocation.id,
             toolName: input.tool.name,
-            toolDisplayName: input.tool.displayName?.trim() || input.tool.name,
+            toolDisplayName: plainToolLabel(input.tool),
             connectionId: input.tool.connectionId ?? null,
             applicationId: input.tool.applicationId ?? null,
             appDisplayName: input.tool.applicationDisplayName?.trim() || null,

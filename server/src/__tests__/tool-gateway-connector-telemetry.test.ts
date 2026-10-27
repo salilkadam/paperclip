@@ -602,10 +602,26 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
       lookupTitle = null;
       await requestDelete("6adf5e0d");
       const cards = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, issue.id));
-      const fallback = cards.map((row) => row.payload as { prompt: string; toolAction: { previewMarkdown: string } })
-        .find((p) => !p.prompt.startsWith("Approve: Permanently"))!;
-      expect(fallback.prompt).toMatch(/^Approve /);
+      const fallback = cards.map((row) => row.payload as { prompt: string; target: { label: string }; toolAction: { previewMarkdown: string; toolDisplayName: string } })
+        .find((p) => p.prompt.includes("title not looked up"))!;
+      // ...in plain words: a known action keeps its verb, never the raw gateway tool id
+      expect(fallback.prompt).toBe("Approve: Permanently delete blog post (title not looked up)?");
       expect(fallback.toolAction.previewMarkdown).toContain("Could not look up what this targets");
+      const fallbackFormal = (await db.select().from(approvals).where(eq(approvals.companyId, company.id)))
+        .map((row) => row.payload as { title: string; summary: string })
+        .find((p) => p.title.includes("title not looked up"))!;
+      expect(fallbackFormal.title).toBe("Approve: Permanently delete blog post (title not looked up)");
+      expect(fallbackFormal.summary).toContain("could not look up what it acts on");
+      expect(fallbackFormal.summary).toContain("approval card in the task's thread");
+      expect(fallback.target.label).toBe("Permanently delete blog post (title not looked up)");
+      // the card body and the compact card's bold label: the tool in plain words too
+      expect(fallback.toolAction.toolDisplayName).toMatch(/^Gh delete post \(.+\)$/);
+      expect(fallback.toolAction.previewMarkdown).toMatch(/^Gh delete post \\\(.+\\\)\. This can permanently change or remove data\./);
+      for (const text of [fallback.prompt, fallback.target.label, fallback.toolAction.toolDisplayName,
+        fallback.toolAction.previewMarkdown, fallbackFormal.title, fallbackFormal.summary]) {
+        expect(text).not.toContain(del.name);
+        expect(text).not.toContain("gh_delete_post");
+      }
 
       // the agent's tool policy governs the lookup: a deny on gh_get_post means no lookup
       lookupTitle = "Should never be read";

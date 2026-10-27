@@ -43,6 +43,32 @@ export function plainCardText(value: unknown, max = 160): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
+/**
+ * A tool named for the board when Paperclip cannot say what it acts on: its catalog
+ * display name (minus a trailing "Tool") and the app it belongs to, e.g.
+ * "Delete Post (TryPost)" instead of
+ * "mcp.app-gallery-link-2de1c4d0-…-49852674:delete-post-tool". Display names come
+ * from the provider's catalog, so they get the same plain-text treatment as
+ * looked-up values.
+ */
+export function plainToolLabel(tool: {
+  name: string; displayName?: string | null; upstreamToolName?: string | null; applicationDisplayName?: string | null;
+}): string {
+  // "Delete Post Tool" -> "Delete Post", but "Run tool" keeps its only noun
+  const dropToolSuffix = (text: string) => (/\S\s+\S+\s+tool$/i.test(text) ? text.replace(/\s+tool$/i, "") : text);
+  const humanize = (raw: string) => {
+    const words = dropToolSuffix(raw.replace(/([a-z\d])([A-Z])/g, "$1 $2").replace(/[-_.]+/g, " ").trim().replace(/\s+/g, " "));
+    return words ? words.charAt(0).toUpperCase() + words.slice(1).toLowerCase() : "";
+  };
+  // a catalog title can itself be an identifier ("gh_delete_post", "deletePostTool"): humanize that too
+  const rawDisplay = tool.displayName?.trim() ?? "";
+  const display = /^[\w.-]+$/.test(rawDisplay) && /[-_.]|[a-z][A-Z]/.test(rawDisplay) ? humanize(rawDisplay) : dropToolSuffix(rawDisplay);
+  const fromName = tool.upstreamToolName?.trim() || tool.name.split(":").pop() || tool.name;
+  const action = plainCardText(display || humanize(fromName), 80) || "Tool action";
+  const app = tool.applicationDisplayName?.trim();
+  return app ? `${action} (${plainCardText(app, 40)})` : action;
+}
+
 /** An untrusted looked-up value, quoted so it reads as data: “value”. */
 const quoted = (value: unknown, max = 140) => `\u201c${plainCardText(value, max)}\u201d`;
 
@@ -51,15 +77,26 @@ export function escapeCardMarkdown(text: string): string {
   return text.replace(/[\\`*_{}[\]()<>#+!|~.:/@]/g, (ch) => `\\${ch}`);
 }
 
+/**
+ * The instant a card time names. Times without an offset are UTC (TryPost's and
+ * Ghost's convention), never the server's local zone, so the "already passed" check
+ * and the displayed time always agree. Unparseable -> null.
+ */
+export function parseCardTime(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const iso = value.trim().replace(" ", "T");
+  const at = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+  return Number.isNaN(at) ? null : at;
+}
+
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** "2026-11-03T08:00:00-08:00" -> "Tue 3 Nov 2026, 08:00 (UTC-08:00)"; "...Z" -> "... (UTC)". Unparseable -> null. */
 export function formatWhen(value: unknown): string | null {
-  if (typeof value !== "string") return null;
+  const at = parseCardTime(value);
+  if (at === null || typeof value !== "string") return null;
   const iso = value.trim().replace(" ", "T");
-  const at = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
-  if (Number.isNaN(at)) return null;
   const offset = /([+-])(\d\d):?(\d\d)$/.exec(iso);
   const offsetMinutes = offset ? (offset[1] === "-" ? -1 : 1) * (Number(offset[2]) * 60 + Number(offset[3])) : 0;
   const local = new Date(at + offsetMinutes * 60_000);
@@ -67,6 +104,36 @@ export function formatWhen(value: unknown): string | null {
   const mm = String(local.getUTCMinutes()).padStart(2, "0");
   const zone = offset ? `UTC${offset[1]}${offset[2]}:${offset[3]}` : "UTC";
   return `${WEEKDAYS[local.getUTCDay()]} ${local.getUTCDate()} ${MONTHS[local.getUTCMonth()]} ${local.getUTCFullYear()}, ${hh}:${mm} (${zone})`;
+}
+
+/**
+ * The same instant in a named IANA timezone (a TryPost account's own zone), so the
+ * board reads the time the post goes out where the account posts:
+ * "2026-11-11 17:00:00" + "America/Los_Angeles" -> "Wed 11 Nov 2026, 09:00 (PST)".
+ * Times without an offset are UTC (TryPost's convention). Unknown zone or
+ * unparseable time -> null, and callers fall back to formatWhen.
+ */
+export function formatWhenIn(value: unknown, timeZone: unknown): string | null {
+  if (typeof timeZone !== "string" || !timeZone.trim()) return null;
+  const at = parseCardTime(value);
+  if (at === null) return null;
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timeZone.trim(), weekday: "short", day: "numeric", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short",
+    }).formatToParts(new Date(at));
+  } catch {
+    return null;
+  }
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  // en-GB gives "GMT-8" where en-US gives the familiar "PST"; take only the zone name from en-US
+  let zone = part("timeZoneName");
+  try {
+    zone = new Intl.DateTimeFormat("en-US", { timeZone: timeZone.trim(), timeZoneName: "short" })
+      .formatToParts(new Date(at)).find((p) => p.type === "timeZoneName")?.value || zone;
+  } catch { /* keep the en-GB name */ }
+  return `${part("weekday")} ${part("day")} ${part("month")} ${part("year")}, ${part("hour")}:${part("minute")} (${zone})`;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
@@ -101,7 +168,7 @@ const GHOST_ACTIONS: Record<string, (title: string, args: Record<string, unknown
   "gh-publish-post": (title, args, now) => {
     const when = formatWhen(args.published_at);
     if (!when) return `Publish blog ${title} now`;
-    const at = Date.parse(String(args.published_at));
+    const at = parseCardTime(args.published_at) ?? now;
     return at > now + 60_000 ? `Schedule blog ${title} for ${when}` : `Publish blog ${title} now (dated ${when})`;
   },
   "gh-unpublish-post": (title) => `Take blog ${title} off the site (back to draft)`,
@@ -131,13 +198,13 @@ function ghostSubject(action: string, args: Record<string, unknown>): CardSubjec
 // ---- TryPost social posts ---------------------------------------------------------------
 const changesText = (args: Record<string, unknown>) => typeof args.content === "string" || args.media !== undefined;
 
-const TRYPOST_ACTIONS: Record<string, (account: string, args: Record<string, unknown>, now: number) => string | null> = {
-  "update-post-tool": (account, args, now) => {
-    const when = formatWhen(args.scheduled_at);
+const TRYPOST_ACTIONS: Record<string, (account: string, args: Record<string, unknown>, now: number, timeZone: unknown) => string | null> = {
+  "update-post-tool": (account, args, now, timeZone) => {
+    const when = formatWhenIn(args.scheduled_at, timeZone) ?? formatWhen(args.scheduled_at);
     const edit = changesText(args) ? " and replace its text" : "";
     if (args.status === "scheduled") {
       if (!when) return `Schedule social post on ${account}${edit}`;
-      const past = Date.parse(String(args.scheduled_at)) <= now + 60_000 ? " (that time has already passed)" : "";
+      const past = (parseCardTime(args.scheduled_at) ?? Infinity) <= now + 60_000 ? " (that time has already passed)" : "";
       return `Schedule social post on ${account} for ${when}${past}${edit}`;
     }
     if (args.status === "publishing") return `Publish social post on ${account} now${edit}`;
@@ -172,7 +239,8 @@ function tryPostSubject(action: string, args: Record<string, unknown>): CardSubj
         lines.push(`First line: ${quoted(current)}`);
       }
       if (typeof post.status === "string") lines.push(`Status when requested: ${plainCardText(post.status, 20)}`);
-      const text = headline(account, args, now);
+      const timeZone = asRecord(post.social_account)?.timezone;
+      const text = headline(account, args, now, timeZone);
       return text ? { headline: text, lines } : null;
     },
   };
@@ -184,6 +252,22 @@ export function cardSubjectLookupFor(upstreamToolName: string | null | undefined
   if (!upstreamToolName || !record) return null;
   const action = normalizeToolName(upstreamToolName);
   return ghostSubject(action, record) ?? tryPostSubject(action, record);
+}
+
+/**
+ * What a known action does when Paperclip could not look up its target: the same
+ * plain verb phrase the looked-up card would use, with the target left unnamed
+ * ("Permanently delete blog post (title not looked up)"). Null for actions this
+ * module does not know; the caller then falls back to plainToolLabel.
+ */
+export function unlookedActionHeadline(upstreamToolName: string | null | undefined, args: unknown, now = Date.now()): string | null {
+  const record = asRecord(args);
+  if (!upstreamToolName || !record) return null;
+  const action = normalizeToolName(upstreamToolName);
+  const ghost = GHOST_ACTIONS[action];
+  if (ghost) return ghost("(title not looked up)", record, now);
+  const tryPost = TRYPOST_ACTIONS[action];
+  return tryPost ? tryPost("an account not looked up", record, now, null) : null;
 }
 
 /** Markdown for the card preview: the subject lines, then the generic preview. */
