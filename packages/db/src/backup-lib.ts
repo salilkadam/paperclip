@@ -1,7 +1,7 @@
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { open as openFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
@@ -74,6 +74,58 @@ const DEFAULT_BACKUP_WRITE_BUFFER_BYTES = 1024 * 1024;
 const BACKUP_DATA_CURSOR_ROWS = 100;
 const BACKUP_CLI_STDERR_BYTES = 64 * 1024;
 const BACKUP_BREAKPOINT_DETECT_BYTES = 64 * 1024;
+const BACKUP_NICE_PROBE_TIMEOUT_MS = 5_000;
+const BACKUP_NICE_DEFAULT_LEVEL = 10;
+const BACKUP_NICE_MAX_LEVEL = 19;
+
+/**
+ * Backup CLI children (pg_dump, gzip) are spawned under `nice` by default so
+ * they yield CPU to the server's event loop. In-process compression plus the
+ * pg_dump child can otherwise saturate a container's CPU quota (CFS bandwidth
+ * control throttles every thread in the cgroup once the quota is spent),
+ * which froze the event loop long enough to time out readiness/liveness
+ * probes during hourly automatic backups. Set PAPERCLIP_DB_BACKUP_NICE=0 to
+ * disable; values 1-19 select the nice level for backup children.
+ */
+function backupNiceArgs(): string[] {
+  const raw = process.env.PAPERCLIP_DB_BACKUP_NICE;
+  const parsed = raw === undefined ? BACKUP_NICE_DEFAULT_LEVEL : Number.parseInt(raw, 10);
+  const level = Number.isFinite(parsed)
+    ? Math.min(BACKUP_NICE_MAX_LEVEL, Math.max(0, parsed))
+    : BACKUP_NICE_DEFAULT_LEVEL;
+  return level > 0 ? ["nice", "-n", String(level)] : [];
+}
+
+function backupGzipBin(): string {
+  return process.env.PAPERCLIP_GZIP_PATH || "gzip";
+}
+
+/**
+ * One-off probe (runs once per backup start) that `nice` and `gzip` exist and
+ * run. When either is missing we keep the previous in-process zlib behavior
+ * so minimal dev/CI images are unaffected.
+ */
+function externalBackupGzipAvailable(niceArgs: string[]): boolean {
+  const gzipBin = backupGzipBin();
+  const argv = niceArgs.length > 0 ? [...niceArgs, gzipBin, "--version"] : [gzipBin, "--version"];
+  try {
+    const probe = spawnSync(argv[0], argv.slice(1), { timeout: BACKUP_NICE_PROBE_TIMEOUT_MS });
+    return !probe.error && probe.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function spawnBackupChild(
+  bin: string,
+  args: string[],
+  options: Parameters<typeof spawn>[2],
+): ReturnType<typeof spawn> {
+  const niceArgs = backupNiceArgs();
+  return niceArgs.length > 0
+    ? spawn(niceArgs[0], [...niceArgs.slice(1), bin, ...args], options)
+    : spawn(bin, args, options);
+}
 
 const STATEMENT_BREAKPOINT = "-- paperclip statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
 
@@ -327,7 +379,7 @@ async function runPgDumpBackup(opts: {
   connectTimeout: number;
 }): Promise<void> {
   const pgDumpBin = process.env.PAPERCLIP_PG_DUMP_PATH || "pg_dump";
-  const child = spawn(
+  const child = spawnBackupChild(
     pgDumpBin,
     [
       `--dbname=${opts.connectionString}`,
@@ -348,6 +400,26 @@ async function runPgDumpBackup(opts: {
 
   if (!child.stdout) {
     throw new Error("pg_dump did not expose stdout");
+  }
+
+  if (externalBackupGzipAvailable(backupNiceArgs())) {
+    // Compress in a separate niced process so neither zlib threads inside
+    // this process nor the gzip work starve the server event loop while a
+    // large dump streams through. Only the byte pump stays in-process.
+    const gzipBin = backupGzipBin();
+    const gzipChild = spawnBackupChild(gzipBin, [], { stdio: ["pipe", "pipe", "pipe"] });
+    if (!gzipChild.stdin || !gzipChild.stdout) {
+      gzipChild.kill();
+      child.kill();
+      throw new Error("gzip did not expose stdin/stdout");
+    }
+    await Promise.all([
+      pipeline(child.stdout, gzipChild.stdin),
+      pipeline(gzipChild.stdout, createWriteStream(opts.backupFile)),
+      waitForChildExit(child, pgDumpBin),
+      waitForChildExit(gzipChild, gzipBin),
+    ]);
+    return;
   }
 
   await Promise.all([
@@ -1059,10 +1131,27 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
 
     await writer.close();
 
-    // Compress the SQL file with gzip
-    const sqlReadStream = createReadStream(sqlFile);
-    const gzWriteStream = createWriteStream(backupFile);
-    await pipeline(sqlReadStream, createGzip(), gzWriteStream);
+    // Compress the SQL file with gzip, preferring a separate niced process
+    // so compression does not compete with the server event loop for the
+    // container's CPU quota (see backupNiceArgs).
+    if (externalBackupGzipAvailable(backupNiceArgs())) {
+      const gzipBin = backupGzipBin();
+      const gzipChild = spawnBackupChild(gzipBin, [], { stdio: ["pipe", "pipe", "pipe"] });
+      if (!gzipChild.stdin || !gzipChild.stdout) {
+        gzipChild.kill();
+        unlinkSync(sqlFile);
+        throw new Error("gzip did not expose stdin/stdout");
+      }
+      await Promise.all([
+        pipeline(createReadStream(sqlFile), gzipChild.stdin),
+        pipeline(gzipChild.stdout, createWriteStream(backupFile)),
+        waitForChildExit(gzipChild, gzipBin),
+      ]);
+    } else {
+      const sqlReadStream = createReadStream(sqlFile);
+      const gzWriteStream = createWriteStream(backupFile);
+      await pipeline(sqlReadStream, createGzip(), gzWriteStream);
+    }
     unlinkSync(sqlFile);
 
     const sizeBytes = statSync(backupFile).size;

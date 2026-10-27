@@ -108,6 +108,37 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     }
   }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
 
+  it.each([
+    ["zlib fallback when gzip is missing", { PAPERCLIP_GZIP_PATH: "/nonexistent/gzip" }],
+    ["no nice wrapper when nice is disabled", { PAPERCLIP_DB_BACKUP_NICE: "0" }],
+    ["nice wrapper at a custom level", { PAPERCLIP_DB_BACKUP_NICE: "15" }],
+  ])("produces a valid archive through %s", async (_label, extraEnv) => {
+    const connectionString = await createTempDatabase();
+    const backupDir = createTempDir("pg-dump-compress-");
+    const executable = path.join(backupDir, "pg-dump-fixture");
+    fs.writeFileSync(executable, "#!/bin/sh\nprintf 'SELECT 1;\\n'\n", { mode: 0o700 });
+    const keys = ["PAPERCLIP_PG_DUMP_PATH", ...Object.keys(extraEnv)];
+    const previous = new Map(keys.map(key => [key, process.env[key]]));
+    try {
+      process.env.PAPERCLIP_PG_DUMP_PATH = executable;
+      for (const [key, value] of Object.entries(extraEnv)) process.env[key] = value;
+      const result = await runDatabaseBackup({
+        connectionString,
+        backupDir,
+        retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+        backupEngine: "pg_dump",
+      });
+      expect(gunzipSync(fs.readFileSync(result.backupFile)).toString()).toBe("SELECT 1;\n");
+      expect(result.sizeBytes).toBe(fs.statSync(result.backupFile).size);
+    } finally {
+      for (const key of keys) {
+        const value = previous.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
   it("preserves identity generation, sequence options and progress in JavaScript backups", async () => {
     const source = await createTempDatabase();
     const target = await createSiblingDatabase(source, "identity_restore_target");
