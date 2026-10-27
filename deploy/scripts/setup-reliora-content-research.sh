@@ -155,13 +155,13 @@ have="$(jq -c --arg n "$GH_BLOCK_POLICY" '[.[] | select(.name == $n)][0] // empt
 if [[ -z "$have" ]]; then
   printf '%s' "$want" > "$WORK/p.json"; write POST "/companies/$cid/tools/policies" "$WORK/p.json" >/dev/null; log "  policy created: $GH_BLOCK_POLICY"
 elif ! jq -e --argjson w "$want" '(.policyType == $w.policyType) and (.enabled == true) and (.priority == $w.priority)
-         and (.selectors == $w.selectors) and (.conditions == $w.conditions)' <<<"$have" >/dev/null; then
+         and ((.selectors | .riskLevels |= sort) == ($w.selectors | .riskLevels |= sort)) and (.conditions == $w.conditions)' <<<"$have" >/dev/null; then
   printf '%s' "$want" > "$WORK/p.json"; write PATCH "/companies/$cid/tools/policies/$(jq -r .id <<<"$have")" "$WORK/p.json" >/dev/null
   log "  policy updated (drifted): $GH_BLOCK_POLICY"
 else
   log "  policy ok: $GH_BLOCK_POLICY"
 fi
-# probe TOOL PARAMS EXPECTED: a real gateway test call as the marketer
+# probe TOOL PARAMS EXPECTED [REASON]: a real gateway test call as the marketer
 probe() {
   local resp decision ar
   jq -n --arg a "$marketer" --arg t "$1" --argjson p "$2" '{agentId: $a, toolName: $t, parameters: $p}' > "$WORK/probe.json"
@@ -173,12 +173,29 @@ probe() {
     api POST "/tool-gateway/action-requests/$ar/decline" "$WORK/decline.json" >/dev/null
   fi
   [[ "$decision" == "$3" ]] || die "probe $1: expected $3, got $decision: $(head -c 300 <<<"$resp")"
-  log "  probe ok: $1 -> $decision"
+  if [[ -n "${4:-}" ]]; then
+    [[ "$(jq -r '.error.reasonCode // ""' <<<"$resp")" == "$4" ]] || die "probe $1: refused, but not by the policy (want $4): $(head -c 300 <<<"$resp")"
+  fi
+  log "  probe ok: $1 -> $decision${4:+ ($4)}"
 }
 if (( ! DRY )); then
   # a repository that does not exist, so nothing could be written even if the block failed
-  probe create_branch '{"owner":"zz-governance-probe","repo":"none","branch":"probe"}' off
+  probe create_branch '{"owner":"zz-governance-probe","repo":"none","branch":"probe"}' off deny_policy_block
   probe get_me '{}' allowed
+  # the block keys on the catalog's risk: a mutating GitHub tool classified "read" would slip past it
+  access="$(api GET "/tool-connections/$gh_conn/test-agents/$marketer/access")"
+  misread="$(jq -r '[.access.tools[] | select(.risk == "read" and .decision != "off"
+      and (.toolName | test("merge|push|fork|assign|dismiss|request_|create|update|delete|remove|add_|star|subscribe|write|trigger"; "i"))
+      and (.toolName | test("^(get|list|search)_|_(read|get|list)$"; "i") | not))
+      | .toolName] | join(", ")' <<<"$access")"
+  [[ -z "$misread" ]] || die "GitHub tools that look mutating are classified read and stay open to the marketer: $misread"
+  open_writes="$(jq -r '[.access.tools[] | select((.risk == "write" or .risk == "destructive") and .decision != "off") | .toolName] | join(", ")' <<<"$access")"
+  [[ -z "$open_writes" ]] || die "GitHub write tools still open to the marketer: $open_writes"
+  log "  GitHub: every write/destructive tool is off for the marketer; no mutating tool classified read"
+  # Composio must not be a second GitHub write path
+  gh_via_composio="$(api GET "/tool-connections/$cp_conn/composio/apps" | jq -r '[(.apps // [])[] | select((.toolkit | test("^github"; "i")) and .status != "not_connected") | .toolkit] | join(", ")')"
+  [[ -z "$gh_via_composio" ]] || die "Composio has a GitHub toolkit connected ($gh_via_composio): the marketer could write to GitHub through it"
+  log "  Composio: no GitHub toolkit connected"
 fi
 
 # the routines' skills; mode "add" keeps every other assigned skill

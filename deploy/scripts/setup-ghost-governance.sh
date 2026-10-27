@@ -20,8 +20,14 @@
 # could be created even if the gate failed:
 #   - status "published" -> must be ask_first (the action request is declined);
 #   - status omitted     -> must be ask_first (declined);
-#   - status "draft"     -> must be allowed (the Ghost server rejects the site).
+#   - status "draft"     -> must be allowed, AND the upstream call must have
+#     failed (the Ghost server rejects the unknown site). An allowed call that
+#     returns a result is fatal and prints it: a real draft may exist.
 # Any other outcome is fatal.
+#
+# Not covered: a board member can turn repeated approvals into a trust rule
+# (Settings) that lets matching calls through without a card; that is a
+# deliberate board decision, visible in the company's trust rules.
 #
 # Requires: curl jq; PAPERCLIP_BOARD_KEY_FILE — a 0600 file holding a board API
 # key of an instance admin (`paperclipai token board create --name ghost-gov
@@ -83,6 +89,10 @@ probe() {
     api POST "/tool-gateway/action-requests/$ar/decline" "$WORK/decline.json" >/dev/null
   fi
   [[ "$decision" == "$want" ]] || die "probe '$label' on connection $conn: expected $want, got $decision: $(head -c 300 <<<"$resp")"
+  if [[ "$want" == allowed ]]; then
+    jq -e '.error != null and .result == null' <<<"$resp" >/dev/null \
+      || die "probe '$label' on connection $conn ran upstream and did NOT fail: a real post may exist; delete it: $(head -c 400 <<<"$resp")"
+  fi
   log "  probe ok: $label -> $decision"
 }
 
