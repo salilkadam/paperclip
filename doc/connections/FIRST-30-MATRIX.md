@@ -94,7 +94,7 @@ PagerDuty.
 | 17 | Figma | C | Vendor-deep wrapper; MCP for Dev Mode reads | Figma OAuth | Team, project, file, branch filters | Read files/comments/dev data, create comment | File/comment webhooks optional | S3 |
 | 18 | Canva | C | Direct app/MCP where available; Connect API wrapper | Canva OAuth | Team, folder, brand/template filters | Search/read designs, create design from template | Asset sync optional | S2 |
 | 19 | Exa | A | Direct MCP/API-key provider | API key secret ref | Domain allow/deny list, content category, rate limits | Web/neural search, fetch result content | No webhook; usage/activity only | S1 |
-| 20 | Apify | C | Direct MCP/API-token provider | API token secret ref | Actor allowlist, dataset/run filters | Run actor, read dataset, fetch status | Actor run completion webhook optional | S2 |
+| 20 | Apify | C | Direct MCP/API-token provider | API token secret ref | Actor allowlist, dataset/run filters | Run actor, read dataset, fetch status | Actor run completion webhook optional | S3 (shipped 2026-10-27: per-result billing and third-party personal data; see tool-method-permission-reviews.json) |
 | 21 | HubSpot | B | Direct MCP/REST wrapper | HubSpot OAuth | Portal, pipeline, object type, owner/team filters | Search contacts/companies/deals, create note/task/deal gated | CRM webhooks | S3 |
 | 22 | Salesforce | D | Vendor-deep wrapper; OpenAPI/GraphQL where useful | Salesforce OAuth | Org, object, record type, field-level filters | Search/read records, create task/note/opportunity draft | Platform events/webhooks | S4 |
 | 23 | Attio | D | Direct MCP/REST wrapper | Attio OAuth | Workspace, list, object, attribute filters | Search records, create note/task/update stage gated | Workspace webhook optional | S3 |

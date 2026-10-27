@@ -28,3 +28,15 @@ artwork safety checks pass without an SVG sanitize step. Upstream publishes no
 separate brand-use policy; the code is AGPL-3.0 and the mark is kept unmodified
 and shown only to identify the provider’s own service. There is no dark variant:
 the mark carries its own transparent-background artwork, like `arcade.png`.
+
+## Apify (added 2026-10-27)
+
+| File | Source | SHA-256 |
+| --- | --- | --- |
+| `ui/public/brands/apps/apify.svg` | [Apify symbol](https://apify.com/img/apify-logo/apify-symbol-200x200.svg), the mark published in the logo directory of [apify.com](https://apify.com/) and referenced from its home page (retrieved 2026-10-27) | `ed749f2ab5f397f645d32b0ba6cbf45133acba31a185e04cd00728d6296def54` |
+
+200x200 SVG of three flat paths with one local clip path, stored byte-for-byte
+with no recoloring or re-export. It has no scripts, external references or
+embedded raster, so it passes the artwork safety checks as published. There is
+no dark variant: the colored mark has a transparent background, like `trypost.png`.
+The mark is shown only to identify Apify's own service.

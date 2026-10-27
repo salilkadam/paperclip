@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "slug": "apify",
+  "name": "Apify",
+  "description": "Read public social posts, comments, engagers and channel stats through a fixed set of Apify actors.",
+  "categories": [
+    "data"
+  ],
+  "featured": false,
+  "branding": {
+    "logoUrl": "/brands/apps/apify.svg"
+  },
+  "urlPatterns": [
+    "https://mcp.apify.com/*"
+  ],
+  "docsUrl": "https://docs.apify.com/platform/integrations/mcp",
+  "methods": [
+    {
+      "key": "mcp-api-key",
+      "transport": "mcp_remote",
+      "auth": "api_key",
+      "ownershipModes": [
+        "customer"
+      ],
+      "whenToUse": "Use the company's own Apify API token to read public social posts, comments, engagers and channel stats.",
+      "defaults": {
+        "serverUrl": "https://mcp.apify.com?tools=apimaestro/linkedin-post-detail,apimaestro/linkedin-post-comments-replies-engagements-scraper-no-cookies,apimaestro/linkedin-profile-comments,scraping_solutions/linkedin-posts-engagers-likers-and-commenters-no-cookies,xquik/x-tweet-scraper,apify/instagram-hashtag-scraper,apify/instagram-profile-scraper,igview-owner/threads-search-scraper,apify/threads-profile-api-scraper,clockworks/tiktok-scraper,clockworks/tiktok-comments-scraper,apify/facebook-pages-scraper,danek/facebook-comments-ppr,streamers/youtube-scraper,streamers/youtube-comments-scraper"
+      },
+      "guidanceMd": "In Apify Console, open Settings → API & Integrations, create an API token for Paperclip, and paste it below. Every actor run bills your Apify account per result. This card connects a fixed list of social-reading actors, so agents cannot run any other actor. On the Permissions screen, turn off the actors for channels you do not use.",
+      "riskTier": "S3",
+      "label": "Use an Apify API token (social reading actors)",
+      "credentialFields": [
+        {
+          "key": "authorization",
+          "label": "Apify API token",
+          "type": "password",
+          "required": true,
+          "placeholder": "Paste your Apify API token",
+          "secret": true,
+          "helperMd": "Create a token under Console → Settings → API & Integrations. A standard token acts for the whole Apify account. You can turn on Limit token permissions to scope it to running these actors and reading the storage their runs create; a scoped token was not tested with the MCP server. Every run bills the account per result."
+        }
+      ],
+      "keyPlacement": {
+        "location": "header",
+        "name": "Authorization",
+        "prefix": "Bearer "
+      },
+      "consoleLinks": {
+        "keys": "https://console.apify.com/account/integrations",
+        "docs": "https://docs.apify.com/platform/integrations/mcp"
+      },
+      "warnings": [
+        "Each actor run bills the company's Apify account per result. Set an Apify usage limit, and have the operator apply the Apify governance policies (a daily cap on actor runs; run control and store reads blocked) before agents run unattended.",
+        "The fixed actor list prevents running other actors. Turn off the actors for unused channels on the Permissions screen."
+      ]
+    }
+  ]
+}

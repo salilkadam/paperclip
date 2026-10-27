@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "packageName": "@paperclipai/skills-catalog",
   "packageVersion": "0.3.1",
-  "generatedAt": "2026-10-27T01:53:42.618Z",
+  "generatedAt": "2026-10-27T02:09:59.692Z",
   "skills": [
     {
       "id": "paperclipai:bundled:docs:doc-maintenance",
@@ -2904,11 +2904,11 @@
         {
           "path": "SKILL.md",
           "kind": "skill",
-          "sizeBytes": 9479,
-          "sha256": "c205a53fa28da52d644b27d13a2dbd1d3f5014ff7390829248345b883795278c"
+          "sizeBytes": 9757,
+          "sha256": "3b9550f89cc6e80b1cbf73b20d7965be3b9bfb8d84db14218485e47c73102387"
         }
       ],
-      "contentHash": "sha256:a6f603c49ba9c9e55e2e6f4c90abe7c8d8775642f857dd1c7b6f0b312a54c4a0"
+      "contentHash": "sha256:9bb26a8a069df94c32b1529bb0c84d89d6e4f35bdf3c8b8a443d8bdf1d18b3eb"
     },
     {
       "id": "paperclipai:optional:software-development:prepare-mcp-integration",

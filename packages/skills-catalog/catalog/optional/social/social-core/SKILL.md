@@ -103,6 +103,9 @@ silently and still bill a full run.
 - Never call `call-actor`, `search-actors`, `add-actor` or any Apify tool that
   is not one of the hub's listed actors or `get-actor-run` /
   `get-dataset-items`. If such a tool is offered, it is not for you.
+- The company caps actor runs per day. A call that comes back `rate_limited`
+  means today's cap is used up: stop reading, say so in the task, and finish
+  with what you have or the paste path. Do not retry until the next day.
 - If there is no ready Apify connection, or the actor fails, fall back to the
   skill's paste path: ask in the task for the post text, comment thread or
   numbers, and continue. Say which you used.
@@ -153,8 +156,8 @@ companies.
 2. **Apify** — in **Apps**, add Apify with the company's own Apify API token.
    The card pins a fixed list of social reading actors. The instance operator
    then applies the Apify policies (`deploy/scripts/setup-apify-governance.sh`),
-   which block the tools that could run any other paid actor or browse the
-   account. The token is stored by the company's secret provider (Vault for
+   which check that only the pinned actors are exposed, block run control and
+   store reads, and cap actor runs per day (60 by default). The token is stored by the company's secret provider (Vault for
    this deployment) and never reaches the agent. Set a usage limit in the Apify
    account, and turn off the actors for channels the company does not use on
    the connection's **Permissions** screen.

@@ -1004,6 +1004,7 @@ const researchManifest = JSON.parse(
 );
 const categoryBySlug = {
   airtable: "data",
+  apify: "data",
   asana: "productivity",
   beehiiv: "content",
   bitly: "analytics",
@@ -1314,6 +1315,22 @@ const specialMethodsFor = (entry) => {
     grantKinds: ["user"],
     defaults: { serverUrl: entry.serverUrl, scopesHint: ["openid", "profile", "email", "offline_access"] },
     guidanceMd: "Sign in to Supermemory, then choose a workspace, read or write access, and optional tags. Use a separate space for unrelated work.",
+  })];
+  if (entry.slug === "apify") return [apiKeyMethodFor(entry, "mcp-api-key", entry.serverUrl, {
+    // The ledger serverUrl pins Apify's documented `?tools=` list to the
+    // social-reading actors. With only actor names listed, Apify exposes those
+    // actors plus get-actor-run, get-dataset-items, get-key-value-store-record
+    // and abort-actor-run; search-actors and call-actor stay off, so agents
+    // cannot run any other actor on the company's account.
+    label: "Use an Apify API token (social reading actors)",
+    credentialFields: [field("authorization", "Apify API token", "Paste your Apify API token")],
+    whenToUse: "Use the company's own Apify API token to read public social posts, comments, engagers and channel stats.",
+    guidanceMd: "In Apify Console, open Settings → API & Integrations, create an API token for Paperclip, and paste it below. Every actor run bills your Apify account per result. This card connects a fixed list of social-reading actors, so agents cannot run any other actor. On the Permissions screen, turn off the actors for channels you do not use.",
+    consoleLinks: { keys: "https://console.apify.com/account/integrations", docs: entry.docsUrl },
+    warnings: [
+      "Each actor run bills the company's Apify account per result. Set an Apify usage limit, and have the operator apply the Apify governance policies (a daily cap on actor runs; run control and store reads blocked) before agents run unattended.",
+      "The fixed actor list prevents running other actors. Turn off the actors for unused channels on the Permissions screen.",
+    ],
   })];
   if (entry.slug === "trypost") return [oauthMethodFor(entry, "mcp-oauth", entry.serverUrl, {
     // TryPost publishes to public networks, so the method is S4 and its one
@@ -1829,7 +1846,7 @@ for (const entry of researchManifest.entries) {
     schemaVersion: 1,
     slug: entry.slug,
     name: entry.name,
-    description: ({ neon: "Manage Postgres projects and branches, run SQL, and inspect schemas in Neon.", ditto: "Search and reuse approved product copy, follow your style guide, and edit and translate text.", gauge: "Track how AI answers mention your brand, research keywords and traffic, and run content workflows.", superagent: "Review security findings, start red-team reports, and score content and packages before agents trust them.", mem0: "Remember preferences, conversations, events, and agent state.", zep: "Retrieve temporal graph memory and authorized business context.", supermemory: "Search and save shared memories, documents, and profiles.", honcho: "Remember conversations and retrieve context about peers.", trypost: "Plan, schedule, and publish social posts across every connected network from your TryPost workspace.", telem: "Search the web and read pages across many search providers with one API key." })[entry.slug] ?? (entry.slug === "fireflies"
+    description: ({ neon: "Manage Postgres projects and branches, run SQL, and inspect schemas in Neon.", ditto: "Search and reuse approved product copy, follow your style guide, and edit and translate text.", gauge: "Track how AI answers mention your brand, research keywords and traffic, and run content workflows.", superagent: "Review security findings, start red-team reports, and score content and packages before agents trust them.", mem0: "Remember preferences, conversations, events, and agent state.", zep: "Retrieve temporal graph memory and authorized business context.", supermemory: "Search and save shared memories, documents, and profiles.", honcho: "Remember conversations and retrieve context about peers.", trypost: "Plan, schedule, and publish social posts across every connected network from your TryPost workspace.", apify: "Read public social posts, comments, engagers and channel stats through a fixed set of Apify actors.", telem: "Search the web and read pages across many search providers with one API key." })[entry.slug] ?? (entry.slug === "fireflies"
       ? "Search meeting transcripts, read summaries and action items, and connect meeting-ready routines."
       : `Connect ${entry.name}'s provider-hosted MCP server.`),
     categories: [categoryBySlug[entry.slug] ?? "other"],

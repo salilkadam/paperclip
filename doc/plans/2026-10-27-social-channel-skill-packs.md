@@ -127,3 +127,12 @@ Adversarial review by a different model (Claude Fable 5.1, thirteenth-man), one 
 | 6 | `linkedin-reply-handler` keeps API wording ("400", "429") for copy-paste output | **Accepted risk.** Owner: content session. Trigger: the first reply-handler run that reports an API error that can't happen. Harmless meanwhile. |
 
 The reviewer confirmed these were sound, not defects: every `create-post-tool` mention is a draft; no leaf names a credential; every documented actor input exists in the live schemas; `$AGENT_HOME` is real; no upstream craft file was dropped.
+
+### PR A (Apify connector) — two rounds, Fable 5.1
+
+| Round | Finding | Disposition |
+|---|---|---|
+| 1 | The governance probe called `call-actor`, which the pinned URL really removes (vendor `tools_loader.ts`), so the script could never succeed. The blocked names didn't exist, the four exposed helpers had no policy, and spend was unbounded. | **Fixed.** The script now (1) checks the synced catalog against an exact allowlist of the 15 pinned actor names (from vendor `actorNameToToolName`: 64-char cap, 4-hex sha256) plus the 4 helpers; (2) blocks `abort-actor-run`, `get-key-value-store-record` and the other 44 server tools; (3) rate-limits actor runs to 60 a day per company and connection. `social-core` handles `rate_limited`. |
+| 1 | `get-actor-run` and `get-dataset-items` accept any id the token can reach | **Accepted risk.** Owner: each company's board. Trigger: any agent reading a dataset its own run didn't create. The card and review recommend a scoped token. |
+| 2 | No false-success path, but the offline gate missed mutants: GENERIC omissions, `enabled:false`, block priority, `connectionId`, actor-hash typos. The probe didn't check the block reason. | **Fixed.** The gate now checks against an independent copy of Apify's 46 tool names, checks enabled/scope/priority, and re-derives the actor names from the card URL. 9/9 mutants are caught. The block policy runs first (priority 10), and the probe requires `deny_policy_block`. |
+| 2 | The cap is proven only by reading it back, not by tripping it. Counters count attempts, in UTC windows. | **Accepted.** Tripping the cap would bill real runs. Trigger: the first `rate_limited` seen in production confirms it. |
