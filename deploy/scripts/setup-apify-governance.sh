@@ -96,7 +96,7 @@ desired_policies() {
   jq -n --arg conn "$1" --argjson actors "$2" --argjson generic "$GENERIC" --argjson runs "$RUNS_PER_DAY" '[
     { name: "org-instructions: block Apify run control, stores and generic tools",
       description: "Agents run only the pinned social-reading actors and read their runs and datasets. Aborting runs, reading key-value stores, running other actors and browsing the account are operator work.",
-      policyType: "block", priority: 40, enabled: true,
+      policyType: "block", priority: 10, enabled: true,
       selectors: { toolNames: (["abort-actor-run","get-key-value-store-record"] + $generic), connectionId: $conn },
       conditions: null, config: null },
     { name: "org-instructions: rate-limit Apify actor runs",
@@ -108,9 +108,9 @@ desired_policies() {
   ]'
 }
 
-# probe CID CONN AGENT LABEL TOOL PARAMS_JSON EXPECTED_DECISION
+# probe CID CONN AGENT LABEL TOOL PARAMS_JSON EXPECTED_DECISION [EXPECTED_REASON_CODE]
 probe() {
-  local cid="$1" conn="$2" agent="$3" label="$4" tool="$5" params="$6" want="$7" resp decision ar
+  local cid="$1" conn="$2" agent="$3" label="$4" tool="$5" params="$6" want="$7" reason="${8:-}" resp decision ar got
   jq -n --arg a "$agent" --arg t "$tool" --argjson p "$params" '{agentId:$a, toolName:$t, parameters:$p}' > "$WORK/probe.json"
   resp="$(api POST "/tool-connections/$conn/test-calls" "$WORK/probe.json")"
   decision="$(jq -r '.decision // "none"' <<<"$resp")"
@@ -120,7 +120,11 @@ probe() {
     api POST "/tool-gateway/action-requests/$ar/decline" "$WORK/decline.json" >/dev/null
   fi
   [[ "$decision" == "$want" ]] || die "probe '$label' on connection $conn: expected $want, got $decision: $(head -c 300 <<<"$resp")"
-  log "  probe ok: $label -> $decision"
+  if [[ -n "$reason" ]]; then
+    got="$(jq -r '.error.reasonCode // "none"' <<<"$resp")"
+    [[ "$got" == "$reason" ]] || die "probe '$label' on connection $conn: expected reason $reason, got $got"
+  fi
+  log "  probe ok: $label -> $decision${reason:+ ($reason)}"
 }
 
 companies="$(api GET /companies)"
@@ -165,7 +169,7 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
       fi
     done
     if [[ "$DRY" -eq 0 ]]; then
-      probe "$cid" "$conn" "$agent" "abort a run" abort-actor-run '{"runId":"paperclip-governance-probe"}' off
+      probe "$cid" "$conn" "$agent" "abort a run" abort-actor-run '{"runId":"paperclip-governance-probe"}' off deny_policy_block
       probe "$cid" "$conn" "$agent" "read a run" get-actor-run '{"runId":"paperclip-governance-probe"}' allowed
       limit="$(api GET "/companies/$cid/tools/policies" | jq -r --arg conn "$conn" '[(.policies // .)[]
                 | select(.name=="org-instructions: rate-limit Apify actor runs" and .selectors.connectionId==$conn and .enabled==true)][0].config.rateLimit.limit // empty')"
