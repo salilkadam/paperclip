@@ -54,13 +54,15 @@ export function plainCardText(value: unknown, max = 160): string {
 export function plainToolLabel(tool: {
   name: string; displayName?: string | null; upstreamToolName?: string | null; applicationDisplayName?: string | null;
 }): string {
+  // "Delete Post Tool" -> "Delete Post", but "Run tool" keeps its only noun
+  const dropToolSuffix = (text: string) => (/\S\s+\S+\s+tool$/i.test(text) ? text.replace(/\s+tool$/i, "") : text);
   const humanize = (raw: string) => {
-    const words = raw.replace(/[-_]+/g, " ").trim().replace(/\s+tool$/i, "");
-    return words ? words.charAt(0).toUpperCase() + words.slice(1) : "";
+    const words = dropToolSuffix(raw.replace(/([a-z\d])([A-Z])/g, "$1 $2").replace(/[-_.]+/g, " ").trim().replace(/\s+/g, " "));
+    return words ? words.charAt(0).toUpperCase() + words.slice(1).toLowerCase() : "";
   };
-  // a catalog title can itself be an identifier ("gh_delete_post"): humanize that too
+  // a catalog title can itself be an identifier ("gh_delete_post", "deletePostTool"): humanize that too
   const rawDisplay = tool.displayName?.trim() ?? "";
-  const display = /^[\w.-]+$/.test(rawDisplay) && /[-_]/.test(rawDisplay) ? humanize(rawDisplay) : rawDisplay.replace(/\s+tool$/i, "");
+  const display = /^[\w.-]+$/.test(rawDisplay) && /[-_.]|[a-z][A-Z]/.test(rawDisplay) ? humanize(rawDisplay) : dropToolSuffix(rawDisplay);
   const fromName = tool.upstreamToolName?.trim() || tool.name.split(":").pop() || tool.name;
   const action = plainCardText(display || humanize(fromName), 80) || "Tool action";
   const app = tool.applicationDisplayName?.trim();
@@ -75,15 +77,26 @@ export function escapeCardMarkdown(text: string): string {
   return text.replace(/[\\`*_{}[\]()<>#+!|~.:/@]/g, (ch) => `\\${ch}`);
 }
 
+/**
+ * The instant a card time names. Times without an offset are UTC (TryPost's and
+ * Ghost's convention), never the server's local zone, so the "already passed" check
+ * and the displayed time always agree. Unparseable -> null.
+ */
+export function parseCardTime(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const iso = value.trim().replace(" ", "T");
+  const at = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+  return Number.isNaN(at) ? null : at;
+}
+
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** "2026-11-03T08:00:00-08:00" -> "Tue 3 Nov 2026, 08:00 (UTC-08:00)"; "...Z" -> "... (UTC)". Unparseable -> null. */
 export function formatWhen(value: unknown): string | null {
-  if (typeof value !== "string") return null;
+  const at = parseCardTime(value);
+  if (at === null || typeof value !== "string") return null;
   const iso = value.trim().replace(" ", "T");
-  const at = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
-  if (Number.isNaN(at)) return null;
   const offset = /([+-])(\d\d):?(\d\d)$/.exec(iso);
   const offsetMinutes = offset ? (offset[1] === "-" ? -1 : 1) * (Number(offset[2]) * 60 + Number(offset[3])) : 0;
   const local = new Date(at + offsetMinutes * 60_000);
@@ -101,10 +114,9 @@ export function formatWhen(value: unknown): string | null {
  * unparseable time -> null, and callers fall back to formatWhen.
  */
 export function formatWhenIn(value: unknown, timeZone: unknown): string | null {
-  if (typeof value !== "string" || typeof timeZone !== "string" || !timeZone.trim()) return null;
-  const iso = value.trim().replace(" ", "T");
-  const at = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
-  if (Number.isNaN(at)) return null;
+  if (typeof timeZone !== "string" || !timeZone.trim()) return null;
+  const at = parseCardTime(value);
+  if (at === null) return null;
   let parts: Intl.DateTimeFormatPart[];
   try {
     parts = new Intl.DateTimeFormat("en-GB", {
@@ -156,7 +168,7 @@ const GHOST_ACTIONS: Record<string, (title: string, args: Record<string, unknown
   "gh-publish-post": (title, args, now) => {
     const when = formatWhen(args.published_at);
     if (!when) return `Publish blog ${title} now`;
-    const at = Date.parse(String(args.published_at));
+    const at = parseCardTime(args.published_at) ?? now;
     return at > now + 60_000 ? `Schedule blog ${title} for ${when}` : `Publish blog ${title} now (dated ${when})`;
   },
   "gh-unpublish-post": (title) => `Take blog ${title} off the site (back to draft)`,
@@ -192,7 +204,7 @@ const TRYPOST_ACTIONS: Record<string, (account: string, args: Record<string, unk
     const edit = changesText(args) ? " and replace its text" : "";
     if (args.status === "scheduled") {
       if (!when) return `Schedule social post on ${account}${edit}`;
-      const past = Date.parse(String(args.scheduled_at)) <= now + 60_000 ? " (that time has already passed)" : "";
+      const past = (parseCardTime(args.scheduled_at) ?? Infinity) <= now + 60_000 ? " (that time has already passed)" : "";
       return `Schedule social post on ${account} for ${when}${past}${edit}`;
     }
     if (args.status === "publishing") return `Publish social post on ${account} now${edit}`;
@@ -240,6 +252,22 @@ export function cardSubjectLookupFor(upstreamToolName: string | null | undefined
   if (!upstreamToolName || !record) return null;
   const action = normalizeToolName(upstreamToolName);
   return ghostSubject(action, record) ?? tryPostSubject(action, record);
+}
+
+/**
+ * What a known action does when Paperclip could not look up its target: the same
+ * plain verb phrase the looked-up card would use, with the target left unnamed
+ * ("Permanently delete blog post (title not looked up)"). Null for actions this
+ * module does not know; the caller then falls back to plainToolLabel.
+ */
+export function unlookedActionHeadline(upstreamToolName: string | null | undefined, args: unknown, now = Date.now()): string | null {
+  const record = asRecord(args);
+  if (!upstreamToolName || !record) return null;
+  const action = normalizeToolName(upstreamToolName);
+  const ghost = GHOST_ACTIONS[action];
+  if (ghost) return ghost("(title not looked up)", record, now);
+  const tryPost = TRYPOST_ACTIONS[action];
+  return tryPost ? tryPost("an account not looked up", record, now, null) : null;
 }
 
 /** Markdown for the card preview: the subject lines, then the generic preview. */

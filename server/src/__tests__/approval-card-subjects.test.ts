@@ -6,8 +6,10 @@ import {
   formatWhenIn,
   lookedUpObject,
   plainCardText,
+  parseCardTime,
   plainToolLabel,
   sameUpstreamTool,
+  unlookedActionHeadline,
   subjectPreviewMarkdown,
 } from "../services/approval-card-subjects.js";
 
@@ -86,10 +88,36 @@ describe("approval card subjects", () => {
     expect(plainToolLabel({ name: raw })).toBe("Delete post");
     expect(plainToolLabel({ name: raw, displayName: "gh_delete_post", applicationDisplayName: "Ghost" })).toBe("Gh delete post (Ghost)");
     expect(plainToolLabel({ name: raw, displayName: "Delete https://evil.example now", applicationDisplayName: "TryPost" })).not.toMatch(/https:\/\//);
+    expect(plainToolLabel({ name: raw, displayName: "deletePostTool", applicationDisplayName: "TryPost" })).toBe("Delete post (TryPost)");
+    expect(plainToolLabel({ name: "acme:run_tool" })).toBe("Run tool");
     for (const label of [
       plainToolLabel({ name: raw, displayName: "Delete Post Tool", applicationDisplayName: "TryPost" }),
       plainToolLabel({ name: raw }),
     ]) expect(label).not.toContain("app-gallery-link");
+  });
+
+  it("keeps a known action's plain verb when the target could not be looked up", () => {
+    const NOW = Date.parse("2026-10-26T20:00:00Z");
+    expect(unlookedActionHeadline("gh_delete_post", { tenant_id: "reliora", post_id: "6adf" }, NOW))
+      .toBe("Permanently delete blog post (title not looked up)");
+    expect(unlookedActionHeadline("update-post-tool", { post_id: "01a1", status: "scheduled", scheduled_at: "2026-11-11 17:00:00" }, NOW))
+      .toBe("Schedule social post on an account not looked up for Wed 11 Nov 2026, 17:00 (UTC)");
+    expect(unlookedActionHeadline("kv_set", { key: "a" }, NOW)).toBeNull();
+    expect(unlookedActionHeadline(null, { post_id: "x" }, NOW)).toBeNull();
+  });
+
+  it("reads a card time without an offset as UTC, whatever the server's zone", () => {
+    expect(parseCardTime("2026-11-11 17:00:00")).toBe(Date.parse("2026-11-11T17:00:00Z"));
+    expect(parseCardTime("2026-11-11T17:00:00+05:30")).toBe(Date.parse("2026-11-11T11:30:00Z"));
+    expect(parseCardTime("not a time")).toBeNull();
+    // the "already passed" flag uses the same rule as the displayed time
+    const at = "2026-11-11 17:00:00";
+    const justAfter = Date.parse("2026-11-11T17:30:00Z");
+    expect(cardSubjectLookupFor("update-post-tool", { post_id: "p", status: "scheduled", scheduled_at: at })!
+      .describe({ display_name: "Reliora Inc", platform: "linkedin-page" }, justAfter)!.headline).toContain("already passed");
+    const hoursBefore = Date.parse("2026-11-11T12:00:00Z");
+    expect(cardSubjectLookupFor("update-post-tool", { post_id: "p", status: "scheduled", scheduled_at: at })!
+      .describe({ display_name: "Reliora Inc", platform: "linkedin-page" }, hoursBefore)!.headline).not.toContain("already passed");
   });
 
   it("returns no subject for actions it does not know or calls without a target", () => {
