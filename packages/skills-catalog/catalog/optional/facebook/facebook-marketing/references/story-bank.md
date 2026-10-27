@@ -1,0 +1,114 @@
+# Story Bank
+
+The raw material your Facebook posts are made of: what you have actually done, in
+numbers, with names and dates. The Voice Profile holds *how you sound*. This holds
+*what you have to say*.
+
+Every writing skill in this bundle reads it before drafting, so it stops asking you
+for "a specific number or moment" on every single request and starts drawing from
+what you already told it once.
+
+On a Facebook Page the sections that earn the most are Recurring stories and
+Scars: the audience is closer to you than on any other platform here, and
+reach follows what people comment on, which is almost always a story about a
+person rather than a claim about a market.
+
+> **This file is an empty template.** It holds career detail, figures, failures
+> and named people once filled. Keep the filled copy in memory, never in the skill
+> files: `$AGENT_HOME/life/resources/social/story-bank.md`.
+
+Fill it by running `fb-humanizer --mode interview`, which interviews you and writes
+the memory copy. You can also edit that copy at any time; the skills read whatever
+is there.
+
+## Status
+
+- filled: no
+- updated: (date)
+- sessions: (how many interviews have contributed)
+
+---
+
+## 1. Timeline
+
+Where you have worked and what changed at each stop. Dates matter: "March 2024"
+beats "last year", because a post can anchor on it. A Facebook audience often
+knows you personally, so the history is context they already half-have.
+
+- (...)
+
+## 2. Receipts
+
+The numbers you can state without checking. This is the section drafts reach for
+most, because one odd-precision figure with a named referent is the single
+strongest signal that a human wrote the post.
+
+Good: "cut deploy time from 22 minutes to 9, team of four, Q2 2025".
+Useless: "improved efficiency significantly".
+
+- (number, what it measures, when, who or what it belongs to)
+
+## 3. Shipped
+
+Things that exist because you worked on them. Products, migrations, hires, papers,
+events, rescues.
+
+- (what it was, your part in it, what it cost or returned)
+
+## 4. Turning points
+
+The moments where you changed your mind or the plan changed under you. These carry
+posts better than successes do, and they are the hardest to invent.
+
+- (what happened, what you believed before, what you believe now)
+
+## 5. Scars
+
+What went wrong and what it taught you. Kept separate from turning points because
+the shape differs: a scar is a cost you paid, not a view you revised.
+
+- (what broke, the real cost, what you do differently)
+
+## 6. Positions
+
+Opinions you would defend in a room that disagreed. A position with no cost to
+holding it is not a position; note what holding it costs you.
+
+- (the claim, who disagrees, why you hold it anyway)
+
+## 7. Recurring stories
+
+The three or four you already tell out loud, at dinner or in interviews. They are
+proven: you know they land. Write them here before a draft dulls them.
+
+- (the story in two lines, and the point it makes)
+
+## 8. Names you can use
+
+People, companies, tools and places you are free to name in public, and the ones
+you are not. Drafts stay vague when they do not know which is which.
+
+- Free to name: (...)
+- Never name: (...)
+- Ask first: (...)
+
+## 9. Off limits
+
+Subjects that stay out of posts regardless of how well they would perform: active
+deals, litigation, health, other people's business, anything under NDA.
+
+- (...)
+
+
+---
+
+## How drafts use this
+
+- A draft needs a concrete detail: it takes one from **Receipts** or **Shipped**
+  rather than asking you mid-session.
+- A hook needs a reversal or a confession: **Turning points** and **Scars** are
+  where those live.
+- A post needs an argument: **Positions** supplies the claim and the opposition.
+- Anything a draft cannot source from here, it asks about or leaves out. It does
+  not invent a number. If you see an unfamiliar figure in a draft, that is a bug
+  worth reporting.

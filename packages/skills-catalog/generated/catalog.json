@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "packageName": "@paperclipai/skills-catalog",
   "packageVersion": "0.3.1",
-  "generatedAt": "2026-10-06T01:21:47.421Z",
+  "generatedAt": "2026-10-27T01:53:42.618Z",
   "skills": [
     {
       "id": "paperclipai:bundled:docs:doc-maintenance",
@@ -522,6 +522,466 @@
       "contentHash": "sha256:642321f40d51e0125df05c6fbace49aeb07ec30392058756909c259c9c5eac6a"
     },
     {
+      "id": "paperclipai:optional:facebook:facebook-marketing",
+      "key": "paperclipai/optional/facebook/facebook-marketing",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "facebook-marketing",
+      "name": "facebook-marketing",
+      "description": "Hub for the Facebook Page skills: short punchy Page posts and story posts, AI-tell removal and pre-publish audit, hook teardowns, comment replies, weekly plans, Page audits and Page/commenter reads. Holds the shared references (voice rules, hook formulas, algorithm, Apify read layer).",
+      "path": "catalog/optional/facebook/facebook-marketing",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "assets",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "facebook-pages",
+        "community"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7602,
+          "sha256": "eb778ddfb97329d78b302b75bde485b7a518b4e4c23823d49c759f40c011b95a"
+        },
+        {
+          "path": "assets/icon.svg",
+          "kind": "asset",
+          "sizeBytes": 768,
+          "sha256": "78eb40c08af002ce51047674432e8ef7d569c92a2e486b94ede9e5874f18829a"
+        },
+        {
+          "path": "references/algorithm-heuristics.md",
+          "kind": "reference",
+          "sizeBytes": 8511,
+          "sha256": "0daa41d29735fb1ffdbbd4e0b41188ccb8ae6405784ad5513b449c18de89a526"
+        },
+        {
+          "path": "references/hook-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 11705,
+          "sha256": "5d9ed5192a95fd217e1180a822108ba3fea010bc64b29f2ac9ea5edfabe31c3b"
+        },
+        {
+          "path": "references/mcp-read-layer.md",
+          "kind": "reference",
+          "sizeBytes": 5507,
+          "sha256": "01512b337823502e71a4fe946bc3530a08a121b91d7295b3c532be9281e8c255"
+        },
+        {
+          "path": "references/story-bank.md",
+          "kind": "reference",
+          "sizeBytes": 3843,
+          "sha256": "d24fbe74106e3db85629b66056b1184a7b2b4a2b8c69182f4ca0b3496c038064"
+        },
+        {
+          "path": "references/untrusted-content.md",
+          "kind": "reference",
+          "sizeBytes": 2989,
+          "sha256": "97a00ccd4f93e533e37dc5ab51434e11c1c7181eb9553e802d55aef6ba64d848"
+        },
+        {
+          "path": "references/voice-profile.md",
+          "kind": "reference",
+          "sizeBytes": 2022,
+          "sha256": "0dacb54373f5d79d3caf2e48596ed96995a88997d237c59463b53c641f60708e"
+        },
+        {
+          "path": "references/voice-rules.md",
+          "kind": "reference",
+          "sizeBytes": 5893,
+          "sha256": "bef9f3147d2963d24c1d2b9cfe0c351fe8f5cc0fbaf4d617f20984ceaafc5521"
+        },
+        {
+          "path": "UPSTREAM.md",
+          "kind": "markdown",
+          "sizeBytes": 5626,
+          "sha256": "0973e7ec21d2e60771325bbeb962afee180634a2c6e494f18da21dbb8deb745a"
+        }
+      ],
+      "contentHash": "sha256:560fc943c05e1f54fb53107a386ac11dfc61a548ef4ed6d8b8e0d288481e83ab"
+    },
+    {
+      "id": "paperclipai:optional:facebook:fb-audience-insights",
+      "key": "paperclipai/optional/facebook/fb-audience-insights",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "fb-audience-insights",
+      "name": "fb-audience-insights",
+      "description": "Read a Facebook Page and its audience from real data through the Apify connection: any Page's public stats (followers, likes, categories, intro, websites) and the commenters on a public post, with themes, reply candidates and a competitor benchmark.",
+      "path": "catalog/optional/facebook/fb-audience-insights",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "audience-research",
+        "analytics"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6599,
+          "sha256": "468300791888fc911c72068eb4300d300bd3b979d4f7bcfc8d9f705676f74f9c"
+        }
+      ],
+      "contentHash": "sha256:1e6f9a4a9f1ee01dbbaeea67fca8dcf0222d23cd2976a8fcb775acc3922991e2"
+    },
+    {
+      "id": "paperclipai:optional:facebook:fb-content-planner",
+      "key": "paperclipai/optional/facebook/fb-content-planner",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "fb-content-planner",
+      "name": "fb-content-planner",
+      "description": "Generate a weekly Facebook Page content plan from a theme, audience and pillars: per-day picks (short vs story post, hook formula, angle, posting time, goal), a daily comment-reply target, and a goal-mix check across shares, comments and reactions.",
+      "path": "catalog/optional/facebook/fb-content-planner",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "content-calendar",
+        "planning"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6289,
+          "sha256": "644002907d01c97aaa9a9f6e24bd4ba6bcbf8769f3d80f8be74c8ad7896aed8f"
+        },
+        {
+          "path": "references/example-week.md",
+          "kind": "reference",
+          "sizeBytes": 2954,
+          "sha256": "3d45cade1201451ff3aa9fb8a871d3a318f8d3ce15c10838df36c9451ae850a1"
+        },
+        {
+          "path": "references/pillars-framework.md",
+          "kind": "reference",
+          "sizeBytes": 2877,
+          "sha256": "6f6e7d5a1a92e1642ab35d6a1b03ed3ce9f79266f8bf064514025870a92847b2"
+        }
+      ],
+      "contentHash": "sha256:c0f8f86a64831872ddd3db507420db9776a374fdb00235e14917e3f6323e3347"
+    },
+    {
+      "id": "paperclipai:optional:facebook:fb-engagement-drafter",
+      "key": "paperclipai/optional/facebook/fb-engagement-drafter",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "fb-engagement-drafter",
+      "name": "fb-engagement-drafter",
+      "description": "Draft replies to comments on your Facebook Page's posts in the Page voice: 1-3 variants per comment from proven templates (answer, thank plus add value, handle the complaint, turn it into a share). TryPost has no comment path, so approved replies are copy-paste blocks.",
+      "path": "catalog/optional/facebook/fb-engagement-drafter",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "community-manager"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "community-management",
+        "replies"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8072,
+          "sha256": "bdc23b6bc5adbb6591923a6ec9da0c72d900d08a88aeceadf20d21f679bf1f68"
+        },
+        {
+          "path": "references/reply-templates.md",
+          "kind": "reference",
+          "sizeBytes": 3572,
+          "sha256": "795563aaf9c5bedddb2012adca1a40f88f6228a9c12676b045b082a836c60e41"
+        }
+      ],
+      "contentHash": "sha256:8f447baf2e8fda922b530b11e454f6b0e94d960882ffbe2a21ddee18ef5dc8e0"
+    },
+    {
+      "id": "paperclipai:optional:facebook:fb-hook-extractor",
+      "key": "paperclipai/optional/facebook/fb-hook-extractor",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "fb-hook-extractor",
+      "name": "fb-hook-extractor",
+      "description": "Reverse-engineer a high-share Facebook Page post: which of the 10 hook formulas it uses (with confidence), short vs story container, the beat-by-beat structure, the goal it chased, why it worked, AI tells to avoid, and a blank fill-in template.",
+      "path": "catalog/optional/facebook/fb-hook-extractor",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "hooks",
+        "content-analysis"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 5154,
+          "sha256": "74f366676221d5aa0b3aa57427c10e565787fbbd47114d3667c64b98e12f95f7"
+        },
+        {
+          "path": "references/classification-rules.md",
+          "kind": "reference",
+          "sizeBytes": 3023,
+          "sha256": "ccb06c05185691b389a911e3a8f9e21050ffc6c8444fc4ef9f46a0d85d16a010"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 3314,
+          "sha256": "a23349dd42518f775cdd115d6c0fb7c572511ee51393389e4f802816956e0190"
+        }
+      ],
+      "contentHash": "sha256:8161930ba6d2049cccd2b35e1d3dea5c7bee2ca72eed3d108c075ee408918cd9"
+    },
+    {
+      "id": "paperclipai:optional:facebook:fb-humanizer",
+      "key": "paperclipai/optional/facebook/fb-humanizer",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "fb-humanizer",
+      "name": "fb-humanizer",
+      "description": "Remove the AI tells readers react to in a Facebook Page post: 2026 vocabulary by density, reveal bridges, staccato stacks, triads, announcement auto-pilot. Also --mode audit (pre-publish check), --mode profile (learns your voice) and --mode interview (fills the Story Bank).",
+      "path": "catalog/optional/facebook/fb-humanizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "humanizer",
+        "editing",
+        "voice"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 18382,
+          "sha256": "ae027c4f5154ecff99b06d7de312ffbb3b9c2c622723af157ebaed6757017085"
+        },
+        {
+          "path": "references/audit-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 4082,
+          "sha256": "c829f1400f7df6868f8d08cacfa45ac4c9687659a50090ce4d23df9b39f27495"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 3836,
+          "sha256": "6bff8aa9b3435ada984825d197dd8adfe87e241056cb8f4644bb04f6cb272356"
+        },
+        {
+          "path": "references/scrub-rules.md",
+          "kind": "reference",
+          "sizeBytes": 21098,
+          "sha256": "26f1697fb1723534a09664dd8d11d29f6d30db38e09a73155f1bdb4f5b6a1482"
+        },
+        {
+          "path": "sub-skills/illustration.md",
+          "kind": "markdown",
+          "sizeBytes": 3827,
+          "sha256": "91d84e200366caa4785898aa691b397556ebf66cc305bbc487b4726ca28ef971"
+        },
+        {
+          "path": "sub-skills/post-audit.md",
+          "kind": "markdown",
+          "sizeBytes": 5273,
+          "sha256": "d4a661ededa0de35f7a26fb5776442832b9bed577ea035245ae8d176bd65d7b9"
+        },
+        {
+          "path": "sub-skills/story-bank-interview.md",
+          "kind": "markdown",
+          "sizeBytes": 7178,
+          "sha256": "0b44ee1942f7afaeeb465c26b17342215db9c9661ff913a4f81782f531469cbd"
+        },
+        {
+          "path": "sub-skills/voice-profile.md",
+          "kind": "markdown",
+          "sizeBytes": 2972,
+          "sha256": "fc8409ccca04a3cbdafbf97234439f06839f596ea93c06090ef5924d99907dad"
+        }
+      ],
+      "contentHash": "sha256:8d4a7b0e91d6779ec462255521ca6e7a05f7de34b04db40b6630c51e323c204e"
+    },
+    {
+      "id": "paperclipai:optional:facebook:fb-page-optimizer",
+      "key": "paperclipai/optional/facebook/fb-page-optimizer",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "fb-page-optimizer",
+      "name": "fb-page-optimizer",
+      "description": "Audit and rewrite a Facebook Page for 2026: name, username and vanity URL, profile picture and cover, Intro/About and category, the CTA button matched to your goal, pinned post, tabs order, contact and link fields. Turns a visitor into a follower or a lead.",
+      "path": "catalog/optional/facebook/fb-page-optimizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "page-audit",
+        "branding"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6800,
+          "sha256": "1052cfea64d83e420a11ea0a1cf2d7da262d6ff5c67d53640df6245c38f6e253"
+        }
+      ],
+      "contentHash": "sha256:b5fb5aa3f77bd504e6b2aa6fc24ad9590c762eb701619a027726014054f3105e"
+    },
+    {
+      "id": "paperclipai:optional:facebook:fb-post-writer",
+      "key": "paperclipai/optional/facebook/fb-post-writer",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "fb-post-writer",
+      "name": "fb-post-writer",
+      "description": "Draft a short punchy Facebook Page post or a longer story post with a 2026 hook formula (one-line opinion, tiny number, ask-the-page, this-or-that, tip, story) picked by goal. Favors the under-80-char sweet spot, runs the humanizer pass, publishes via TryPost.",
+      "path": "catalog/optional/facebook/fb-post-writer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "copywriting",
+        "page-posts"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8872,
+          "sha256": "77f3f8670e19bbf199ec9127cfdef6546f866e3fb6fddcdcbee675d44afd81c2"
+        },
+        {
+          "path": "references/short-post-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 3026,
+          "sha256": "432a4da256a70c8fa99cc74976e6dd484bf1eec37cb4acc6a4bc2ce77f1461a5"
+        }
+      ],
+      "contentHash": "sha256:880e43f82b62d0a84ea3393a8bfe6caacaa8b8871cb92067716ef5f61a711865"
+    },
+    {
+      "id": "paperclipai:optional:facebook:fb-repurposer",
+      "key": "paperclipai/optional/facebook/fb-repurposer",
+      "kind": "optional",
+      "category": "facebook",
+      "slug": "fb-repurposer",
+      "name": "fb-repurposer",
+      "description": "Repurpose a LinkedIn post, X thread, blog or newsletter into a native Facebook Page post: warm the tone, lead with a standalone claim above the See more fold, move links to the first comment, strip off-platform artifacts. Publishes through TryPost.",
+      "path": "catalog/optional/facebook/fb-repurposer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "facebook",
+        "social-media",
+        "repurposing",
+        "content-strategy"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9251,
+          "sha256": "29c2ff1dc20ecfa6afda3c37fefb075c226a2665acfb2d86649972d5c6e42e4f"
+        }
+      ],
+      "contentHash": "sha256:070b47b066f98b6618fe450f00ca87c1a794b841c33751e6ba18b28802150caa"
+    },
+    {
       "id": "paperclipai:optional:finance:ramp",
       "key": "paperclipai/optional/finance/ramp",
       "kind": "optional",
@@ -557,6 +1017,1306 @@
         }
       ],
       "contentHash": "sha256:276d85e98a4732f278204e26438aa95fde158dd2d15c1e427c4c7c7d492e769d"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-audience-insights",
+      "key": "paperclipai/optional/instagram/ig-audience-insights",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-audience-insights",
+      "name": "ig-audience-insights",
+      "description": "Read your Instagram niche and profile stats from real data through the Apify connection: scan a hashtag for the Reels traveling now and pull follower, post and bio stats for any handle. Discovery plus profiles, not engagers. Not for writing captions (use ig-caption-writer).",
+      "path": "catalog/optional/instagram/ig-audience-insights",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "analytics",
+        "competitor-research"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6886,
+          "sha256": "a2914c51aad524948e9f8424dea2a469004ad2dc5323f9f253b3de42095618ee"
+        }
+      ],
+      "contentHash": "sha256:e8e1095e3de19ca2fe1d4c11a1654f758a056dd408e56bf2e73f83d624f90eca"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-caption-writer",
+      "key": "paperclipai/optional/instagram/ig-caption-writer",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-caption-writer",
+      "name": "ig-caption-writer",
+      "description": "Draft an Instagram caption with the hook in the first 125 characters, a skimmable body and one CTA, using a 2026 hook formula chosen by goal (saves, shares, comments, follows). Runs the humanizer pass, then a TryPost draft with media. Not for carousels (use ig-carousel-planner).",
+      "path": "catalog/optional/instagram/ig-caption-writer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "captions",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7932,
+          "sha256": "5847ce4b1f484430b641f02cebb296dbdf20b2ddef289b01021afcf45d34a53e"
+        },
+        {
+          "path": "references/caption-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 3132,
+          "sha256": "5d1925007f2a63a2e4d74057f775f3f6bd7a297aa86081d6650e2bd5c002c039"
+        }
+      ],
+      "contentHash": "sha256:97c7fcfe053e1b9bae126a8e8e2bd19c00c5d1bcb312a4c0829e8cf498c576d6"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-carousel-planner",
+      "key": "paperclipai/optional/instagram/ig-carousel-planner",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-carousel-planner",
+      "name": "ig-carousel-planner",
+      "description": "Plan an Instagram carousel slide by slide (up to 10): a hook slide that opens a loop, value slides that front-load the payoff, a payoff slide that earns the save. Drafts slide text and caption, makes slides with Loc-GenImage, then a TryPost draft. Not for single images.",
+      "path": "catalog/optional/instagram/ig-carousel-planner",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "carousel",
+        "visual-content"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8680,
+          "sha256": "03e3de3b9965569dc3e748f1b933912e87ae8429b8986d6880170b021acc7624"
+        },
+        {
+          "path": "references/slide-architecture.md",
+          "kind": "reference",
+          "sizeBytes": 3483,
+          "sha256": "94c763279ed314184a6a574597a1973ca9425ea654b7e30db2e8b390aca31ec0"
+        }
+      ],
+      "contentHash": "sha256:7aab975a2111c819b0ee388dea0c773bf2ffd6d8aad596d37f1206bf1e66c95f"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-content-planner",
+      "key": "paperclipai/optional/instagram/ig-content-planner",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-content-planner",
+      "name": "ig-content-planner",
+      "description": "Generate a weekly Instagram content plan from a theme, audience and pillars: a per-day mix of Reels, carousels, single images and stories, each with hook formula, angle, time and goal, plus a saves-and-shares goal and a balance check. Not for one caption or one carousel.",
+      "path": "catalog/optional/instagram/ig-content-planner",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "content-calendar",
+        "planning"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6147,
+          "sha256": "fef1d2b770b89be3463394521d4466f37e27dc86f462a4cad423ef05a0c0dfb5"
+        },
+        {
+          "path": "references/example-week.md",
+          "kind": "reference",
+          "sizeBytes": 3131,
+          "sha256": "b0f8bb025d64e7053d3d0ddfd129045e97d7ce9cc071f33163fe4d816499a55d"
+        },
+        {
+          "path": "references/pillars-framework.md",
+          "kind": "reference",
+          "sizeBytes": 2632,
+          "sha256": "7e42b6ae43d558ef56d6d0b4c08bc9d3655f2f6285a99648094b3f28e4a0daa3"
+        }
+      ],
+      "contentHash": "sha256:9f7d3d60bf60adc14a9c35ccc64e0a6721e2d54089ab3d552c237b16519aee98"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-hashtag-strategist",
+      "key": "paperclipai/optional/instagram/ig-hashtag-strategist",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-hashtag-strategist",
+      "name": "ig-hashtag-strategist",
+      "description": "Build a sized Instagram hashtag set on the 2026 reality that 3-5 well-chosen tags beat 30: sizes each tag niche (under 50k), mid (50k-500k) or broad (500k+) and assembles a mix a small or mid account can rank in. Not for writing the caption (use ig-caption-writer).",
+      "path": "catalog/optional/instagram/ig-hashtag-strategist",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "hashtags",
+        "discovery"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 4849,
+          "sha256": "064373aee399bf72b623151ebeb503933cf599c615a01d63af6b47b2b796612d"
+        },
+        {
+          "path": "references/sourcing-tactics.md",
+          "kind": "reference",
+          "sizeBytes": 2242,
+          "sha256": "06d3f6bc920988db28a0463b01d9e03852a902b35fe1124568d30def408bbaf3"
+        }
+      ],
+      "contentHash": "sha256:510ae51344549db7550523788d81ab18a92b83c6d4c7d4db03f2c2e0f8968472"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-hook-extractor",
+      "key": "paperclipai/optional/instagram/ig-hook-extractor",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-hook-extractor",
+      "name": "ig-hook-extractor",
+      "description": "Reverse-engineer the hook from a viral Instagram Reel or carousel, given a URL or pasted caption: names which of the 10 canonical 2026 formulas it uses, why it worked and its primary goal, and returns a blank template mapped to your topic. Not for writing your own.",
+      "path": "catalog/optional/instagram/ig-hook-extractor",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "hooks",
+        "content-analysis"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 5448,
+          "sha256": "3664de5b07b44e98d6c8bdf48ca8c4f0d5c8f35ec9e27782c9ebbd9ffcfd91a0"
+        },
+        {
+          "path": "references/classification-rules.md",
+          "kind": "reference",
+          "sizeBytes": 3378,
+          "sha256": "a1c3fcf3472c4446f7d02ce923353ade758b521979c5fbfcf5a77612b014348d"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 3824,
+          "sha256": "fc06191a275abfa89c9d7c04ded24e089dfeaf1eabde08a3e6ea4ddd4444889f"
+        }
+      ],
+      "contentHash": "sha256:e8327c190d1c997e93cb438d40a45adcd66c1fc3c47c86e3521d573a87c9eecf"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-humanizer",
+      "key": "paperclipai/optional/instagram/ig-humanizer",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-humanizer",
+      "name": "ig-humanizer",
+      "description": "Remove the AI tells readers react to in an Instagram caption or carousel slide: vocabulary density, reveal bridges, staccato stacks, stacked triads, performed sincerity, emoji storms; caps em dashes. Includes --mode audit and --mode profile. Not for beating AI detectors.",
+      "path": "catalog/optional/instagram/ig-humanizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "editing",
+        "voice"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 16669,
+          "sha256": "9eb121f50fa1fbd117aa76184a32e379227241bf725e501a14ce86d2f6059ec4"
+        },
+        {
+          "path": "references/audit-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 4158,
+          "sha256": "fa9e68b8415bf8dc66d8fb55ae6c65d59b8b22a2895485a2fb0ac8b5fb289032"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 3427,
+          "sha256": "bbc27a266001c9104c0913342445ba6e7df94dfc3495b15be512ca55f13dbf0a"
+        },
+        {
+          "path": "references/scrub-rules.md",
+          "kind": "reference",
+          "sizeBytes": 22492,
+          "sha256": "3edc356dcdab0c9d85cc9506ad972f31fd088db6eac43df9d0c721a44f2374d1"
+        },
+        {
+          "path": "sub-skills/illustration.md",
+          "kind": "markdown",
+          "sizeBytes": 4239,
+          "sha256": "e23c06546a76da19402c5e0a889a9e0aa1ecbd7863c08c4a2b44126b0dc333c6"
+        },
+        {
+          "path": "sub-skills/post-audit.md",
+          "kind": "markdown",
+          "sizeBytes": 5470,
+          "sha256": "50af660d2be7feac987208cec9294f6b737b97f8d2e80de61af5d817f56f30d9"
+        },
+        {
+          "path": "sub-skills/voice-profile.md",
+          "kind": "markdown",
+          "sizeBytes": 2749,
+          "sha256": "21a55fb230d8e19ec728c6fdaaaa578443f2a0e74ff9e748395c79a108ad1dfb"
+        }
+      ],
+      "contentHash": "sha256:db37e02f11266b1c0c9e16b56c4f977f8a648598744aea0fb08a384371cd5ee5"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-profile-optimizer",
+      "key": "paperclipai/optional/instagram/ig-profile-optimizer",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-profile-optimizer",
+      "name": "ig-profile-optimizer",
+      "description": "Audit and rewrite an Instagram profile for 2026: photo, keyword-weighted NAME field, handle, 150-char bio (value, topic, proof), goal-matched link, category, story highlights, the first-9 grid and up to 3 pinned posts. Not for writing captions (use ig-caption-writer).",
+      "path": "catalog/optional/instagram/ig-profile-optimizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "profile",
+        "branding"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6943,
+          "sha256": "8e42389738e0a65c88e5a3614c23ed4838d0aa47feed66c94a84caf875006bc6"
+        }
+      ],
+      "contentHash": "sha256:5f85e106974a644cd59fcd305f05f6c144a067a555ebc5d561d221d66067fbfc"
+    },
+    {
+      "id": "paperclipai:optional:instagram:ig-repurposer",
+      "key": "paperclipai/optional/instagram/ig-repurposer",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "ig-repurposer",
+      "name": "ig-repurposer",
+      "description": "Repurpose a LinkedIn post, blog article (Ghost), YouTube script or X thread into a native Instagram carousel or caption, re-hooked before the 125-char fold with off-platform artifacts stripped, then a TryPost draft. Not for writing from scratch or auditing a draft.",
+      "path": "catalog/optional/instagram/ig-repurposer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "repurposing",
+        "cross-platform"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9749,
+          "sha256": "41c74c6a1a947d58c91cce618368b2889c3d6060048a596957ebe6e432413cfc"
+        }
+      ],
+      "contentHash": "sha256:746bd9852881a19ceea0bf374c6088a862e168f0f77b046d00c9e0f579393ea6"
+    },
+    {
+      "id": "paperclipai:optional:instagram:instagram-marketing",
+      "key": "paperclipai/optional/instagram/instagram-marketing",
+      "kind": "optional",
+      "category": "instagram",
+      "slug": "instagram-marketing",
+      "name": "instagram-marketing",
+      "description": "Hub for the Instagram skills: first-125-char caption hooks, slide-by-slide carousels, hook reverse-engineering, 3-5 sized hashtags, AI-tell removal, weekly Reel/carousel plans. Media is required; images come from Loc-GenImage, video from the video studios, publishing via TryPost.",
+      "path": "catalog/optional/instagram/instagram-marketing",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "assets",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "instagram",
+        "social-media",
+        "reels",
+        "carousel"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7400,
+          "sha256": "505b4befe28bfa7887fb69ba402c700cb61875f8fd3f16187f1ffe122ca7cdf4"
+        },
+        {
+          "path": "assets/icon.svg",
+          "kind": "asset",
+          "sizeBytes": 768,
+          "sha256": "bdf47a4f66f02791cbc143680a92c8de3bd380e5bf5eb3e3235c9f20144ae3ce"
+        },
+        {
+          "path": "references/algorithm-heuristics.md",
+          "kind": "reference",
+          "sizeBytes": 8140,
+          "sha256": "8388b4875daa28bfa4aac77664755b84e0d7d5ce6a06bf7c61dd6d9de7823384"
+        },
+        {
+          "path": "references/hashtag-strategy.md",
+          "kind": "reference",
+          "sizeBytes": 4550,
+          "sha256": "1b66d83c1126ed358bc8538fd5f598e2e55c910843c7dc75120cce059d1945e6"
+        },
+        {
+          "path": "references/hook-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 11722,
+          "sha256": "b42fa3d65f4fd0d1eeadeb60d12c1dabae218116085eae4611302c6e4acc8a52"
+        },
+        {
+          "path": "references/mcp-read-layer.md",
+          "kind": "reference",
+          "sizeBytes": 6331,
+          "sha256": "0d1de1ca45510b44ab16ac73c1088483887a62d0315e3f74bcad85950e19c9c6"
+        },
+        {
+          "path": "references/media-workflow.md",
+          "kind": "reference",
+          "sizeBytes": 6509,
+          "sha256": "6f119f1a929660189f477b5ef7782550e8c725a8faca2023b601dd19555406ab"
+        },
+        {
+          "path": "references/untrusted-content.md",
+          "kind": "reference",
+          "sizeBytes": 3075,
+          "sha256": "c264eaf091ebf63dcd8ad8b0a6e36dd5dc0ddac352d6b66d2bba3383f43b283f"
+        },
+        {
+          "path": "references/voice-profile.md",
+          "kind": "reference",
+          "sizeBytes": 1986,
+          "sha256": "eeedcdaa47c5a92d4538bc80a87fbc261d663f87535f6f3d0e32f7ca3526ef73"
+        },
+        {
+          "path": "references/voice-rules.md",
+          "kind": "reference",
+          "sizeBytes": 5528,
+          "sha256": "5990c58bab2f1afa893f38dc7a30a4b19cfa107ea4bcb3fc11a29fe238945a91"
+        },
+        {
+          "path": "UPSTREAM.md",
+          "kind": "markdown",
+          "sizeBytes": 5320,
+          "sha256": "8c8fa6d368f43192c25e7f47e13b7a6a92d8af5c1ce3ca993e69e0240d58e41a"
+        }
+      ],
+      "contentHash": "sha256:701964d4154588f27bd9c33c5fbd60ecdf978aa1e53aac1b8e4359ade700469c"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-comment-drafter",
+      "key": "paperclipai/optional/linkedin/linkedin-comment-drafter",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-comment-drafter",
+      "name": "linkedin-comment-drafter",
+      "description": "Draft a LinkedIn comment on someone else's post from its URL, or a reshare with optional commentary. Produces 1-3 variants in the company voice and a reaction pick. Not for replying to existing comments (use linkedin-reply-handler).",
+      "path": "catalog/optional/linkedin/linkedin-comment-drafter",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "comments",
+        "engagement"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9593,
+          "sha256": "98b78adbb4603ff1cd4add5aad244841a97ec495c0573a970223c54ffc69d4aa"
+        },
+        {
+          "path": "references/comment-templates.md",
+          "kind": "reference",
+          "sizeBytes": 7855,
+          "sha256": "496fcb4852c2e79e601eaf23ac79a978b3fe3096076518269254e00bf427be17"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 433,
+          "sha256": "3c1d891b8c66b9654d73ddbe62a359720ec389cc3b2be489810cc8e00dee47c3"
+        },
+        {
+          "path": "references/voice-rules.md",
+          "kind": "reference",
+          "sizeBytes": 118,
+          "sha256": "d5bd6cf59903202bb1f601d7fc29a2c17d4c20c3e56bd4e85f3d027cc2e841b4"
+        }
+      ],
+      "contentHash": "sha256:2acaf8e7a3b770d8773d49e10786a1a75835ece0cf911ede172379d7f3ffd5ce"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-content-planner",
+      "key": "paperclipai/optional/linkedin/linkedin-content-planner",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-content-planner",
+      "name": "linkedin-content-planner",
+      "description": "Generate a 7-day LinkedIn content plan from a theme, audience, and pillars: per-day pillar, format, hook type, CTA, posting time, daily comment targets, and an inbound-readiness check. For a week or month of content, not a single post (use linkedin-post-writer).",
+      "path": "catalog/optional/linkedin/linkedin-content-planner",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "content-strategist",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "content-calendar",
+        "planning"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9033,
+          "sha256": "5cb6d938556a229b0ac2e6097948858a9f0208ed359a11839248ce0ef4c8e653"
+        },
+        {
+          "path": "references/example-plan-week.md",
+          "kind": "reference",
+          "sizeBytes": 5166,
+          "sha256": "b7f5da1fab977e42ceaa1b5c4714f22bf1ef9bdf8ea3f2057a19bdd3babac4c6"
+        },
+        {
+          "path": "references/pillars-framework.md",
+          "kind": "reference",
+          "sizeBytes": 9700,
+          "sha256": "c91f707c6e586eb5d2b0984371f1124ba76c8b23d79519a4312a1115679304b3"
+        }
+      ],
+      "contentHash": "sha256:263f57acaa30ef59dc2654aec33b6bd966e9aa7ca3372d799fe5220c6d1d377b"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-employee-advocacy",
+      "key": "paperclipai/optional/linkedin/linkedin-employee-advocacy",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-employee-advocacy",
+      "name": "linkedin-employee-advocacy",
+      "description": "Stand up and run a LinkedIn employee advocacy program for a marketing or sales team: 14-day launch playbook, brand-safe governance, per-post time budget, cadence benchmarks, team ROI. Not for one person's own calendar (use linkedin-content-planner).",
+      "path": "catalog/optional/linkedin/linkedin-employee-advocacy",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "employee-advocacy",
+        "governance"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7332,
+          "sha256": "f4767b798a610c5abf9fa4541b3c320107adafdbb2efbf50e144e22acc4ab9c6"
+        },
+        {
+          "path": "references/advocacy-principles.md",
+          "kind": "reference",
+          "sizeBytes": 3462,
+          "sha256": "f858daa0c3045a4b5c20911ec7a828e29ccb0fcf8da9a8c8eb014a009b54697c"
+        },
+        {
+          "path": "references/governance-playbook.md",
+          "kind": "reference",
+          "sizeBytes": 5654,
+          "sha256": "f9463957070d6b9dabb44a0fb6000fef02568fe336f7d2e2918abadd0ecb20ac"
+        },
+        {
+          "path": "references/team-cadence-matrix.md",
+          "kind": "reference",
+          "sizeBytes": 3788,
+          "sha256": "eaa81e3752353e0fa1dc73d36ad30fe1d9588722df20a6943796d303ebc4190f"
+        }
+      ],
+      "contentHash": "sha256:63c1e3bee26d2435025c7b5a0e45bbfafa1a2a285af5e03b579d2628e994fc38"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-engager-analytics",
+      "key": "paperclipai/optional/linkedin/linkedin-engager-analytics",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-engager-analytics",
+      "name": "linkedin-engager-analytics",
+      "description": "Pull the people who liked or commented on a LinkedIn post and segment them by ICP fit (peer, aspirational, prospect, other) into a roster, tier breakdown and outbound action lists. Not for tracking author replies to your comments (use linkedin-thread-monitor).",
+      "path": "catalog/optional/linkedin/linkedin-engager-analytics",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "analytics",
+        "audience"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6397,
+          "sha256": "6e36da907106e17e4f810850c49e2fde1af8af8b7c5773a4d0ada5ffc1d5ade3"
+        },
+        {
+          "path": "references/output-spec.md",
+          "kind": "reference",
+          "sizeBytes": 1464,
+          "sha256": "56ed0c7e6397576fab79c25da871cc93ed99adf82d696d0a6b8e628e87ee1f95"
+        }
+      ],
+      "contentHash": "sha256:3e442d3fb3718f6bad457852219471dbcb4109aa5516cf2558fd79143da1b09a"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-hook-extractor",
+      "key": "paperclipai/optional/linkedin/linkedin-hook-extractor",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-hook-extractor",
+      "name": "linkedin-hook-extractor",
+      "description": "Reverse-engineer the hook formula from a viral LinkedIn post URL: which of the 20 canonical 2026 formulas it uses, why it worked, and a blank template. For learning from someone else's post, not writing your own (use linkedin-post-writer).",
+      "path": "catalog/optional/linkedin/linkedin-hook-extractor",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "writer",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "hooks",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 5018,
+          "sha256": "deffd9d61e6ae02a6e4953de0d6e6b98b9995d28052765e690cdcf374557e9c4"
+        },
+        {
+          "path": "references/classification-rules.md",
+          "kind": "reference",
+          "sizeBytes": 3369,
+          "sha256": "1720f4ffce9719ca2f4c60c2af3b7afd911bfbd65b544fd04f5bd2add104b6f5"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 959,
+          "sha256": "b346c97edeaa0c51f02e27d7ca26a2aaf0afb629c93d0b16e3d642419be68256"
+        }
+      ],
+      "contentHash": "sha256:4aafd002b93c7b72f7510b250ed72470669aa83e0b643a983d92bfd23aef5b15"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-humanizer",
+      "key": "paperclipai/optional/linkedin/linkedin-humanizer",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-humanizer",
+      "name": "linkedin-humanizer",
+      "description": "Remove AI tells from LinkedIn posts and comments (2026 vocabulary density, reveal bridges, staccato, stacked triads, performed sincerity). Tiered rewriter plus audit mode (pre-publish post audit) and profile mode (voice builder). Not for drafting from scratch.",
+      "path": "catalog/optional/linkedin/linkedin-humanizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "writer",
+        "social-media-manager"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "humanizer",
+        "editing"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 19973,
+          "sha256": "6b8164a0f43e1ede604248442ada538d6f145b52970f147ac6a129176e4fcb04"
+        },
+        {
+          "path": "references/audit-ai-tells.md",
+          "kind": "reference",
+          "sizeBytes": 11883,
+          "sha256": "6eeef9b6ac716ceafe45ca6dd254b8baabd777b830d8f4bd7ae385833e4829b7"
+        },
+        {
+          "path": "references/audit-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 4183,
+          "sha256": "94c200a1b8a90396bc59cae7d624e47f53b1222efb5a18c3ca8f9dda7f1489f4"
+        },
+        {
+          "path": "references/audit-examples.md",
+          "kind": "reference",
+          "sizeBytes": 452,
+          "sha256": "932c6a2465f02946f113a22ec9f882bffb3d6e4bda69c98770379a147d553de0"
+        },
+        {
+          "path": "references/detector-list.md",
+          "kind": "reference",
+          "sizeBytes": 6334,
+          "sha256": "f67db84077017432fe356b2f5285ccdddac01ce21fd705b708ba928a00673d83"
+        },
+        {
+          "path": "references/emoji-patterns.md",
+          "kind": "reference",
+          "sizeBytes": 3845,
+          "sha256": "0d0334be2d4cf9700876cda92d2d8992a0d713aa2044059e5e1a340df8831c27"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 1441,
+          "sha256": "5c30bb5699ff29661dadb5fa63438792eff30b710f960c02520df6f5ec52ea7a"
+        },
+        {
+          "path": "references/rules-explainer.md",
+          "kind": "reference",
+          "sizeBytes": 15139,
+          "sha256": "13cd49fa1f9b5478289079e201ea0e71c14907177f129860c0b3458c3594d47e"
+        },
+        {
+          "path": "references/scrub-rules.md",
+          "kind": "reference",
+          "sizeBytes": 27550,
+          "sha256": "101c7f0dec62821a773bf6984e2c25c4af202588d961b4d5698d892f01692796"
+        },
+        {
+          "path": "references/tier-rationale.md",
+          "kind": "reference",
+          "sizeBytes": 17700,
+          "sha256": "7c5fc51ff281adff25ba5e99b1dac3f7f70c615f90e61b80f45c4a97524e19fa"
+        },
+        {
+          "path": "references/voice-fingerprint.md",
+          "kind": "reference",
+          "sizeBytes": 5428,
+          "sha256": "3e344c87861105f65c855b1852995552320ce5ef3f045c6a5ad834f74a69dbe3"
+        },
+        {
+          "path": "sub-skills/detector-tester.md",
+          "kind": "markdown",
+          "sizeBytes": 5515,
+          "sha256": "52d7cec37648d3ff286751372e063f493ad5d43624bddb6981e97979c1b6bf4c"
+        },
+        {
+          "path": "sub-skills/emoji-detector.md",
+          "kind": "markdown",
+          "sizeBytes": 3993,
+          "sha256": "fa4323dfc7792a025a29fd25d96ba13f29de9db6f99f1d5c2486b711e257696c"
+        },
+        {
+          "path": "sub-skills/illustration.md",
+          "kind": "markdown",
+          "sizeBytes": 6734,
+          "sha256": "dc93a7bbeaa8e613bee1305b33b92a2fa476a430154cf8ea2a788652baaffa62"
+        },
+        {
+          "path": "sub-skills/post-audit.md",
+          "kind": "markdown",
+          "sizeBytes": 4998,
+          "sha256": "84919505a51d8ae02d0db29cad8235586f8df0dd1fba88fb715bca7ed096415f"
+        },
+        {
+          "path": "sub-skills/rules-explainer.md",
+          "kind": "markdown",
+          "sizeBytes": 5371,
+          "sha256": "3b2a8c0b5eaab8fdc7ce1bcba77964a97712c42501f50b6ecac6891c1a64ca25"
+        },
+        {
+          "path": "sub-skills/voice-profile.md",
+          "kind": "markdown",
+          "sizeBytes": 3334,
+          "sha256": "ae4a4c1e777f68f981f2ef87bb0bc97ce3a4fdc51e758978f2b4eefa9b0c629b"
+        }
+      ],
+      "contentHash": "sha256:b8bad0b7a671208552c2195a5d5763aba6f02b34640667f4feca672b5cb09541"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-interviewer",
+      "key": "paperclipai/optional/linkedin/linkedin-interviewer",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-interviewer",
+      "name": "linkedin-interviewer",
+      "description": "Interview the user for the raw material their posts are made of: a lasting Story Bank of roles, numbers, turning points, scars and positions, or a focused interview that turns one topic into a post spine. Not for learning how they write (use linkedin-humanizer).",
+      "path": "catalog/optional/linkedin/linkedin-interviewer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "writer",
+        "founder",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "interview",
+        "story-bank"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8942,
+          "sha256": "370f82e016acd082d3cf0a71ce06056d9399f1a8d702903a92149c57c316cdb3"
+        },
+        {
+          "path": "references/question-bank.md",
+          "kind": "reference",
+          "sizeBytes": 4433,
+          "sha256": "eebde9772408326129a1cc98b8431034292bb58bd451ab494c58dad5c465ef9b"
+        }
+      ],
+      "contentHash": "sha256:da1e166453ff6cd0199f4b03f16ff3cb1b054e061807bcb07fc481b7fbd14dd5"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-marketing",
+      "key": "paperclipai/optional/linkedin/linkedin-marketing",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-marketing",
+      "name": "linkedin-marketing",
+      "description": "Hub for the LinkedIn skills: plan, draft, audit and stage LinkedIn posts, comments and replies, with the shared hook formulas, algorithm heuristics, voice rules, benchmarks, Apify read mappings and voice/story templates. Read it before any linkedin-* skill.",
+      "path": "catalog/optional/linkedin/linkedin-marketing",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "assets",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist",
+        "writer",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "hub",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 12510,
+          "sha256": "64598ddcaada3df055ed4023d2cd89ca2c79ab51b3995de9721513b9f49f8892"
+        },
+        {
+          "path": "assets/icon.svg",
+          "kind": "asset",
+          "sizeBytes": 768,
+          "sha256": "5d92b3dafeb1e1a10e91a19096719bd337d21919da47df137d19c5488a66e696"
+        },
+        {
+          "path": "references/algorithm-heuristics.md",
+          "kind": "reference",
+          "sizeBytes": 8627,
+          "sha256": "e1e13dadebc6b20ee5ceb0f30d4b3fbbad29de87478eebc28b42549131506f83"
+        },
+        {
+          "path": "references/engagement-metrics-taxonomy.md",
+          "kind": "reference",
+          "sizeBytes": 2680,
+          "sha256": "70066d8c125510a95221c6f9615e760a9d8e58a55ec4045c94604ed80760e0a1"
+        },
+        {
+          "path": "references/founder-topics.md",
+          "kind": "reference",
+          "sizeBytes": 14564,
+          "sha256": "5b932a8326ee573345c93e88de591135acc14e9f35e3b1cb96192457c50f1dbf"
+        },
+        {
+          "path": "references/hook-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 40431,
+          "sha256": "7909ce17e1ae4332aaf38fa5d9dcf9e0f749b39ac371bb64db452558a1bc8c81"
+        },
+        {
+          "path": "references/industry-benchmarks.md",
+          "kind": "reference",
+          "sizeBytes": 4327,
+          "sha256": "4167aaa6807c80acca8aa59c63f9e60ff3d7feeb808f6696860ff530c0c6bcb1"
+        },
+        {
+          "path": "references/mcp-read-layer.md",
+          "kind": "reference",
+          "sizeBytes": 7648,
+          "sha256": "eb6728d2c67a1250fe6651aae7c6e0ff52ede2684b18143521308d749aac9a05"
+        },
+        {
+          "path": "references/precedence.md",
+          "kind": "reference",
+          "sizeBytes": 3514,
+          "sha256": "98a3e9235aee6bdf4ff4ee6f71ae417daf18f462b5f5f7e0f5b617dc60585dc2"
+        },
+        {
+          "path": "references/story-bank.md",
+          "kind": "reference",
+          "sizeBytes": 3640,
+          "sha256": "54f5700bf51e83a5ca99db7f36d847bf3b242503f7d61278480d41ce6fc58d26"
+        },
+        {
+          "path": "references/untrusted-content.md",
+          "kind": "reference",
+          "sizeBytes": 3016,
+          "sha256": "db90936c8e8f3872f45b9bffff24e791a9431bce8598c63a15b90b1f8ed49091"
+        },
+        {
+          "path": "references/voice-profile.md",
+          "kind": "reference",
+          "sizeBytes": 2878,
+          "sha256": "0d294f84dd753e49aa3cfe7aba20f253f4dd9dbe5a021c6a92e16a151f652597"
+        },
+        {
+          "path": "references/voice-rules.md",
+          "kind": "reference",
+          "sizeBytes": 2403,
+          "sha256": "25782ffa33f1ff4f2eb3fb78634815350f6ab181fbc6beaa71bda728bfcfe69e"
+        },
+        {
+          "path": "UPSTREAM.md",
+          "kind": "markdown",
+          "sizeBytes": 8487,
+          "sha256": "d7d555e9f213c7d63b6ab380dfbea3b33d788a94d20d4005b2f67d2124c26930"
+        }
+      ],
+      "contentHash": "sha256:064bfd4c07eb4f6047dca9ae0aa553bf04999814960ae662384d751a82107e6a"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-post-writer",
+      "key": "paperclipai/optional/linkedin/linkedin-post-writer",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-post-writer",
+      "name": "linkedin-post-writer",
+      "description": "Draft a new LinkedIn post from scratch with one of 20 2026 hook formulas plus a founders-edition angle library, picked by engagement goal (comments, reposts, likes, saves), then humanize and stage it as a TryPost draft. Not for reviewing drafts (use linkedin-humanizer).",
+      "path": "catalog/optional/linkedin/linkedin-post-writer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "writer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "copywriting",
+        "hooks"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 15436,
+          "sha256": "468a135f33e56646345088b624441446a07557b9423ea4302a574a7141478c83"
+        },
+        {
+          "path": "references/algorithm-heuristics.md",
+          "kind": "reference",
+          "sizeBytes": 136,
+          "sha256": "384d956463cf5e522c59fdb1dda4e12ec04beb061b030878ca2633097e165bee"
+        },
+        {
+          "path": "references/hook-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 122,
+          "sha256": "ec20e01122400321d37d78932090c8053e6c49afb095ed27ea49bd8d0018774f"
+        },
+        {
+          "path": "references/humanizer-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 6516,
+          "sha256": "5d72011fdf789d86007ddc13b1ef209cdf3673ead5d8e0abf34d552a09d5bdc9"
+        }
+      ],
+      "contentHash": "sha256:124f99f40de0a6a0ddace963f0e99b748eb9254c3ea8b2e3d526782a81f5427c"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-profile-optimizer",
+      "key": "paperclipai/optional/linkedin/linkedin-profile-optimizer",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-profile-optimizer",
+      "name": "linkedin-profile-optimizer",
+      "description": "Audit and rewrite a LinkedIn profile for 2026: headline, About, Featured, banner, photo, Experience metrics, Skills, custom URL, recommendations. Turns resume-style profiles into ones that convert. Not for writing feed content (use linkedin-post-writer).",
+      "path": "catalog/optional/linkedin/linkedin-profile-optimizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "founder",
+        "social-media-manager"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "profile",
+        "personal-brand"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6434,
+          "sha256": "e030fc6a6767ab119ad6bda38a27d630f1135590b6e2fe4c78c9cc67180f8904"
+        },
+        {
+          "path": "references/about-section-templates.md",
+          "kind": "reference",
+          "sizeBytes": 2717,
+          "sha256": "61d20273275e75409652ffc7f13affe6c572eee400a2c5298605c1b0a7c6aa0c"
+        },
+        {
+          "path": "references/banner-photo-specs.md",
+          "kind": "reference",
+          "sizeBytes": 2245,
+          "sha256": "918c60044be5f3ac555fb411e052f389738cbab8623c20ca39bf23275e0b07ea"
+        },
+        {
+          "path": "references/experience-skills-rules.md",
+          "kind": "reference",
+          "sizeBytes": 4045,
+          "sha256": "9dd685a08f59e306fa1ec58b68d2f727407fe6f42f36aab2bd45ff5cb4210282"
+        },
+        {
+          "path": "references/featured-section-playbook.md",
+          "kind": "reference",
+          "sizeBytes": 3125,
+          "sha256": "ef3209ad7177bab98b497b877297dcc988a01351ab021f4d4bbc656168d68976"
+        },
+        {
+          "path": "references/profile-headline-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 2296,
+          "sha256": "8307154ec1c8a5b8eeb9dddd367a3e6d98711a3d9c8a095621dc21dfd5781e3d"
+        }
+      ],
+      "contentHash": "sha256:eb76973b5514b92ec3c61b481fb08f585bef4baa3103150b362495b3d0140af0"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-reply-handler",
+      "key": "paperclipai/optional/linkedin/linkedin-reply-handler",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-reply-handler",
+      "name": "linkedin-reply-handler",
+      "description": "Draft a reply to one LinkedIn comment from its URL, or sweep a whole thread from the post URL and draft a reply to every comment worth answering. Resolves the right parentComment (LinkedIn flattens threads to 2 levels). Not for top-level comments (use linkedin-comment-drafter).",
+      "path": "catalog/optional/linkedin/linkedin-reply-handler",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "replies",
+        "community"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 15459,
+          "sha256": "acd8ae025aa9c336a2556274afeed730a64d663aaa35947fc48399b2e97c75da"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 1427,
+          "sha256": "1d32c25851b660991ac1bb41dff6f6893bdb9db5e26991521062860b47555c10"
+        },
+        {
+          "path": "references/filtering-rules.md",
+          "kind": "reference",
+          "sizeBytes": 2666,
+          "sha256": "06238bd00828b4fddbb24e859015d8de8b982e88489f0188bf980991e7ecda38"
+        },
+        {
+          "path": "references/reply-templates.md",
+          "kind": "reference",
+          "sizeBytes": 2297,
+          "sha256": "6892fbd90ab2b5ff15e18f49587cc64aab347cb12328abc23bb5996063911ab7"
+        },
+        {
+          "path": "references/threading-rules.md",
+          "kind": "reference",
+          "sizeBytes": 2924,
+          "sha256": "07f00fbc5924d1e5f0e8c3741b2e1cc6c9f3fa89d0ef4151e33fcfe585fe5f04"
+        }
+      ],
+      "contentHash": "sha256:49500360377d03f623df1def8bfd16b0521c27d1f600e59483fdb96763899c3b"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-repurposer",
+      "key": "paperclipai/optional/linkedin/linkedin-repurposer",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-repurposer",
+      "name": "linkedin-repurposer",
+      "description": "Repurpose a tweet, thread, video, blog or newsletter into a native LinkedIn post: re-hook before the fold, expand to 900-1300 chars, whitespace and CTA, links to the first comment, humanizer pass. Not for writing from scratch (use linkedin-post-writer).",
+      "path": "catalog/optional/linkedin/linkedin-repurposer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "writer",
+        "social-media-manager"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "repurposing",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7698,
+          "sha256": "862e0933deb03811911ef2ebd5ed3855d6d98a532c295253074a505e5c8a4bc7"
+        }
+      ],
+      "contentHash": "sha256:df41641ced15b81267077eccee4638d0bd01fa05482436887ea5a0ef732e8c1b"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-thread-monitor",
+      "key": "paperclipai/optional/linkedin/linkedin-thread-monitor",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-thread-monitor",
+      "name": "linkedin-thread-monitor",
+      "description": "Track which of your LinkedIn comments earned author replies: flags the 6-24h warm-reply window, classifies threads hot/warm/cool/dormant, and routes warm ones to linkedin-reply-handler. Not for analyzing likers on a post (use linkedin-engager-analytics).",
+      "path": "catalog/optional/linkedin/linkedin-thread-monitor",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "monitoring",
+        "engagement"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6048,
+          "sha256": "3b0608e20b6b9d2146806ce4d5a4c3e0ab3f6692eaf144746b489db6fa9468c0"
+        },
+        {
+          "path": "references/output-spec.md",
+          "kind": "reference",
+          "sizeBytes": 1219,
+          "sha256": "462d8f001365c3a28ca4668e3adf3dadbc953ab97cf66033c1da845573fbc260"
+        },
+        {
+          "path": "references/thread-timing.md",
+          "kind": "reference",
+          "sizeBytes": 3770,
+          "sha256": "ce75e56ee61a1fc682990dbc49c197c50da49ec4ff38e55fd3ba70b4f7bfb196"
+        }
+      ],
+      "contentHash": "sha256:055290df0b5e03b2b2d15c842fe08fa0ac7b02c8726518cdf833a941eb327367"
     },
     {
       "id": "paperclipai:optional:product:design-critique",
@@ -1115,6 +2875,42 @@
       }
     },
     {
+      "id": "paperclipai:optional:social:social-core",
+      "key": "paperclipai/optional/social/social-core",
+      "kind": "optional",
+      "category": "social",
+      "slug": "social-core",
+      "name": "social-core",
+      "description": "Shared rules for every social channel skill (LinkedIn, X, Instagram, YouTube, Threads, TikTok, Facebook) — reach tools through the Paperclip gateway, publish only through TryPost with board approval, read posts through Apify, keep each company's voice in agent memory.",
+      "path": "catalog/optional/social/social-core",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "content-strategist",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "social-media",
+        "publishing",
+        "governance",
+        "content"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9479,
+          "sha256": "c205a53fa28da52d644b27d13a2dbd1d3f5014ff7390829248345b883795278c"
+        }
+      ],
+      "contentHash": "sha256:a6f603c49ba9c9e55e2e6f4c90abe7c8d8775642f857dd1c7b6f0b312a54c4a0"
+    },
+    {
       "id": "paperclipai:optional:software-development:prepare-mcp-integration",
       "key": "paperclipai/optional/software-development/prepare-mcp-integration",
       "kind": "optional",
@@ -1160,6 +2956,1888 @@
         }
       ],
       "contentHash": "sha256:84f2a28d7d004393719684f2b435e5ee01ddc58591e0dfeb73d72c7605db7f49"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-audience-insights",
+      "key": "paperclipai/optional/threads/threads-audience-insights",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-audience-insights",
+      "name": "threads-audience-insights",
+      "description": "Read your Threads (Meta) audience and niche from real data: top posts for a niche query or hashtag, a profile's follower count and recent posts, and which formats and hooks are working. Reads through Apify, paste fallback. Threads exposes no liker list. Not for writing a post.",
+      "path": "catalog/optional/threads/threads-audience-insights",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "audience-research",
+        "analytics"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6963,
+          "sha256": "760b869c7ac84d955cdae7e4dfc21f71ee4a7c823beae3e037cb49a04d79b173"
+        }
+      ],
+      "contentHash": "sha256:7ec00ec8e320a29be0a1eef8e8ba690d90730ca7a8b697c686c8ca9844b98f1f"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-content-planner",
+      "key": "paperclipai/optional/threads/threads-content-planner",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-content-planner",
+      "name": "threads-content-planner",
+      "description": "Plan a week of Threads (Meta) content from a theme, audience and pillars: per-day single post vs thread, hook formula, angle, posting time and goal, plus daily reply targets and a goal-mix check for the conversation-first cadence Threads rewards. Not for drafting one post.",
+      "path": "catalog/optional/threads/threads-content-planner",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "content-calendar",
+        "planning"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6296,
+          "sha256": "5dee6fcbd9347771d3d03b7f610d8dde4cc8354f3b9b8d32b2d18713a7e99264"
+        },
+        {
+          "path": "references/example-week.md",
+          "kind": "reference",
+          "sizeBytes": 2962,
+          "sha256": "9e3fe5887885cf21f7d7f1a95c59749d64e3a07c56b248e8ece61feaebf1c3d3"
+        },
+        {
+          "path": "references/pillars-framework.md",
+          "kind": "reference",
+          "sizeBytes": 2738,
+          "sha256": "e221ebdbacbf4ef3decc1fa4608d521b4f373b0cc37582189bcff837d08d0513"
+        }
+      ],
+      "contentHash": "sha256:8d045d68e655775726d64b6b51d37d43ec332641affdcb771c633d533267ed4a"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-hook-extractor",
+      "key": "paperclipai/optional/threads/threads-hook-extractor",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-hook-extractor",
+      "name": "threads-hook-extractor",
+      "description": "Reverse-engineer the hook from a viral Threads (Meta) post or thread URL: which canonical 2026 Threads formula it uses, why it worked, and a blank template mapped to your topic with its primary goal. Not for writing your own (use threads-post-writer).",
+      "path": "catalog/optional/threads/threads-hook-extractor",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "hooks",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 5100,
+          "sha256": "e51caed58af78d1634baf2850921d73d5ffaf0fca5f5c9d0c01e630dac7f0108"
+        },
+        {
+          "path": "references/classification-rules.md",
+          "kind": "reference",
+          "sizeBytes": 3292,
+          "sha256": "27f4cffbec9b5b1e5ffb5869ae42a9ef7a393c7ecf9820f3910828943f0d066c"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 3360,
+          "sha256": "f98ab3a109fa8fd3bc262cc4d0c6f20ac4a388731c340109d0357501b5179853"
+        }
+      ],
+      "contentHash": "sha256:03b5589cee5559aa1cef61c5ed3df69174b605d3030468353629979ee4e82ae9"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-humanizer",
+      "key": "paperclipai/optional/threads/threads-humanizer",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-humanizer",
+      "name": "threads-humanizer",
+      "description": "Remove AI tells from a Threads (Meta) post or thread (2026 vocabulary, reveal bridges, staccato stacks, stacked triads, performed sincerity). Also --mode audit (500-char fit, one hashtag), --mode profile (learns your voice) and --mode interview (fills your Story Bank).",
+      "path": "catalog/optional/threads/threads-humanizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "editing",
+        "voice"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 17758,
+          "sha256": "5c07de3f93c9fe805f0bc44dd0e5fe8a13af450dd5c7748e9221d58563eb1c36"
+        },
+        {
+          "path": "references/audit-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 3863,
+          "sha256": "72346af9ebeeead528563170edaf772324c3842e2cf05d43f9102092c36f8e77"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 3016,
+          "sha256": "b1307979801b5417d123b9e5a1775e7b8748200060728be7026a8bfdd104c519"
+        },
+        {
+          "path": "references/scrub-rules.md",
+          "kind": "reference",
+          "sizeBytes": 20581,
+          "sha256": "483bd0e9ba5df2fbb7088190ee79309dc8bdb30547abe62052287e08619b16aa"
+        },
+        {
+          "path": "sub-skills/illustration.md",
+          "kind": "markdown",
+          "sizeBytes": 4527,
+          "sha256": "92643b06cb1598e8b12326d3e62fa8e08251ec9a4a8cc547344f9066e817880c"
+        },
+        {
+          "path": "sub-skills/post-audit.md",
+          "kind": "markdown",
+          "sizeBytes": 5052,
+          "sha256": "0ed556088b267512b3b9f60b7827e136297427f06f77103a83d4d7e6cde0e0bd"
+        },
+        {
+          "path": "sub-skills/story-bank-interview.md",
+          "kind": "markdown",
+          "sizeBytes": 6932,
+          "sha256": "e882a3f89c4028bcabe8d6e693c857462e10291538acad1dc42bcaa5cbe02288"
+        },
+        {
+          "path": "sub-skills/voice-profile.md",
+          "kind": "markdown",
+          "sizeBytes": 2796,
+          "sha256": "9acea85744c2e94c5d01884ca3cddfec533acf99926521be421283e7d69d40da"
+        }
+      ],
+      "contentHash": "sha256:0cb55fc2fb22eb1feab07711fef7fde0c02d1ce756033a8e87d5c18d58551e21"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-marketing",
+      "key": "paperclipai/optional/threads/threads-marketing",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-marketing",
+      "name": "threads-marketing",
+      "description": "Hub for the Threads (Meta) skills: which of the 8 leaf skills to use, the Threads voice rules, URL shapes and gotchas. Single posts publish through TryPost after board approval; TryPost cannot chain a multi-post thread on Threads, so follow-ups are copy-paste.",
+      "path": "catalog/optional/threads/threads-marketing",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "assets",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "meta",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8743,
+          "sha256": "0150330247939b341c8e3b62f9b6d0e0973b21c6bcad7bf4e557906e8b6d176e"
+        },
+        {
+          "path": "assets/icon.svg",
+          "kind": "asset",
+          "sizeBytes": 768,
+          "sha256": "705fa9c248d971513dc0bdac58d918821b49a54a8aa3b2dd3a2afaf0b26f163f"
+        },
+        {
+          "path": "references/algorithm-heuristics.md",
+          "kind": "reference",
+          "sizeBytes": 8694,
+          "sha256": "7a4aae694a679059d8272dd7e6ad52bc3807a14fece7643ac6e24c251fb2ca20"
+        },
+        {
+          "path": "references/hook-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 18040,
+          "sha256": "2d2145fc012aa6be3e8748e446b51f5bb41919d8573d6ff940abdefd46adfd3c"
+        },
+        {
+          "path": "references/mcp-read-layer.md",
+          "kind": "reference",
+          "sizeBytes": 5870,
+          "sha256": "3af168a93e8335754438052405d6803d5b2968c1a38f282d983315e09233b241"
+        },
+        {
+          "path": "references/story-bank.md",
+          "kind": "reference",
+          "sizeBytes": 3842,
+          "sha256": "db9ed96e2ffd1fd6259a221e105cb3a886447db818337cd1ffe4ee4bf53991ef"
+        },
+        {
+          "path": "references/untrusted-content.md",
+          "kind": "reference",
+          "sizeBytes": 2962,
+          "sha256": "33d6a08a5917e46aab46bd7c9eba483050242d84996e87134d86fa514e6841ac"
+        },
+        {
+          "path": "references/voice-profile.md",
+          "kind": "reference",
+          "sizeBytes": 1894,
+          "sha256": "895250822ae4c89ed4b18ddb4dbbc23e461319e6eb9b32996e887d07baf0ea7d"
+        },
+        {
+          "path": "references/voice-rules.md",
+          "kind": "reference",
+          "sizeBytes": 6230,
+          "sha256": "7e0dd376c26f9d709f243974044ee035957774a40abdd1f803eb143c8edd4745"
+        },
+        {
+          "path": "UPSTREAM.md",
+          "kind": "markdown",
+          "sizeBytes": 7584,
+          "sha256": "ae25cb4fcf27d9fe26139c377fb14e454139e5f6d48e2fbbcf59291333819a50"
+        }
+      ],
+      "contentHash": "sha256:0155b16f5d1aa0cc01b441d504da48c04eee56e56f022cd0a0cbbd36a3c55793"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-post-writer",
+      "key": "paperclipai/optional/threads/threads-post-writer",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-post-writer",
+      "name": "threads-post-writer",
+      "description": "Draft a single Threads (Meta) post or multi-post thread with a 2026 Threads hook formula picked by goal (replies, reposts, likes, quotes). Fits 500 chars and the one-hashtag cap, runs the humanizer, publishes via TryPost after board approval (thread follow-ups are copy-paste).",
+      "path": "catalog/optional/threads/threads-post-writer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "copywriting",
+        "posts"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 11831,
+          "sha256": "8e66ec84fb2dd696b589f57b2a21838bfc669b5e79e3a6164d6d84b2d0e92fdd"
+        },
+        {
+          "path": "references/single-post-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 2797,
+          "sha256": "2d1b3b44cd6c40938a59364c11b358609a194c16a4718aab714289b83dd90835"
+        },
+        {
+          "path": "references/thread-structure.md",
+          "kind": "reference",
+          "sizeBytes": 4027,
+          "sha256": "1635047c784ba17df2eda2d7d627fa7378da458c5c27b6a1505414f25ab25afb"
+        }
+      ],
+      "contentHash": "sha256:267ede6d2e6e00b063ca9cfbd959d08d9648d72ab0a651dbf6716ca6846813ed"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-profile-optimizer",
+      "key": "paperclipai/optional/threads/threads-profile-optimizer",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-profile-optimizer",
+      "name": "threads-profile-optimizer",
+      "description": "Audit and rewrite a Threads (Meta) profile for 2026: photo, name with a searchable keyword, handle, bio (150 chars, warm and specific), link, pinned post and the connected-Instagram cross-pull. Triggers on \"review my Threads profile\", \"fix my Threads bio\". Not for writing posts.",
+      "path": "catalog/optional/threads/threads-profile-optimizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "profile",
+        "branding"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6295,
+          "sha256": "26636175e87cff099fe54cb9a03082dbcdf9d53b9558ce51da042123168f6cea"
+        }
+      ],
+      "contentHash": "sha256:1c76cf13406678c9a6bf182368af781f001046571e917a1e729dca6d0276a6a8"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-reply-drafter",
+      "key": "paperclipai/optional/threads/threads-reply-drafter",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-reply-drafter",
+      "name": "threads-reply-drafter",
+      "description": "Draft a reply or value-add quote post for a specific Threads (Meta) post from its URL: decides reply vs quote and drafts 1-3 warm variants in your voice. TryPost cannot post a reply to someone else's post, so the approved draft is a copy-paste block. Not for top-level posts.",
+      "path": "catalog/optional/threads/threads-reply-drafter",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "engagement",
+        "replies"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8403,
+          "sha256": "da66d32aa1380e7d1f016de9268c3d2ffc9e3121227eeff17c42094f6fdbcfba"
+        },
+        {
+          "path": "references/reply-templates.md",
+          "kind": "reference",
+          "sizeBytes": 2664,
+          "sha256": "9e075ac7250d2a9a6bc8e39cf78e10de903a19e4cbeb6d63e2688d16879ef0ed"
+        }
+      ],
+      "contentHash": "sha256:0766d2ff0595bfc1ccde1a47e5841958d953ef1df4935f50e58bc5c8bc651802"
+    },
+    {
+      "id": "paperclipai:optional:threads:threads-repurposer",
+      "key": "paperclipai/optional/threads/threads-repurposer",
+      "kind": "optional",
+      "category": "threads",
+      "slug": "threads-repurposer",
+      "name": "threads-repurposer",
+      "description": "Repurpose a LinkedIn post, X thread, blog (fetched from Ghost), YouTube script or newsletter into a native Threads (Meta) post or thread: warm the tone, refit to a short post or light thread, rebuild the hook, strip off-platform artifacts, humanize, publish via TryPost after approval.",
+      "path": "catalog/optional/threads/threads-repurposer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "threads",
+        "social-media",
+        "repurposing",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9333,
+          "sha256": "c025bebc77113585c64e5d46539b86700f0461b2d7c8dd111d98c932a07eb513"
+        }
+      ],
+      "contentHash": "sha256:0bef6b96b5b92ac4884d68c37fcbeaeb8ea63c9058aaefa8ff59e31f55a58500"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tiktok-marketing",
+      "key": "paperclipai/optional/tiktok/tiktok-marketing",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tiktok-marketing",
+      "name": "tiktok-marketing",
+      "description": "Hub for the TikTok skills: 1-3 second hook scripts (spoken line plus on-screen text), captions with posting settings and hashtags, trend mapping, AI-tell removal from spoken scripts, weekly plans around completion rate. Video from the in-house video studios, publishing via TryPost.",
+      "path": "catalog/optional/tiktok/tiktok-marketing",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "assets",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "video-producer"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "short-form-video",
+        "scripting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9347,
+          "sha256": "05049a58d52d3f692790ec799fcb40023816978ae1e722c8808e175b81ef8efa"
+        },
+        {
+          "path": "assets/icon.svg",
+          "kind": "asset",
+          "sizeBytes": 768,
+          "sha256": "8c3e47e0f10c22c1c27bb020f9571d4b00fe3daad9952766ed242f25ce1dbe88"
+        },
+        {
+          "path": "references/algorithm-heuristics.md",
+          "kind": "reference",
+          "sizeBytes": 8918,
+          "sha256": "5b548b1e7cc44944275383f56c3cb947df9c015f97cba5c3d00b1babfab6d871"
+        },
+        {
+          "path": "references/hook-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 12381,
+          "sha256": "9b2e7a08aeb2e8644a97641e69c19ff3d5718775ff0daf712fb8083daca98cc8"
+        },
+        {
+          "path": "references/mcp-read-layer.md",
+          "kind": "reference",
+          "sizeBytes": 5899,
+          "sha256": "95fb2749489e1c080e47d2a7c18a102e515cc15ec95c164ed03442da6bfec3b5"
+        },
+        {
+          "path": "references/untrusted-content.md",
+          "kind": "reference",
+          "sizeBytes": 2882,
+          "sha256": "3c625883e35a9bccb1d2db726c032cccaf4b8681cd4097310ff98588359b3d57"
+        },
+        {
+          "path": "references/voice-profile.md",
+          "kind": "reference",
+          "sizeBytes": 1966,
+          "sha256": "d6f43dab19c4c969a5b7c10864d75736320d89aa866b22b5539e77189f358d48"
+        },
+        {
+          "path": "references/voice-rules.md",
+          "kind": "reference",
+          "sizeBytes": 5937,
+          "sha256": "f4bff053f03bb2b10cba47bad1eea2c51709cbd080f3dc7c52525ad96978b8f4"
+        },
+        {
+          "path": "UPSTREAM.md",
+          "kind": "markdown",
+          "sizeBytes": 5634,
+          "sha256": "ac4b5a85fac2857b847663a770092b35df1a35da97698edd4a547ddf0fabe90d"
+        }
+      ],
+      "contentHash": "sha256:234dec18ed70febf63fb2871fc987889831c0b34e5995a8d6faa733fec812240"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tt-audience-insights",
+      "key": "paperclipai/optional/tiktok/tt-audience-insights",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tt-audience-insights",
+      "name": "tt-audience-insights",
+      "description": "Read your TikTok niche and audience from real data through the Apify connection: top videos under a hashtag (plays, likes, comments, sounds), a profile's videos (yours or a competitor's), and a video's commenters, the real signal since likers are hidden.",
+      "path": "catalog/optional/tiktok/tt-audience-insights",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "analytics",
+        "competitor-research"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6320,
+          "sha256": "0765985afa5fd5fe4648e543dc5e6aa92494e3652df471df7e72176f66c309c7"
+        }
+      ],
+      "contentHash": "sha256:df8b1c7f432f41662a31291b415a8b03067a2585ab397bf7134381efcbccfb3d"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tt-caption-writer",
+      "key": "paperclipai/optional/tiktok/tt-caption-writer",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tt-caption-writer",
+      "name": "tt-caption-writer",
+      "description": "Write a TikTok caption under 2,200 chars with a 3-5 mixed-reach hashtag set and the post settings (privacy level, comments, duet, stitch, commercial disclosure). Front-loads a reason to comment, runs the humanizer pass, then a TryPost draft of the video. Not for the in-video hook.",
+      "path": "catalog/optional/tiktok/tt-caption-writer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "captions",
+        "hashtags"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9849,
+          "sha256": "73692f50ff6982c87027d1e1c11d9f341257922b55a6283e23df412f89c2472a"
+        },
+        {
+          "path": "references/settings-matrix.md",
+          "kind": "reference",
+          "sizeBytes": 4694,
+          "sha256": "160def79ff46af83e1e7bb991363b5b2869acd9185026713393a67f7178c4823"
+        }
+      ],
+      "contentHash": "sha256:c028a8739ae63d32365b0cf6d7a90e7a363002ef55bd25d0e2aa0f6d4f6b72b0"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tt-content-planner",
+      "key": "paperclipai/optional/tiktok/tt-content-planner",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tt-content-planner",
+      "name": "tt-content-planner",
+      "description": "Build a weekly TikTok posting plan from a niche, audience and pillars: per-day picks (hook formula, angle, sound, length, goal, time), a hook-batching schedule to film several openers in one session, a sound shortlist with trend window, and a completion-rate check.",
+      "path": "catalog/optional/tiktok/tt-content-planner",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "content-calendar",
+        "planning"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7006,
+          "sha256": "944cd5d48c5ee1a331234af80729427ca3fb1ec9327e09abca3c62a22aa52d09"
+        },
+        {
+          "path": "references/example-week.md",
+          "kind": "reference",
+          "sizeBytes": 2944,
+          "sha256": "cc8095d2d1826b8a4b9f8a55bf3c83bb2efdca55b0ee83d13eefe902e44637b1"
+        },
+        {
+          "path": "references/pillars-framework.md",
+          "kind": "reference",
+          "sizeBytes": 2981,
+          "sha256": "f93517a24120c36f12d0c1740139d925468f7e4c6ee900ecc339714bdfe8f1b3"
+        }
+      ],
+      "contentHash": "sha256:4df435908bec62fb433907bcdd0f4eab433495c779c89090792fab036699a412"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tt-hook-scripter",
+      "key": "paperclipai/optional/tiktok/tt-hook-scripter",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tt-hook-scripter",
+      "name": "tt-hook-scripter",
+      "description": "Script the first 1-3 second TikTok hook: spoken line, on-screen text and opening visual firing at once so the viewer cannot swipe. Picks a 2026 hook formula (cold-open result, pattern interrupt, number reveal, open loop, call-out, story) by goal. The biggest retention lever.",
+      "path": "catalog/optional/tiktok/tt-hook-scripter",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "video-producer"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "hooks",
+        "scripting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7776,
+          "sha256": "13058cd1e9671df64e60070ba08c95b6ff25ba46cf86ce2ab6a6c37a0539fe14"
+        },
+        {
+          "path": "references/hook-anatomy.md",
+          "kind": "reference",
+          "sizeBytes": 3283,
+          "sha256": "6f7bf7e138e592436ab31ca0b245159e87e06a0d162af3aca4eff93fcfecf54f"
+        }
+      ],
+      "contentHash": "sha256:c6ed8de7054242613d58a07999a4834ec23145865db660251d1f0ad80d8445ba"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tt-humanizer",
+      "key": "paperclipai/optional/tiktok/tt-humanizer",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tt-humanizer",
+      "name": "tt-humanizer",
+      "description": "Remove the AI-script tells viewers hear in a TikTok spoken script and caption: vocabulary density, reveal bridges, staccato stacks, stacked triads, performed sincerity, written-not-spoken phrasing, filler; caps em dashes. Includes --mode audit (pre-film) and --mode profile.",
+      "path": "catalog/optional/tiktok/tt-humanizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "video-producer"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "editing",
+        "voice"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 17438,
+          "sha256": "3242ea994082c7f76718cc8f56bd3484cf14fcad828e77204b7f192baa82f076"
+        },
+        {
+          "path": "references/audit-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 4604,
+          "sha256": "a36cc6e8e5dfe510c79a31597eb37fc05872d41b22a09310625203dfee678a21"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 3864,
+          "sha256": "57ab587325a4187de6ea2ee97b052c3b181345ad450ffb63b72f430e655e703f"
+        },
+        {
+          "path": "references/scrub-rules.md",
+          "kind": "reference",
+          "sizeBytes": 18246,
+          "sha256": "b191673fe80a7aca36279a4a0b2ddb14d74ca4c1efe58e3172e1510a3111da79"
+        },
+        {
+          "path": "sub-skills/illustration.md",
+          "kind": "markdown",
+          "sizeBytes": 4406,
+          "sha256": "10fd800ce8da4bcbe402f5cce37bcb1b516e33b6750ed265169f25386afef9e0"
+        },
+        {
+          "path": "sub-skills/post-audit.md",
+          "kind": "markdown",
+          "sizeBytes": 5357,
+          "sha256": "dc5fb64686cfc30cc1ce193f361eb0ab540505276518599b1f584b136337490f"
+        },
+        {
+          "path": "sub-skills/voice-profile.md",
+          "kind": "markdown",
+          "sizeBytes": 2763,
+          "sha256": "46fd4c0ee62b38eed0440b8127a9476f466dfa2e146c8f6b41539e754ecb81dd"
+        }
+      ],
+      "contentHash": "sha256:401873bc96c5ed6517991cd81c8ffe92c738fd368cdfd5b159bb089bc88876ff"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tt-profile-optimizer",
+      "key": "paperclipai/optional/tiktok/tt-profile-optimizer",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tt-profile-optimizer",
+      "name": "tt-profile-optimizer",
+      "description": "Audit and rewrite a TikTok profile for 2026: photo, searchable name, username, 80-char bio where niche clarity is everything, link (unlocks at 1k followers, plus a pre-1k workaround), up to 3 pinned videos as proof, and one-line positioning. Not for scripts or captions.",
+      "path": "catalog/optional/tiktok/tt-profile-optimizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "profile",
+        "branding"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7134,
+          "sha256": "64988fa545c26edac9ea47b0077d16770eedb3b149039245354d358683ed5e00"
+        }
+      ],
+      "contentHash": "sha256:45d88fc145f7ba2978d91b0c2652bed690fbcf8d04aebe0521123bf15a93e4cb"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tt-repurposer",
+      "key": "paperclipai/optional/tiktok/tt-repurposer",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tt-repurposer",
+      "name": "tt-repurposer",
+      "description": "Repurpose a LinkedIn post, blog article (Ghost), newsletter or X thread into a native TikTok spoken script and caption: hook in the first second, every line sayable in one breath, open on the payoff, a trend angle where it fits, then a rendered video and TryPost draft.",
+      "path": "catalog/optional/tiktok/tt-repurposer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "video-producer"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "repurposing",
+        "cross-platform"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9119,
+          "sha256": "61358c22bc8d9bd66dc69eaa83f4010b8b1173073679d895eb543469768bd383"
+        }
+      ],
+      "contentHash": "sha256:4da3795281e39f0fd91dd7b0e7c0a44422a7450756417fd6cf91d045f7605f94"
+    },
+    {
+      "id": "paperclipai:optional:tiktok:tt-trend-mapper",
+      "key": "paperclipai/optional/tiktok/tt-trend-mapper",
+      "kind": "optional",
+      "category": "tiktok",
+      "slug": "tt-trend-mapper",
+      "name": "tt-trend-mapper",
+      "description": "Map a trending TikTok sound or format to your niche so the ride is authentic, not cringe: a fit check (niche match, still early, the native joke), then the twist that makes it yours. Covers sound timing, the trend lifecycle, and when to skip a trend entirely.",
+      "path": "catalog/optional/tiktok/tt-trend-mapper",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "tiktok",
+        "social-media",
+        "trends",
+        "sounds"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6590,
+          "sha256": "bccc56e68156ab41ca39fa5a403e848d0437a0750054752921c267795e4f50d4"
+        },
+        {
+          "path": "references/trend-fit-rubric.md",
+          "kind": "reference",
+          "sizeBytes": 3152,
+          "sha256": "4d490050eb8b83c1667c3bf25e601189ddfc9c5a2728e0eae3ffefd883716b85"
+        }
+      ],
+      "contentHash": "sha256:2ab8e9a1f26035f2fbf1ffca6637422c18771e19ed556730160ec46a6e919f45"
+    },
+    {
+      "id": "paperclipai:optional:x:x-audience-insights",
+      "key": "paperclipai/optional/x/x-audience-insights",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-audience-insights",
+      "name": "x-audience-insights",
+      "description": "Read your X (Twitter) audience and niche from real data: a handle's recent tweets with likes, replies and views, the repliers on a tweet, and top tweets for a niche query, to see which formats and hooks work. Reads through Apify, paste fallback. Not for writing a tweet (use x-post-writer).",
+      "path": "catalog/optional/x/x-audience-insights",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "audience-research",
+        "analytics"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6163,
+          "sha256": "78e4e7f7b07031fc624fdca19fc2c28fd564b828e257ade681f8a0f003abd925"
+        }
+      ],
+      "contentHash": "sha256:5fc34312890f5df4a3fcfb426c9ea94ceeed01bf212240955870f0c982c6e328"
+    },
+    {
+      "id": "paperclipai:optional:x:x-content-planner",
+      "key": "paperclipai/optional/x/x-content-planner",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-content-planner",
+      "name": "x-content-planner",
+      "description": "Plan a week of X (Twitter) content from a theme, audience and pillars: per-day single tweet vs thread, hook formula, angle, posting time and goal, plus daily reply and quote-tweet targets and a goal-mix check. Not for drafting one tweet (x-post-writer) or one thread (x-thread-builder).",
+      "path": "catalog/optional/x/x-content-planner",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "content-calendar",
+        "planning"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6005,
+          "sha256": "68168d12df9ad2ae9e59ea8a3fce98b3e803e7d0c49b4f81d3c1c0ea1bc637d2"
+        },
+        {
+          "path": "references/example-week.md",
+          "kind": "reference",
+          "sizeBytes": 2832,
+          "sha256": "975e3e5e4074f2e64cceeeb1b9d19199ad174a8166bd03073e911637277569be"
+        },
+        {
+          "path": "references/pillars-framework.md",
+          "kind": "reference",
+          "sizeBytes": 2557,
+          "sha256": "5ac54adee817a6f50a7968130592586b68e756817a5556955e54f82356b1aefc"
+        }
+      ],
+      "contentHash": "sha256:e9d75b4fa9a2d78d294f8e5fad9fdcf5384b16e561c6934e603683830d636daf"
+    },
+    {
+      "id": "paperclipai:optional:x:x-hook-extractor",
+      "key": "paperclipai/optional/x/x-hook-extractor",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-hook-extractor",
+      "name": "x-hook-extractor",
+      "description": "Reverse-engineer the hook from a viral X (Twitter) tweet or thread URL: which of the canonical 2026 X formulas it uses, why it worked, and a blank template mapped to your topic with its primary goal. Not for writing your own (use x-post-writer or x-thread-builder).",
+      "path": "catalog/optional/x/x-hook-extractor",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "hooks",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 4930,
+          "sha256": "50467d221e2d3adf949ee77ef12f0384775e015a2e4cd83556eabc3888f59b0f"
+        },
+        {
+          "path": "references/classification-rules.md",
+          "kind": "reference",
+          "sizeBytes": 3208,
+          "sha256": "6ddd89ee520df8a91614cfb860d228cefd23b465a3d6999fb9fb0abfeb5f5e0e"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 3141,
+          "sha256": "a6901a49231b536475e18c940dc975f31d6052a58dc848ed83da6a06efb5fc04"
+        }
+      ],
+      "contentHash": "sha256:5ce595660922f1338ead4b3537660c5317766d5e76f2d064b75c29fbb13d1af2"
+    },
+    {
+      "id": "paperclipai:optional:x:x-humanizer",
+      "key": "paperclipai/optional/x/x-humanizer",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-humanizer",
+      "name": "x-humanizer",
+      "description": "Remove AI tells from a tweet or thread (2026 vocabulary, reveal bridges, staccato stacks, stacked triads, performed sincerity). Also --mode audit (280-char fit, format), --mode profile (learns your voice) and --mode interview (fills your Story Bank). Not for writing from scratch.",
+      "path": "catalog/optional/x/x-humanizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "editing",
+        "voice"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 17298,
+          "sha256": "72e235f4623ca6e6b00c76722a2ed684bfad269eb656adab043440f6ae794338"
+        },
+        {
+          "path": "references/audit-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 3883,
+          "sha256": "e5810ebda58b33e1f33431fff3ea74dd8272af518b2df55b0e5d7b5a26a2f11e"
+        },
+        {
+          "path": "references/examples.md",
+          "kind": "reference",
+          "sizeBytes": 2784,
+          "sha256": "315bd544a52468be842dfc9c5f0e68b81ba5851b58f13c80600c7fd2f2d77a05"
+        },
+        {
+          "path": "references/scrub-rules.md",
+          "kind": "reference",
+          "sizeBytes": 21020,
+          "sha256": "14bd7301ac0e426e941b1d08b7d90ace76330f316767fc3c1eb9e4c4ca42b27e"
+        },
+        {
+          "path": "sub-skills/illustration.md",
+          "kind": "markdown",
+          "sizeBytes": 4571,
+          "sha256": "6e089202a76905c119577f4e1033cbd6d6f1daa33d331bdfd924a2edf4fe9135"
+        },
+        {
+          "path": "sub-skills/post-audit.md",
+          "kind": "markdown",
+          "sizeBytes": 4968,
+          "sha256": "4b95037e4b5ef030da4c57b28b99308a8f8d6aac620bbc0a1067a4d1b56a60ff"
+        },
+        {
+          "path": "sub-skills/story-bank-interview.md",
+          "kind": "markdown",
+          "sizeBytes": 6921,
+          "sha256": "9dc9baf19684ef80de22a8b8443f51dfe45cf445bdc8a2136ebcb3e257804e44"
+        },
+        {
+          "path": "sub-skills/voice-profile.md",
+          "kind": "markdown",
+          "sizeBytes": 2764,
+          "sha256": "22516514eaa7980f954e3dd2435bd5f78fd0ff9c49060a8177496d796f3da888"
+        }
+      ],
+      "contentHash": "sha256:ea14e13a58e31f68adf70c40a51e6f71ec363d21f5e49ecd010bd8e34d9cb2d5"
+    },
+    {
+      "id": "paperclipai:optional:x:x-marketing",
+      "key": "paperclipai/optional/x/x-marketing",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-marketing",
+      "name": "x-marketing",
+      "description": "Hub for the X (Twitter) skills: which of the 9 leaf skills to use, the X voice rules, URL shapes and known gotchas. Single tweets and threads (meta.thread_replies) publish through TryPost after board approval; replies are copy-paste.",
+      "path": "catalog/optional/x/x-marketing",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "assets",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "twitter",
+        "threads",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7573,
+          "sha256": "78a76cf5c8f6d64a8e66aa0a19027e313b7382b4935bbaab92511232981db92d"
+        },
+        {
+          "path": "assets/icon.svg",
+          "kind": "asset",
+          "sizeBytes": 768,
+          "sha256": "4eaeb060fab0299223722b52e8d00c7b5af9da1f87852c3e4d0c902b4d51067e"
+        },
+        {
+          "path": "references/algorithm-heuristics.md",
+          "kind": "reference",
+          "sizeBytes": 7096,
+          "sha256": "2a9b71c86c3c6f255ddcf3d340276fbb514e5682ff2b2c6c7834f46b01f5d59c"
+        },
+        {
+          "path": "references/hook-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 15880,
+          "sha256": "d9cc5fdd6d56f7b1b337bfc61461c9b09719b2ac24ece0de01bd205926767d43"
+        },
+        {
+          "path": "references/mcp-read-layer.md",
+          "kind": "reference",
+          "sizeBytes": 5218,
+          "sha256": "9c97a467dae637429af1742fbf5ef6224a6ec6357aaf4c0f3272c1fed3efc87c"
+        },
+        {
+          "path": "references/story-bank.md",
+          "kind": "reference",
+          "sizeBytes": 3731,
+          "sha256": "58562020f89136fcf4f06ca3e3dd95e0fa6c829ee76bd2bbf08b772f7ee0dc31"
+        },
+        {
+          "path": "references/untrusted-content.md",
+          "kind": "reference",
+          "sizeBytes": 2951,
+          "sha256": "31f7da76fe719c50ddce2bef9b75880e3fb1fd3d588ee7a1beef8b518b830d42"
+        },
+        {
+          "path": "references/voice-profile.md",
+          "kind": "reference",
+          "sizeBytes": 1898,
+          "sha256": "42edfecb7047587ed2a653b8859e0a273d6481475c39ffbc13656a08432178f6"
+        },
+        {
+          "path": "references/voice-rules.md",
+          "kind": "reference",
+          "sizeBytes": 5286,
+          "sha256": "85765de129294a7d7a3a9277d05148c507544b2090a6517fb88549955b8c61cf"
+        },
+        {
+          "path": "UPSTREAM.md",
+          "kind": "markdown",
+          "sizeBytes": 6824,
+          "sha256": "2ef5a41a9c6da1c5846d1afde24cb158facca7ad32b781df3f404ba7f607ea24"
+        }
+      ],
+      "contentHash": "sha256:845aeef732fdeab7654d18e02ec96ec5cde9bf6f81d7a8df54e7a57e65fed7d1"
+    },
+    {
+      "id": "paperclipai:optional:x:x-post-writer",
+      "key": "paperclipai/optional/x/x-post-writer",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-post-writer",
+      "name": "x-post-writer",
+      "description": "Draft a single tweet or short thread for X (Twitter) with a 2026 hook formula picked by goal (replies, reposts, likes, bookmarks). Fits 280 chars (25,000 on Premium), runs the humanizer, publishes via TryPost after board approval. Not for long threads (x-thread-builder).",
+      "path": "catalog/optional/x/x-post-writer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "copywriting",
+        "tweets"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8263,
+          "sha256": "1537dc8ec861b8cc61b55f3bfa16648dcdb3a19a9839a323d6d646b026f78539"
+        },
+        {
+          "path": "references/single-tweet-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 2607,
+          "sha256": "2dea75c3d446fa31e49dddd8428716f0e2586349ca42f2971db8cff146372404"
+        }
+      ],
+      "contentHash": "sha256:d2d050271d2590cfe24b316fccac86b2281998374d1be5a1b48d20162c3121d7"
+    },
+    {
+      "id": "paperclipai:optional:x:x-profile-optimizer",
+      "key": "paperclipai/optional/x/x-profile-optimizer",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-profile-optimizer",
+      "name": "x-profile-optimizer",
+      "description": "Audit and rewrite an X (Twitter) profile for 2026: bio (160 chars), display name with a searchable keyword, handle, header image, pinned tweet, link and location, so visitors convert into followers. Triggers on \"review my X profile\", \"fix my bio\". Not for writing tweets (x-post-writer).",
+      "path": "catalog/optional/x/x-profile-optimizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "profile",
+        "branding"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 5058,
+          "sha256": "acd9b583ae3d57e2b4e65760cc0ec77b9008a463a9ba879e22682569be774668"
+        }
+      ],
+      "contentHash": "sha256:0e91044de5ee4a43b5f88bc910f6dca40b6bf49d147e1910a130be8372e1cf2d"
+    },
+    {
+      "id": "paperclipai:optional:x:x-reply-drafter",
+      "key": "paperclipai/optional/x/x-reply-drafter",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-reply-drafter",
+      "name": "x-reply-drafter",
+      "description": "Draft a reply or value-add quote tweet for a specific X (Twitter) tweet from its URL: decides reply vs quote tweet and drafts 1-3 variants in your voice. TryPost cannot post a reply under someone else's tweet, so the approved draft is a copy-paste block. Not for top-level posts.",
+      "path": "catalog/optional/x/x-reply-drafter",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "engagement",
+        "replies"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8143,
+          "sha256": "e85810a6ad34d33f326158641cdf8d45d6a9166af09a1ef3f959819e2bbf42fb"
+        },
+        {
+          "path": "references/reply-templates.md",
+          "kind": "reference",
+          "sizeBytes": 2500,
+          "sha256": "32e21cfa35124310c9989edf7bb606f85db27326714c214a0c5c32c6fb1f12d6"
+        }
+      ],
+      "contentHash": "sha256:5a3d726bb1e5f1bc206f3fd9d4520490b1c1ee7cfdfd44aac273d6c5fb43c132"
+    },
+    {
+      "id": "paperclipai:optional:x:x-repurposer",
+      "key": "paperclipai/optional/x/x-repurposer",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-repurposer",
+      "name": "x-repurposer",
+      "description": "Repurpose a LinkedIn post, blog (fetched from Ghost), YouTube script or newsletter into a native X (Twitter) post or thread: re-hook for the no-fold first line, refit to 280 chars or a thread, strip off-platform artifacts, humanize, publish via TryPost after board approval.",
+      "path": "catalog/optional/x/x-repurposer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "repurposing",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7586,
+          "sha256": "15d5752b6841c9e21f9dad08df22e5a3ed9a46b46cd24ffc87e03947f3198c83"
+        }
+      ],
+      "contentHash": "sha256:f3891a6bba98eb69d19f05146c4a563b40028bc36a59d0440b28e6580cb88cb2"
+    },
+    {
+      "id": "paperclipai:optional:x:x-thread-builder",
+      "key": "paperclipai/optional/x/x-thread-builder",
+      "kind": "optional",
+      "category": "x",
+      "slug": "x-thread-builder",
+      "name": "x-thread-builder",
+      "description": "Build a long-form X (Twitter) thread with a 2026 thread formula (listicle, story, curiosity gap, how-I teardown) picked by goal. Tweet 1 promises and opens a loop, one beat per tweet, closes for the repost. Publishes via TryPost meta.thread_replies after board approval.",
+      "path": "catalog/optional/x/x-thread-builder",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "x",
+        "social-media",
+        "threads",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8575,
+          "sha256": "38de02dfcb9450bb44e885b9223e89538e6e674873ba5c481794ceb9bdb47fee"
+        },
+        {
+          "path": "references/thread-structure.md",
+          "kind": "reference",
+          "sizeBytes": 4040,
+          "sha256": "e5ef44ff1542dee2e836e945d2be272ee914309e927fc8137c857a28a63e9f48"
+        }
+      ],
+      "contentHash": "sha256:fed4613de1a5b667d311a4386bc35da585060fac63825077da38da3f6616db21"
+    },
+    {
+      "id": "paperclipai:optional:youtube:youtube-marketing",
+      "key": "paperclipai/optional/youtube/youtube-marketing",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "youtube-marketing",
+      "name": "youtube-marketing",
+      "description": "Hub for the YouTube and Shorts skills: high-CTR titles, SEO descriptions with chapters, first-30-second hook scripts, thumbnail briefs, community posts, weekly upload plans. Holds the shared references (voice rules, hook formulas, algorithm, thumbnails, Apify read layer).",
+      "path": "catalog/optional/youtube/youtube-marketing",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "assets",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "video-producer",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "video",
+        "youtube-shorts"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9922,
+          "sha256": "9a5e46debf243b24115aaa7052d95d92a80544911d4b9a3c7a5b4261d9f19236"
+        },
+        {
+          "path": "assets/icon.svg",
+          "kind": "asset",
+          "sizeBytes": 768,
+          "sha256": "746b2846abfcdf5cebaca6171c35aff39204d6f9394990b9ca5470afdabf19d9"
+        },
+        {
+          "path": "references/algorithm-heuristics.md",
+          "kind": "reference",
+          "sizeBytes": 8770,
+          "sha256": "6d9d0494c1e8a5dd991cc787b52ae10378c5b0e8dc5e5ddf0f7caf1962d144d9"
+        },
+        {
+          "path": "references/hook-formulas.md",
+          "kind": "reference",
+          "sizeBytes": 16204,
+          "sha256": "f242a4c2b98c8ce5a8e7cd34511cade3e951956c2576ecaf38d6368f77084f35"
+        },
+        {
+          "path": "references/mcp-read-layer.md",
+          "kind": "reference",
+          "sizeBytes": 9103,
+          "sha256": "af9cd53d144c1167296f31a6eb063cb4e32beca89f8c54dce8abad7dcf8220bb"
+        },
+        {
+          "path": "references/thumbnail-principles.md",
+          "kind": "reference",
+          "sizeBytes": 6871,
+          "sha256": "419b153fc8d7e7528fc8981b7073f550f5ab6e4101c4ec5d2e1752973dd9fe50"
+        },
+        {
+          "path": "references/untrusted-content.md",
+          "kind": "reference",
+          "sizeBytes": 2945,
+          "sha256": "200bee4173eff44c08ed83b389ba7124f13035a4de156f684f003134bc10dadb"
+        },
+        {
+          "path": "references/voice-profile.md",
+          "kind": "reference",
+          "sizeBytes": 2056,
+          "sha256": "d7dd302d3a7fe7c80578d6b5dcd9876d28ee3268485eb4809364ac1d3d3ddb8e"
+        },
+        {
+          "path": "references/voice-rules.md",
+          "kind": "reference",
+          "sizeBytes": 6288,
+          "sha256": "050db7ee555f31ad134d3eaf85a2f0f4896b6f483bf2dd04772253ba4e368502"
+        },
+        {
+          "path": "UPSTREAM.md",
+          "kind": "markdown",
+          "sizeBytes": 6143,
+          "sha256": "1caa5d6232d240acedd57beac2d23e0d74e571534109676141cba361eb706879"
+        }
+      ],
+      "contentHash": "sha256:b0f3023e58a7f352961d6ffd02c1fdcd0e2e9d66b35fd9c05601fee282549d53"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-audience-insights",
+      "key": "paperclipai/optional/youtube/yt-audience-insights",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-audience-insights",
+      "name": "yt-audience-insights",
+      "description": "Read your YouTube audience from the comments: top comments, recurring questions and themes (content ideas), repeat commenters (superfans), sentiment, and which comments to reply to or pin. Also video and channel stats and a niche pulse, read through the Apify connection.",
+      "path": "catalog/optional/youtube/yt-audience-insights",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "audience-research",
+        "comments",
+        "analytics"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6989,
+          "sha256": "3b23c928b7efab3c13d8a5fb721af27a8dc60cbe6e1c9d2acf74dd2c396d4434"
+        }
+      ],
+      "contentHash": "sha256:f8ac68087ef9a2186bd8f23078e01ec4ad50fd5966b3fd19457fd590bdb9e35c"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-channel-optimizer",
+      "key": "paperclipai/optional/youtube/yt-channel-optimizer",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-channel-optimizer",
+      "name": "yt-channel-optimizer",
+      "description": "Audit and rewrite a YouTube channel for 2026: name and @handle, banner (2560x1440, 1235x338 safe area), profile picture, About and keywords, trailer vs featured video, sections and playlists, watermark, links. Converts a viewer into a subscriber.",
+      "path": "catalog/optional/youtube/yt-channel-optimizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "channel-audit",
+        "branding"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7828,
+          "sha256": "6a791d5e274330b05638e4e6c5edd220efe3cad242b960620560de2edaebd726"
+        }
+      ],
+      "contentHash": "sha256:b5996e8fd905ba4a6aa10a09be3dc214317f53f8c5ff8ae310aec98cb404e3c8"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-community-post-writer",
+      "key": "paperclipai/optional/youtube/yt-community-post-writer",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-community-post-writer",
+      "name": "yt-community-post-writer",
+      "description": "Write YouTube community-tab posts: text updates, polls, image-caption posts and questions that drive comments and bring subscribers back between uploads. Delivers a copy-paste block unless TryPost lists a community-post type at run time. Also builds the voice profile.",
+      "path": "catalog/optional/youtube/yt-community-post-writer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "community-posts",
+        "polls"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7689,
+          "sha256": "a12cddc0a2d2c4d65cade76545ce2bff4a605b63d11d89d28801bbec393be10a"
+        },
+        {
+          "path": "references/post-types.md",
+          "kind": "reference",
+          "sizeBytes": 2095,
+          "sha256": "f1036b73d1bd96b54d8cf9ab450c83d56c78ee43c73aa59d0025eb2d7716a562"
+        },
+        {
+          "path": "sub-skills/illustration.md",
+          "kind": "markdown",
+          "sizeBytes": 3869,
+          "sha256": "408a418ef96ec8493e76f80b0bd20c02c3102c30da11a99469bdc2ed6275ad7a"
+        },
+        {
+          "path": "sub-skills/voice-profile.md",
+          "kind": "markdown",
+          "sizeBytes": 2756,
+          "sha256": "c9248c48259d78e07bd31f630770862981b80e3339745de4b29bd45035e8884d"
+        }
+      ],
+      "contentHash": "sha256:b9205d4293ba2d8a1b3f0414efdf1e5689b82243274365d88d0586c468aff912"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-content-planner",
+      "key": "paperclipai/optional/youtube/yt-content-planner",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-content-planner",
+      "name": "yt-content-planner",
+      "description": "Build a weekly YouTube upload plan: long-form vs Shorts mix, a cadence you can hold, per-slot title and thumbnail pairing, hook angle, community posts between uploads, and a goal balance across CTR, retention and subscribes. Plans the calendar; the other yt skills write each piece.",
+      "path": "catalog/optional/youtube/yt-content-planner",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "content-calendar",
+        "planning"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 5735,
+          "sha256": "b6cb685f1689d5e19be00af14c4a9ebf91368fdb039c5a706fd80b0df7308412"
+        },
+        {
+          "path": "references/example-week.md",
+          "kind": "reference",
+          "sizeBytes": 3025,
+          "sha256": "ab5be9cb20c23e3ed0c35a8ac12704b80b4ee147375920445b86841755618929"
+        },
+        {
+          "path": "references/pillars-framework.md",
+          "kind": "reference",
+          "sizeBytes": 3116,
+          "sha256": "1eac15fbe54d7de9c746f956c048acae675371faff6b4c57b7a54cb1d6737f6f"
+        }
+      ],
+      "contentHash": "sha256:efa95a2ed4dc3be8840e2d3d874ce4b77f7e7ef52e0ac49bd72ac4038469cd61"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-description-writer",
+      "key": "paperclipai/optional/youtube/yt-description-writer",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-description-writer",
+      "name": "yt-description-writer",
+      "description": "Write a YouTube or Shorts description under 5,000 chars: a first-150-char hook (the snippet in search and suggested), timestamped chapters, natural keywords, labeled links and one clear CTA. It becomes the content of the TryPost video draft.",
+      "path": "catalog/optional/youtube/yt-description-writer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "seo",
+        "descriptions"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6572,
+          "sha256": "524ea7dbcb039312e4f1799e0894e54cba609a6b72846612fd40efc36c088c05"
+        },
+        {
+          "path": "references/description-template.md",
+          "kind": "reference",
+          "sizeBytes": 2640,
+          "sha256": "8ba04d3a4e5ad8f8365118012ad313b4892ab8b96d160755f9b1fe44ab9056f5"
+        }
+      ],
+      "contentHash": "sha256:d39ec6f3707d0703df08302da285eadd3067c16b0691c63eef772bf90648b18f"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-hook-scripter",
+      "key": "paperclipai/optional/youtube/yt-hook-scripter",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-hook-scripter",
+      "name": "yt-hook-scripter",
+      "description": "Script the spoken opening that decides retention: the first 30 seconds of a long-form YouTube video or the first 3 seconds of a Short. Restate-and-raise, cold-open payoff tease, question-and-contract, and the frame-one Shorts hook with a designed loop. No intro.",
+      "path": "catalog/optional/youtube/yt-hook-scripter",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "video-producer",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "youtube-shorts",
+        "scripting",
+        "retention"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 7254,
+          "sha256": "8a634beac22fd5111c3d647af9c8a491e54c4f86e074baa99af26b87ecbcf7d8"
+        },
+        {
+          "path": "references/retention-beats.md",
+          "kind": "reference",
+          "sizeBytes": 3344,
+          "sha256": "2699fca655f72ea7cb99688789cf7c2f24bfc756fe9ecd012344ef55b16503cc"
+        }
+      ],
+      "contentHash": "sha256:638e4e6af99e9aa50bfa65993093f4e8d01df52e00c7d488f6b12fa395bfb48d"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-repurposer",
+      "key": "paperclipai/optional/youtube/yt-repurposer",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-repurposer",
+      "name": "yt-repurposer",
+      "description": "Repurpose a blog post, X thread, LinkedIn post or newsletter into a native YouTube surface: a community post or poll, or a video brief (title, spoken hook, description with chapters). Leads with the payoff, turns listicles into chapters, strips off-platform artifacts.",
+      "path": "catalog/optional/youtube/yt-repurposer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer",
+        "content-strategist"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "repurposing",
+        "content-strategy"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 9631,
+          "sha256": "64b40848a8708758ea9bf50e60055a7623d7f87a91123969cedb91421510c740"
+        }
+      ],
+      "contentHash": "sha256:4a875c2ceace125b480761f798166d6f57550df2912ecbf3b5b61e6acd7d5040"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-thumbnail-brief",
+      "key": "paperclipai/optional/youtube/yt-thumbnail-brief",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-thumbnail-brief",
+      "name": "yt-thumbnail-brief",
+      "description": "Turn a YouTube video idea into a thumbnail brief: focal subject, face and emotion, a text overlay of 4 words or fewer that the title does not repeat, contrast, composition, and 2 to 3 A/B concepts. Renders the approved concept with Loc-GenImage and gives the attach step.",
+      "path": "catalog/optional/youtube/yt-thumbnail-brief",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "video-producer",
+        "designer"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "thumbnails",
+        "design-brief"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 6414,
+          "sha256": "f2d0e97099d6c58458b6b341b086b1c16a1307d175abe9eefaaed6e3de1ae41d"
+        },
+        {
+          "path": "references/brief-template.md",
+          "kind": "reference",
+          "sizeBytes": 2802,
+          "sha256": "42310fdf6baf089dc6afba3c17d25e025788c1b980c50240f903acf58f7837b4"
+        }
+      ],
+      "contentHash": "sha256:5f9b900d5fb964053d4f744c4f31eabad64eaa8cd001c6a80d7b42d3b16c4d14"
+    },
+    {
+      "id": "paperclipai:optional:youtube:yt-title-optimizer",
+      "key": "paperclipai/optional/youtube/yt-title-optimizer",
+      "kind": "optional",
+      "category": "youtube",
+      "slug": "yt-title-optimizer",
+      "name": "yt-title-optimizer",
+      "description": "Write high-CTR YouTube and Shorts titles under 100 chars with 2026 packaging formulas (curiosity-gap, number, how-I, mistake, transformation, versus). Front-loads the click words for the 60-char mobile cutoff and returns 3 to 5 tagged A/B variants for Test and Compare.",
+      "path": "catalog/optional/youtube/yt-title-optimizer",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "writer"
+      ],
+      "requires": [],
+      "tags": [
+        "youtube",
+        "social-media",
+        "titles",
+        "ctr",
+        "copywriting"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 5683,
+          "sha256": "a0ff9d31462feac17e1208119c4732a3351c79d2bb3661f681bda92e694e9014"
+        },
+        {
+          "path": "references/title-checklist.md",
+          "kind": "reference",
+          "sizeBytes": 2247,
+          "sha256": "d4a419d494609ec2f359064ec0c33d44da607606a493dcae4b20d7542755830c"
+        }
+      ],
+      "contentHash": "sha256:baf10211b202bc3053560d7a5a64a1f406448b3f2e01257c4aa9a984c9ceb546"
     }
   ]
 }

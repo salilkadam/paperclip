@@ -1,6 +1,6 @@
 ---
 name: blog-linkedin-amplifier
-description: Daily marketing routine — pick one new draft blog on your company's Ghost site, prepare its company-page LinkedIn post and a personal-profile post in TryPost, and hand all three go-live actions to the board as one decision. Never repeats a blog. Use when a routine or task asks you to publish/promote the day's blog on LinkedIn.
+description: Daily routine — pick one new draft blog on your company's Ghost site, prepare its company-page and personal-profile LinkedIn posts in TryPost, and hand all three go-live actions to the board as one decision. Never repeats a blog. Use to publish or promote the day's blog on LinkedIn.
 ---
 
 # Blog → LinkedIn amplifier
