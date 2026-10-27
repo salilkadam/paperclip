@@ -164,6 +164,8 @@ for entry in "${SITES[@]}"; do
   # (an approved plugin action cannot run, so require_approval = never runs).
   clash="$(api GET "/companies/$cid/tools/policies" | list policies | jq -r --argjson t "$tools_json" '
     [.[] | select(.enabled != false and (.policyType == "block" or .policyType == "require_approval"))
+         # scoped to a connection: plugin tools have none, so it can never match them
+         | select((.selectors // {}) | ((.connectionId // null) == null and ((.connectionIds // []) | length) == 0))
          | select(
              (.selectors // {}) as $s
              | ($s | length) == 0

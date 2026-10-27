@@ -104,7 +104,8 @@ to this task: that is expected. Request each once, never retry. The board approv
 3. Check each draft against the house style, and fix it with `gh_update_post` (`html`, drafts only):
    - 1 or 2 short opening paragraphs, then at least 3 `<h2>` sections with clear headings. No `<h1>`.
    - Steps, causes or stages as `<ol class="steps">` cards (`<li><span class="sn">01</span><div><h3>…</h3><p>…</p></div></li>`);
-     checklists or benefits as `<ul class="ticks">`; one key caveat or takeaway as `<p class="note-i">`;
+     checklists or benefits as `<ul class="ticks">`; one key caveat or takeaway as `<p class="note-i">`
+     (a draft from the community scan already ends with its product note as the one `note-i`: keep it unchanged);
      commands in `<div class="post-code"><div class="cl">label</div><pre><code>…</code></pre></div>`.
      Wrap each such component in `<!--kg-card-begin: html-->` … `<!--kg-card-end: html-->`.
    - No hard-wrapped lines (a `<br>` in the middle of a paragraph), no raw URL as link text (use words),
