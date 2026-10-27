@@ -2505,11 +2505,13 @@ export function createToolGatewayService(
     const lookup = cardSubjectLookupFor(tool.upstreamToolName, args);
     if (!lookup || !tool.connectionId) return { subject: null, failure: null };
     const run = async (): Promise<{ subject: CardSubject | null; failure: string | null }> => {
+      // The read tool is named by the fixed lookup table (gh_get_post, get-post-tool), never by the
+      // caller, so it is not filtered on the catalog's risk label: the verb heuristic labels both
+      // "write" because their names contain "post". The agent's tool policy still decides below.
       const readTool = (await connectedMcpToolsForCompany(session.companyId, [tool.connectionId!])).find((candidate) =>
         candidate.connectionId === tool.connectionId &&
-        candidate.risk === "read" &&
         sameUpstreamTool(candidate.upstreamToolName, lookup.readTool));
-      if (!readTool) return { subject: null, failure: `no read-only ${lookup.readTool} tool on this connection` };
+      if (!readTool) return { subject: null, failure: `no ${lookup.readTool} tool on this connection` };
       const decisionInput = policyInputForTool({ session, tool: readTool, parameters: lookup.readArguments, consumeRateLimit: false });
       const decision = await policyService.decide(decisionInput);
       if (!decision.allowed) {
