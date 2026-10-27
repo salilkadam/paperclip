@@ -543,14 +543,16 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
     const agent = await createAgent(db, company.id);
     const { issue, run } = await createIssueAndRun(db, company.id, agent.id);
     const remoteTool = await createRemoteMcpTool(db, company.id);
-    const entry = (toolName: string, riskLevel: "read" | "destructive") => ({
+    const entry = (toolName: string, riskLevel: "read" | "write" | "destructive") => ({
       companyId: company.id, applicationId: remoteTool.application.id, connectionId: remoteTool.connection.id,
       entryKind: "tool" as const, name: `${toolName}-${randomUUID()}`, toolName, title: toolName, description: toolName,
       inputSchema: { type: "object", properties: { tenant_id: { type: "string" }, post_id: { type: "string" } }, required: ["tenant_id", "post_id"], additionalProperties: false },
       annotations: { readOnlyHint: riskLevel === "read" }, riskLevel, isReadOnly: riskLevel === "read", isWrite: riskLevel !== "read",
       isDestructive: riskLevel === "destructive", status: "active" as const, versionHash: randomUUID(),
     });
-    await db.insert(toolCatalogEntries).values([entry("gh_delete_post", "destructive"), entry("gh_get_post", "read")]);
+    // The catalog classifies gh_get_post (and TryPost's get-post-tool) as "write": its verb heuristic
+    // matches "post" anywhere in the name. The lookup must work with the production classification.
+    await db.insert(toolCatalogEntries).values([entry("gh_delete_post", "destructive"), entry("gh_get_post", "write")]);
     await allowAllToolsForAgent(db, company.id, agent.id);
     await db.insert(toolPolicies).values({ companyId: company.id, name: "Ask first: delete", policyType: "require_approval",
       selectors: { connectionId: remoteTool.connection.id, toolNames: ["gh_delete_post"] }, priority: 1 });
@@ -597,6 +599,24 @@ describeEmbeddedPostgres("gateway connector invocation telemetry", () => {
       expect(lookupRows[0]!.status).toBe("succeeded");
       const gated = invocationRows.find((row) => row.toolName === del.name)!;
       expect(gated.status).toBe("awaiting_approval");
+
+      // the lookup never shares an idempotency key with the agent's own identical read (the read tool is
+      // catalogued "write", so the default side-effect key would collide): after the card, the agent's
+      // read of the same post runs upstream and returns its result, not a "replayed" null...
+      const getTool = (await gateway.listToolsForSession(session.token)).find((tool) => tool.upstreamToolName === "gh_get_post")!;
+      reads.length = 0;
+      const agentRead = await gateway.executeTool({ sessionToken: session.token, tool: getTool.name, parameters: { tenant_id: "reliora", post_id: "6adf5e0c" } });
+      expect(agentRead).not.toMatchObject({ status: "replayed" });
+      expect(reads).toHaveLength(1);
+      // ...and when the agent reads first, the card's lookup still runs as its own invocation
+      await gateway.executeTool({ sessionToken: session.token, tool: getTool.name, parameters: { tenant_id: "reliora", post_id: "6adf5e0f" } });
+      const readRowsBefore = (await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, company.id)))
+        .filter((row) => row.toolName === getTool.name).length;
+      await requestDelete("6adf5e0f");
+      const readRowsAfter = (await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, company.id)))
+        .filter((row) => row.toolName === getTool.name).length;
+      expect(readRowsAfter).toBe(readRowsBefore + 1);
+      expect(reads).toHaveLength(3);
 
       // a failed lookup never blocks the card: it falls back and says so
       lookupTitle = null;

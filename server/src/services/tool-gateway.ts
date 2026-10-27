@@ -2490,8 +2490,8 @@ export function createToolGatewayService(
   }
 
   // A plain-language subject for an approval card (approval-card-subjects.ts):
-  // the server looks up the object a gated call targets with a read-only tool on
-  // the same connection. The lookup is held to the same rules as the agent's own
+  // the server looks up the object a gated call targets with a fixed read tool on
+  // the same connection (named by the lookup table, whatever risk the catalog gives it). The lookup is held to the same rules as the agent's own
   // calls: its tool policy must allow the read, and the read is recorded as its
   // own invocation (audit, and no side effects on the gated call). Best effort
   // and bounded: 5 s for the whole lookup; a failure never blocks the card, it is
@@ -2505,12 +2505,18 @@ export function createToolGatewayService(
     const lookup = cardSubjectLookupFor(tool.upstreamToolName, args);
     if (!lookup || !tool.connectionId) return { subject: null, failure: null };
     const run = async (): Promise<{ subject: CardSubject | null; failure: string | null }> => {
+      // The read tool is named by the fixed lookup table (gh_get_post, get-post-tool), never by the
+      // caller, so it is not filtered on the catalog's risk label: the verb heuristic labels both
+      // "write" because their names contain "post". The agent's tool policy still decides below.
       const readTool = (await connectedMcpToolsForCompany(session.companyId, [tool.connectionId!])).find((candidate) =>
         candidate.connectionId === tool.connectionId &&
-        candidate.risk === "read" &&
         sameUpstreamTool(candidate.upstreamToolName, lookup.readTool));
-      if (!readTool) return { subject: null, failure: `no read-only ${lookup.readTool} tool on this connection` };
-      const decisionInput = policyInputForTool({ session, tool: readTool, parameters: lookup.readArguments, consumeRateLimit: false });
+      if (!readTool) return { subject: null, failure: `no ${lookup.readTool} tool on this connection` };
+      // Its own idempotency key: the read tool may be catalogued "write", and the default side-effect key
+      // would then collide with the agent's identical read in the same run (which would come back
+      // "replayed" with no result).
+      const decisionInput = policyInputForTool({ session, tool: readTool, parameters: lookup.readArguments, consumeRateLimit: false,
+        idempotencyKey: `card-subject:${randomUUID()}` });
       const decision = await policyService.decide(decisionInput);
       if (!decision.allowed) {
         return { subject: null, failure: `the agent's tool policy does not allow ${lookup.readTool} (${decision.reasonCode})` };

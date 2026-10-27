@@ -80,7 +80,8 @@ write() { if (( DRY )); then log "  DRY-RUN would $1 $2"; echo '{}'; else api "$
 
 read -r -d '' CAL_DESC <<'EOF' || true
 The owner's standing content practice for reliora.ai. Use the **trypost** skill (tool gateway) and the
-Ghost blog tools (`gh_*`, tenant `reliora`). Times are America/Los_Angeles.
+Ghost blog tools (`gh_*`): pass `tenant_id: "reliora"` in EVERY `gh_*` call (a call without it fails, and an
+approval card without it cannot name the blog). Times are America/Los_Angeles.
 This routine runs daily at 07:00 and whenever Ghost reports a new post. Only one run is active at a time:
 a new post that arrives while this task waits for the board does not start another run; you pick it up
 after the board's decision (section E).
@@ -117,12 +118,17 @@ to this task: that is expected. Request each once, never retry. The board approv
 
 ## B. Schedule each ready draft into the blog calendar
 
-1. Find the taken publish days: `gh_list_posts` with `status: "scheduled"` and `status: "published"`.
+1. Find the taken publish days: `gh_list_posts` with `status: "scheduled"` and `status: "published"`, all pages.
+   Write the list of taken dates (YYYY-MM-DD, Pacific) in the task before choosing.
 2. Give each ready draft, oldest first, the next **Sunday or Tuesday** after today at 08:00
-   America/Los_Angeles that has no scheduled or published post. One blog per day.
+   America/Los_Angeles that is NOT in that list. One blog per day.
    Days already promised to drafts tagged `#calendar` count as taken (see the task that requested them).
-3. Request it: `gh_publish_post` with `post_id` and `published_at` (ISO 8601 with offset, e.g.
-   `2026-11-01T08:00:00-08:00`). The approved call schedules it; it appears on reliora.ai at that time.
+   Check the date you chose against the list once more: if it is in the list, take the next free one.
+3. Request it: `gh_publish_post` with `tenant_id: "reliora"`, `post_id` and `published_at` (ISO 8601 with the
+   offset for THAT date: `-08:00` from the first Sunday of November until the second Sunday of March (that
+   Sunday's 08:00 is already `-07:00`), `-07:00` the rest of the year; e.g. `2026-11-03T08:00:00-08:00`,
+   `2027-03-14T08:00:00-07:00`).
+   The approved call schedules it; it appears on reliora.ai at that time.
 4. Tag the draft `#calendar` right away (`gh_update_post`, tags = existing + `#calendar`, with the `#`), so no
    other run requests it again. If the board rejects the schedule, remove `#calendar` so it can be retried.
 
@@ -137,7 +143,8 @@ carry the Ghost tag `#linkedin`:
 2. Draft the post (`create-post-tool`, account "Reliora Inc", `status: "draft"`): a hook line, a 2 to 4 sentence
    summary, the takeaway, the link `https://reliora.ai/blog/<slug>` (never the Ghost host), 3 to 5 hashtags.
    Check it with `preview-post-tool`.
-3. Request it: `update-post-tool` with `status: "scheduled"` and `scheduled_at` = 09:00 America/Los_Angeles (in UTC)
+3. Request it: `update-post-tool` with `status: "scheduled"` and `scheduled_at` = 09:00 America/Los_Angeles in UTC
+   (16:00Z while US daylight time applies, 17:00Z from the first Sunday of November: Mon 2 Nov 09:00 = 17:00Z)
    on the day after the blog's `published_at` **as Ghost reports it** (Monday for a Sunday blog, Wednesday for a
    Tuesday blog). Never earlier than that day.
 4. Tag the blog `#linkedin`: `gh_update_post` with tags = its existing tags + `#linkedin`. The tag is exactly
