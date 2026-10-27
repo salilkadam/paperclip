@@ -1,6 +1,6 @@
 ---
 name: product-capability-notes
-description: Weekly product research — read the product's GitHub repositories through the GitHub connection and keep a capability reference in your memory (what the product solves, how, how well proven, what it does not do, and what may be said in public). The daily community-pain-blog skill relies on these notes. Use when a routine or task asks for the weekly product research or to refresh the capability notes.
+description: "Weekly product research: read the product's GitHub repositories (read-only) and keep capability notes in memory — what it solves, how well proven, what it does not do, and what may be said in public. Use for the weekly product research or to refresh the notes."
 ---
 
 # Product capability notes

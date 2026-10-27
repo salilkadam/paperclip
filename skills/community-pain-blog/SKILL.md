@@ -1,6 +1,6 @@
 ---
 name: community-pain-blog
-description: Daily content research — search Reddit, Hacker News and Stack Exchange (through the Composio connection) for infrastructure problems people are posting about this week, match them against your product capability notes, and turn the best match into one Ghost blog draft in the house style. The draft then enters the company's content calendar, which handles the board approval, scheduling and LinkedIn. Use when a routine or task asks for the daily community scan or a blog from real user problems.
+description: "Daily scan of Reddit, Hacker News and Stack Exchange (via Composio) for infrastructure problems, matched against the product capability notes; turns the best match into one Ghost blog draft in the house style for the content calendar. Use for the daily community scan."
 ---
 
 # Community problems → blog draft
