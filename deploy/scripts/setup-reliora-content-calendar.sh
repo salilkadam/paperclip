@@ -109,6 +109,8 @@ to this task: that is expected. Request each once, never retry. The board approv
      (a draft from the community scan already ends with its product note as the one `note-i`: keep it unchanged);
      commands in `<div class="post-code"><div class="cl">label</div><pre><code>…</code></pre></div>`.
      Wrap each such component in `<!--kg-card-begin: html-->` … `<!--kg-card-end: html-->`.
+   - Visuals (the **blog-visuals** skill): a hero image (`feature_image`) always, and a workflow diagram
+     figure where the post describes a process. Add whichever is missing; never replace existing ones.
    - No hard-wrapped lines (a `<br>` in the middle of a paragraph), no raw URL as link text (use words),
      no link to any `*.baisoln.com` address, no "first 100" (say "limited places").
    - A custom excerpt of 1 or 2 sentences (300 characters at most), and 2 or 3 public tags.
@@ -142,7 +144,9 @@ carry the Ghost tag `#linkedin`:
    it already has its post: tag it `#linkedin` (step 4) and move on.
 2. Draft the post (`create-post-tool`, account "Reliora Inc", `status: "draft"`): a hook line, a 2 to 4 sentence
    summary, the takeaway, the link `https://reliora.ai/blog/<slug>` (never the Ghost host), 3 to 5 hashtags.
-   Check it with `preview-post-tool`.
+   Attach the blog's hero as the post's image (**blog-visuals** section 3:
+   `attach-media-from-url-tool`, `urls: [{"url": "https://reliora.ai/blog-media/<path>", "alt": "..."}]`), so
+   each company post previews with its own picture. Check it with `preview-post-tool`.
 3. Request it: `update-post-tool` with `status: "scheduled"` and `scheduled_at` = 09:00 America/Los_Angeles in UTC
    (16:00Z while US daylight time applies, 17:00Z from the first Sunday of November: Mon 2 Nov 09:00 = 17:00Z)
    on the day after the blog's `published_at` **as Ghost reports it** (Monday for a Sunday blog, Wednesday for a

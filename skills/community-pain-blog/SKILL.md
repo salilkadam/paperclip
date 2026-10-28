@@ -159,6 +159,11 @@ public tags (`gh_list_tags`; never create a tag, never `linkedin`). Never call
 `gh_publish_post`, and never schedule: the content calendar does that, with the
 board's approval.
 
+Then give the new draft its visuals with the **blog-visuals** skill, sections 1
+and 2: a hero image always, and a workflow diagram when the post describes a
+process (the "how it fails" steps usually are one). A draft without a hero is
+not finished.
+
 ## 5. Record
 
 - Ledger line: `YYYY-MM-DD | drafted|banked | <title or topic> | <source links> | <ghost slug>`.

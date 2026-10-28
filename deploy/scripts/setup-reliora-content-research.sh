@@ -52,7 +52,7 @@ COMPOSIO_CONN="Composio"
 GH_BLOCK_POLICY="org-instructions: content marketer reads GitHub only"
 REPOS_FILE="${REPOS_FILE:-$HOME/.reliora-research-repos}"
 SEED_DIR="${SEED_DIR:-}"
-MARKETER_SKILLS=(paperclipai/paperclip/product-capability-notes paperclipai/paperclip/community-pain-blog paperclipai/paperclip/para-memory-files)
+MARKETER_SKILLS=(paperclipai/paperclip/product-capability-notes paperclipai/paperclip/community-pain-blog paperclipai/paperclip/blog-visuals paperclipai/paperclip/para-memory-files)
 DRY=0
 for a in "$@"; do
   case "$a" in
