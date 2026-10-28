@@ -58,6 +58,13 @@ describe("approval card subjects", () => {
     expect(edit.headline).toBe("Schedule social post on \u201cReliora Inc\u201d (linkedin-page) for Mon 16 Nov 2026, 17:00 (UTC) and replace its text");
     expect(edit.lines).toContain("Current first line: \u201cYour Postgres cluster says Ready=True. One of its instances is crash-looping.\u201d");
     expect(edit.lines).toContain("New first line (from this request): \u201cNew hook line\u201d");
+    // a request that only swaps the image says so (it does not claim to replace the text)
+    const media = cardSubjectLookupFor("update-post-tool", { post_id: "01a17890", status: "scheduled", scheduled_at: "2026-11-16T17:00:00Z",
+      media: [{ type: "image", url: "https://reliora.ai/blog-media/2026/10/x-hero-v2.png" }] })!.describe(looked, NOW)!;
+    expect(media.headline).toMatch(/ and replace its images$/);
+    expect(media.headline).not.toContain("text");
+    expect(media.lines).toContain("Images after this change: 1");
+    expect(media.lines.some((line) => line.startsWith("First line:"))).toBe(true);
     // a time already past is flagged
     expect(cardSubjectLookupFor("update-post-tool", { post_id: "x", status: "scheduled", scheduled_at: "2026-10-01T00:00:00Z" })!
       .describe(looked, NOW)!.headline).toContain("(that time has already passed)");
