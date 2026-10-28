@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { composioGuardRefusal, isComposioConnection } from "./connectors/composio-guard.js";
 import { boundRunIssueIdSql } from "./run-task-binding.js";
 import { and, asc, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -1087,6 +1088,7 @@ export function toolAccessPolicyService(db: Db) {
             enabled: toolConnections.enabled,
             status: toolConnections.status,
             transport: toolConnections.transport,
+            config: toolConnections.config,
           })
           .from(toolConnections)
           .where(eq(toolConnections.id, contextConnectionId)));
@@ -1098,6 +1100,16 @@ export function toolAccessPolicyService(db: Db) {
       }
       applicationId = connection.applicationId;
       connectionTransport = connection.transport;
+      // Owner's decision, enforced before any company policy, grant or trust rule (connectors/composio-guard.ts).
+      if (isComposioConnection(connection)) {
+        const refusal = composioGuardRefusal([input.request.toolName, upstreamToolName], input.request.arguments ?? {});
+        if (refusal) {
+          return { ok: false, redaction, decision: decision("deny", "deny_policy_block", refusal.explanation, [], [], {
+            redactionPlan: redaction.redactionPlan,
+            policyExplanation: { guard: "composio", guardCode: refusal.code },
+          }) };
+        }
+      }
     }
     if (applicationId) {
       const contextApplicationId = applicationId;

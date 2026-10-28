@@ -162,8 +162,9 @@ back with `update-post-tool` `status: "draft"` and say so. A post must never lin
 
 ## Writing for the board (every task comment and every #reliora-board note)
 
-The board reads these quickly and decides from them. Write them by the **simplified-english** skill: short
-sentences, plain words, one item per line.
+The board reads these quickly and decides from them. Write them by the **board-plain-language** skill (the
+question first, what yes and no each do) and the **simplified-english** word list: short sentences, plain words,
+one item per line.
 - Name each blog by its **title** and public link `https://reliora.ai/blog/<slug>`, and say what happens to it
   and when, e.g. `Schedule blog "Pods running, site hanging" (reliora.ai/blog/pods-running-site-hanging-…) for Tue 3 Nov, 08:00 PT`.
 - Name each LinkedIn post by **account**, **time** and its **first line** in quotes.
@@ -200,7 +201,7 @@ Times are America/Los_Angeles.
    today (in UTC) if that is at least 20 minutes away, otherwise 30 minutes from now. It returns
    `approval_required`; that is expected.
 5. If you requested anything, post one note per the **board-approval-notify** skill (#reliora-board) with the
-   task link, written in plain words by the **simplified-english** skill: which blog the repost is about (its
+   task link, written by the **board-plain-language** skill: which blog the repost is about (its
    title), the first line of your blurb in quotes, and the time ("Personal repost ready: Approve on this task").
    Never put a raw post or card id in front of the board. Set the task to `in_review` and end the run.
    Nothing to do: comment "No new company post to repost" and mark the task done.

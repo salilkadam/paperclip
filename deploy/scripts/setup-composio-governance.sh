@@ -8,6 +8,11 @@
 # established account. Composio's connected reddit/stack_exchange toolkits can
 # write, and its meta tools were plainly "allowed", so nothing stopped a write.
 #
+# Since 2026-10-28 the server refuses these writes in code for every Composio
+# connection (server/src/services/connectors/composio-guard.ts), before any
+# company policy. The policies below are the second layer, and the only place
+# the ask-first rule for connecting apps lives.
+#
 # Per Composio connection it ensures these company policies, by exact name:
 #   block  COMPOSIO_MULTI_EXECUTE_TOOL when tools[i].tool_slug (i = 0..3) is a
 #          Reddit or Stack Exchange slug whose verb is not SEARCH / RETRIEVE /

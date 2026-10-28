@@ -95,7 +95,9 @@ blog live?
   self-promotion rules and the community's vendor rules bind the account that
   posts. Edit the text into your own voice, and never post it as a first-person
   experience you did not have"), and your relevance-gate answers. Notify the board per **board-approval-notify** (title,
-  thread link, first line of the reply). Set the task `in_review`.
+  thread link, first line of the reply). Write the task comment and the note by
+  **board-plain-language**: the ask first ("Please post this reply on r/…"),
+  where and why it helps, and what happens if nobody posts it (nothing). Set the task `in_review`.
 - A thread whose source is an article or postmortem by a named author: say so in
   the task. Contacting the author is the board's decision; never email or
   message them yourself from this routine.
