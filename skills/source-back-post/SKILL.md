@@ -84,17 +84,21 @@ blog live?
 
 ## 5. Hand it to a person
 
-- **First two replies ever:** route to the CMO for review first (a confirmation
-  card with the exact text, thread URL, blog URL and your gate answers). Only
-  after approval continue.
+- **First two replies ever:** the CMO reviews them first. Create a subtask
+  assigned to your manager (the CMO) with the exact text, thread URL, blog URL
+  and your gate answers, mark this task `blocked` by it, and end the run. Continue
+  when the subtask is done with an approval; rework the draft if it asks for
+  changes.
 - Post in the task, under **"Ready to post"**: the site and thread title + URL,
   the exact reply in a code block, the account guidance ("post from an
-  established personal or Reliora account; not u/BionicAISolutions"), and your
-  relevance-gate answers. Notify the board per **board-approval-notify** (title,
+  established personal or Reliora account; not u/BionicAISolutions. The site's
+  self-promotion rules and the community's vendor rules bind the account that
+  posts. Edit the text into your own voice, and never post it as a first-person
+  experience you did not have"), and your relevance-gate answers. Notify the board per **board-approval-notify** (title,
   thread link, first line of the reply). Set the task `in_review`.
-- Named author of an article or postmortem (not an anonymous poster): an email
-  via **outbound-email-approval**, or a LinkedIn note via **trypost**, both behind
-  their board cards. Same drafting rules.
+- A thread whose source is an article or postmortem by a named author: say so in
+  the task. Contacting the author is the board's decision; never email or
+  message them yourself from this routine.
 
 ## 6. Record and follow up
 

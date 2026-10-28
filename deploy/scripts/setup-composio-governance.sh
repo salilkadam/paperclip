@@ -10,23 +10,37 @@
 #
 # Per Composio connection it ensures these company policies, by exact name:
 #   block  COMPOSIO_MULTI_EXECUTE_TOOL when tools[i].tool_slug (i = 0..3) is a
-#          Reddit or Stack Exchange slug that is not a read
-#          (SEARCH / RETRIEVE / GET / LIST / FETCH), any letter case (one policy
-#          per site and position);
+#          Reddit or Stack Exchange slug whose verb is not SEARCH / RETRIEVE /
+#          GET / LIST / FETCH, any letter case, leading whitespace allowed (one
+#          policy per site and position). Over-blocks reads with other verbs
+#          (e.g. REDDIT_CHECK_USERNAME_AVAILABILITY) on purpose;
+#   block  COMPOSIO_MULTI_EXECUTE_TOOL when `tools` is a string instead of an
+#          array (the per-position rules could not read it);
 #   block  COMPOSIO_MULTI_EXECUTE_TOOL with more than 4 tools (tools[4] exists),
 #          so a write cannot hide further down the list (agents send 1);
 #   block  COMPOSIO_REMOTE_BASH_TOOL and COMPOSIO_REMOTE_WORKBENCH (sandboxes
 #          that can call Composio tools themselves; agents fetch public APIs
 #          from their own runtime instead);
 #   ask first COMPOSIO_MANAGE_CONNECTIONS (connecting a new app needs the board).
-# A policy that exists with a different type, priority, selectors or conditions
-# (or disabled) is updated in place.
+# All at priority 0, so they are evaluated before other rules. A policy that
+# exists with a different type, priority, selectors or conditions (or disabled)
+# is updated in place. It fails when an enabled "allow" policy could cover the
+# connection (an allow wins outright if ordered first), or when the connection's
+# catalog has a tool outside KNOWN_TOOLS: these rules name tools, so a new
+# Composio meta tool must be reviewed and added here before the script passes.
+#
+# Not on by default: run it after creating or re-creating any Composio
+# connection, in any company. It governs the gateway only. An agent could still
+# call Reddit's or Stack Exchange's API from its own runtime with credentials of
+# its own; none are provisioned to agents, which is what closes that path.
 #
 # Then it PROVES the gate with gateway test calls as one of the company's agents.
 # Blocked calls never reach Composio; the one allowed probe is a read-only search:
 #   - multi-execute REDDIT_POST_REDDIT_COMMENT in slot 1      -> off (deny_policy_block)
 #   - multi-execute stack_exchange_create_answer in slot 3    -> off (deny_policy_block)
 #   - multi-execute with 5 tools                              -> off (deny_policy_block)
+#   - multi-execute " REDDIT_POST_REDDIT_COMMENT" (leading space)-> off (deny_policy_block)
+#   - multi-execute with `tools` as a JSON string             -> off (deny_policy_block)
 #   - remote bash, remote workbench                           -> off (deny_policy_block)
 #   - manage connections                                      -> ask_first (declined)
 #   - multi-execute REDDIT_SEARCH_ACROSS_SUBREDDITS           -> allowed
@@ -43,14 +57,18 @@ COMPOSIO_URL="https://connect.composio.dev/mcp"
 # a Reddit / Stack Exchange slug that is not a read (SEARCH/RETRIEVE/GET/LIST/FETCH), any letter case.
 # The server only accepts patterns without '|', backreferences or nested quantifiers, so: one
 # pattern per site, chained single-verb lookaheads, and per-letter classes instead of a flag.
-REDDIT_WRITE_RE='^[rR][eE][dD][dD][iI][tT]_(?![sS][eE][aA][rR][cC][hH]_)(?![rR][eE][tT][rR][iI][eE][vV][eE]_)(?![gG][eE][tT]_)(?![lL][iI][sS][tT]_)(?![fF][eE][tT][cC][hH]_)'
-STACKEX_WRITE_RE='^[sS][tT][aA][cC][kK]_[eE][xX][cC][hH][aA][nN][gG][eE]_(?![sS][eE][aA][rR][cC][hH]_)(?![rR][eE][tT][rR][iI][eE][vV][eE]_)(?![gG][eE][tT]_)(?![lL][iI][sS][tT]_)(?![fF][eE][tT][cC][hH]_)'
+REDDIT_WRITE_RE='^\s*[rR][eE][dD][dD][iI][tT]_(?![sS][eE][aA][rR][cC][hH]_)(?![rR][eE][tT][rR][iI][eE][vV][eE]_)(?![gG][eE][tT]_)(?![lL][iI][sS][tT]_)(?![fF][eE][tT][cC][hH]_)'
+STACKEX_WRITE_RE='^\s*[sS][tT][aA][cC][kK]_[eE][xX][cC][hH][aA][nN][gG][eE]_(?![sS][eE][aA][rR][cC][hH]_)(?![rR][eE][tT][rR][iI][eE][vV][eE]_)(?![gG][eE][tT]_)(?![lL][iI][sS][tT]_)(?![fF][eE][tT][cC][hH]_)'
+# every tool the connection's catalog may hold; anything else fails the run until reviewed
+KNOWN_TOOLS='["COMPOSIO_SEARCH_TOOLS","COMPOSIO_GET_TOOL_SCHEMAS","COMPOSIO_MULTI_EXECUTE_TOOL","COMPOSIO_MANAGE_CONNECTIONS",
+  "COMPOSIO_WAIT_FOR_CONNECTIONS","COMPOSIO_REMOTE_BASH_TOOL","COMPOSIO_REMOTE_WORKBENCH","COMPOSIO_SEARCH_SKILLS",
+  "COMPOSIO_USE_SKILL","COMPOSIO_MANAGE_SKILL","COMPOSIO_SUBMIT_FEEDBACK"]'
 ONLY_COMPANY=""; DRY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --company-id) ONLY_COMPANY="${2:?--company-id needs a value}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -77,20 +95,22 @@ desired_policies() {
   jq -n --arg conn "$1" --arg reddit "$REDDIT_WRITE_RE" --arg stackex "$STACKEX_WRITE_RE" '
     def multi(name; cond): { name: name,
       description: "Replies on community sites are human-posted (owner, 2026-10-28): no agent writes to Reddit or Stack Exchange through Composio.",
-      policyType: "block", priority: 40, enabled: true,
+      policyType: "block", priority: 0, enabled: true,
       selectors: { toolNames: ["COMPOSIO_MULTI_EXECUTE_TOOL"], connectionId: $conn }, conditions: cond };
     [ ([["Reddit", $reddit], ["Stack Exchange", $stackex]][]) as [$site, $re] | range(0;4) as $i
         | multi("org-instructions: no \($site) writes via Composio (tool \($i + 1))";
             { arguments: { fieldMatches: { ("tools.\($i).tool_slug"): $re } } }) ]
+    + [ multi("org-instructions: Composio multi-execute tools must be a list";
+        { arguments: { fieldMatches: { "tools": "^" } } }) ]
     + [ multi("org-instructions: Composio multi-execute carries at most 4 tools";
         { arguments: { fieldExists: ["tools.4"] } }) ]
     + [ { name: "org-instructions: no Composio sandboxes for agents",
           description: "The remote bash and workbench sandboxes can call Composio tools themselves, past the write rules. Agents fetch public APIs from their own runtime.",
-          policyType: "block", priority: 40, enabled: true,
+          policyType: "block", priority: 0, enabled: true,
           selectors: { toolNames: ["COMPOSIO_REMOTE_BASH_TOOL", "COMPOSIO_REMOTE_WORKBENCH"], connectionId: $conn }, conditions: null },
         { name: "org-instructions: ask first before connecting a Composio app",
           description: "Connecting a new app through Composio needs the board.",
-          policyType: "require_approval", priority: 40, enabled: true,
+          policyType: "require_approval", priority: 0, enabled: true,
           selectors: { toolNames: ["COMPOSIO_MANAGE_CONNECTIONS"], connectionId: $conn }, conditions: null } ]'
 }
 
@@ -128,6 +148,13 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
   existing="$(api GET "/companies/$cid/tools/policies" | jq '(.policies // .)')"
   for conn in $(jq -r '.[].id' <<<"$conns"); do
     log "$cname: Composio connection $conn"
+    unknown="$(api GET "/tool-connections/$conn/catalog" | jq -c --argjson k "$KNOWN_TOOLS" '
+      (.catalog | if type == "array" then . else (.tools // .entries // []) end)
+      | [.[] | select((.status // "active") == "active") | (.name // .toolName) | select(. as $n | $k | index($n) | not)]')"
+    [[ "$unknown" == "[]" ]] || die "$cname: Composio catalog has tools these rules do not cover: $unknown (review them, then add to KNOWN_TOOLS)"
+    allows="$(jq -c --arg conn "$conn" '[.[] | select(.policyType == "allow" and .enabled
+      and ((.selectors.connectionId // null) == null or .selectors.connectionId == $conn)) | .name]' <<<"$existing")"
+    [[ "$allows" == "[]" ]] || die "$cname: enabled allow policies could pre-empt the Composio blocks: $allows"
     desired_policies "$conn" | jq -c '.[]' | while read -r want; do
       name="$(jq -r .name <<<"$want")"
       have="$(jq -c --arg n "$name" --arg conn "$conn" '[.[] | select(.name==$n and .selectors.connectionId==$conn)][0] // empty' <<<"$existing")"
@@ -151,6 +178,10 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
         "$(t '[{"tool_slug":"REDDIT_SEARCH_ACROSS_SUBREDDITS","arguments":{"search_query":"x"}},{"tool_slug":"STACK_EXCHANGE_SEARCH_ADVANCED","arguments":{"q":"x"}},{"tool_slug":"stack_exchange_create_answer","arguments":{"body":"probe"}}]')" off deny_policy_block
       probe "$cid" "$conn" "$agent" "five tools in one call" COMPOSIO_MULTI_EXECUTE_TOOL \
         "$(t '[{"tool_slug":"A"},{"tool_slug":"B"},{"tool_slug":"C"},{"tool_slug":"D"},{"tool_slug":"E"}]')" off deny_policy_block
+      probe "$cid" "$conn" "$agent" "Reddit comment with a leading space" COMPOSIO_MULTI_EXECUTE_TOOL \
+        "$(t '[{"tool_slug":" REDDIT_POST_REDDIT_COMMENT","arguments":{"thing_id":"t3_governanceprobe","text":"probe"}}]')" off deny_policy_block
+      probe "$cid" "$conn" "$agent" "tools as a JSON string" COMPOSIO_MULTI_EXECUTE_TOOL \
+        "$(jq -cn '{session_id:"governance-probe", tools:"[{\"tool_slug\":\"REDDIT_POST_REDDIT_COMMENT\",\"arguments\":{}}]", thought:"governance probe", current_step:"PROBE", sync_response_to_workbench:false}')" off deny_policy_block
       probe "$cid" "$conn" "$agent" "remote bash" COMPOSIO_REMOTE_BASH_TOOL '{"session_id":"governance-probe","command":"true"}' off deny_policy_block
       probe "$cid" "$conn" "$agent" "remote workbench" COMPOSIO_REMOTE_WORKBENCH '{"session_id":"governance-probe","code_to_execute":"pass","thought":"probe","current_step":"PROBE"}' off deny_policy_block
       probe "$cid" "$conn" "$agent" "manage connections" COMPOSIO_MANAGE_CONNECTIONS '{"session_id":"governance-probe","toolkits":["reddit"]}' ask_first

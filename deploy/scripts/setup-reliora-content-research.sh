@@ -8,8 +8,8 @@
 #      in the marketer's memory ($AGENT_HOME/life/resources/srenix/). Skill:
 #      product-capability-notes.
 #   2. "Reliora community scan" — daily 06:00 PT, an hour before the calendar.
-#      Searches Reddit, Hacker News and Stack Exchange through the Composio
-#      connection, matches the problems against the notes, and writes at most one
+#      Searches Reddit and Stack Exchange through the Composio connection and
+#      Hacker News through its public API, matches the problems against the notes, and writes at most one
 #      Ghost draft. Skill: community-pain-blog. The draft's "post created"
 #      webhook wakes "Reliora content calendar" (setup-reliora-content-calendar.sh),
 #      which formats, schedules and asks the board. Creating a post that is not a
@@ -123,9 +123,9 @@ Daily community scan for reliora.ai. Use the **community-pain-blog** skill. Time
   `expiring-certificates-outage` and `crashloopbackoff-six-causes`.
 - Product notes: `$AGENT_HOME/life/resources/srenix/` (kept by "Reliora product research"). Topic ledger:
   `$AGENT_HOME/life/resources/blog-topics/ledger.md`.
-- Sources (Composio connection): Reddit `kubernetes`, `sre`, `devops`; Stack Exchange `serverfault`,
-  `stackoverflow` and `devops` (tag `kubernetes`); Hacker News queries `kubernetes`, `outage`, `postmortem`,
-  `postgres`, `on-call`.
+- Sources: through the Composio connection, Reddit `kubernetes`, `sre`, `devops` and Stack Exchange
+  `serverfault`, `stackoverflow` and `devops` (tag `kubernetes`); Hacker News queries `kubernetes`, `outage`,
+  `postmortem`, `postgres`, `on-call` through its public Algolia API from your own runtime.
 - Queue limit: 6 (see the skill for what counts). At or above it, bank the topic instead of drafting.
 
 At most one new **draft** (`status: "draft"`, sent explicitly). Never publish or schedule: the "Reliora content
@@ -236,7 +236,7 @@ if (( ! DRY )); then
   log "  marketer skills: ${MARKETER_SKILLS[*]} desired"
   # retire the agent's private copies: unselect company/<cid>/<slug> so only the bundled skill loads
   retire="$(jq -c --arg cid "$cid" '[.entries[]? | .key as $k | select($k | startswith("company/" + $cid + "/"))
-            | select(($k | split("/") | last) as $s | $ARGS.positional | index($s)) | select(.desired) | $k]' \
+            | select(($k | split("/") | last | sub("-[0-9]+$"; "")) as $s | $ARGS.positional | index($s)) | select(.desired) | $k]' \
             --args "${RETIRED_SKILLS[@]}" <<<"$skills")"
   if [[ "$retire" != "[]" ]]; then
     jq -n --argjson k "$retire" '{mode: "remove", desiredSkills: $k}' > "$WORK/rs.json"
@@ -244,7 +244,7 @@ if (( ! DRY )); then
     log "  retired private copies: $(jq -r 'join(", ")' <<<"$retire")"
   fi
   jq -e --arg cid "$cid" '[.entries[]? | select(.key | startswith("company/" + $cid + "/")) | select(.desired)
-        | select(.key | test("/(community-pain-blog|source-back-post)$"))] | length == 0' <<<"$skills" >/dev/null \
+        | select(.key | test("/(community-pain-blog|source-back-post)(-[0-9]+)?$"))] | length == 0' <<<"$skills" >/dev/null \
     || die "a private copy of community-pain-blog or source-back-post is still selected"
 fi
 
@@ -286,15 +286,24 @@ ensure_routine() {
   fi
   if [[ "$rid" != DRY-RUN ]]; then
     detail="$(api GET "/routines/$rid")"
-    if ! jq -e --arg c "$cron" --arg z "$TZ_NAME" '[.triggers[]? | select(.kind == "schedule" and .cronExpression == $c and .timezone == $z)] | length == 1' <<<"$detail" >/dev/null; then
+    # exactly one enabled schedule trigger, the wanted one: keep the first match (enabled), disable every other schedule
+    keep="$(jq -r --arg c "$cron" --arg z "$TZ_NAME" '[.triggers[]? | select(.kind == "schedule" and .cronExpression == $c and .timezone == $z)]
+              | (map(select(.enabled)) + map(select(.enabled | not)))[0].id // ""' <<<"$detail")"
+    if [[ -z "$keep" ]]; then
       jq -n --arg c "$cron" --arg z "$TZ_NAME" --arg l "$label" '{kind: "schedule", label: $l, cronExpression: $c, timezone: $z, enabled: true}' > "$WORK/t.json"
       write POST "/routines/$rid/triggers" "$WORK/t.json" >/dev/null; log "  $title: trigger created ($label)"
+    elif ! jq -e --arg k "$keep" '.triggers[] | select(.id == $k) | .enabled' <<<"$detail" >/dev/null; then
+      echo '{"enabled": true}' > "$WORK/t.json"; write PATCH "/routine-triggers/$keep" "$WORK/t.json" >/dev/null; log "  $title: trigger re-enabled ($label)"
     fi
+    for extra in $(jq -r --arg k "$keep" '.triggers[]? | select(.kind == "schedule" and .enabled and .id != $k) | .id' <<<"$detail"); do
+      echo '{"enabled": false}' > "$WORK/t.json"; write PATCH "/routine-triggers/$extra" "$WORK/t.json" >/dev/null; log "  $title: extra schedule trigger $extra disabled"
+    done
     if (( ! DRY )); then
       detail="$(api GET "/routines/$rid")"
       jq -e --arg t "$title" --arg a "$marketer" --arg p "$pid" --arg c "$cron" --arg z "$TZ_NAME" --arg d "$desc" '
         .title == $t and .assigneeAgentId == $a and .projectId == $p and .status == "active" and .priority == "medium"
         and .concurrencyPolicy == "skip_if_active" and .catchUpPolicy == "skip_missed" and .description == $d
+        and ([.triggers[] | select(.kind == "schedule" and .enabled)] | length == 1)
         and ([.triggers[] | select(.kind == "schedule" and .enabled and .cronExpression == $c and .timezone == $z)] | length == 1)' \
         <<<"$detail" >/dev/null || die "$title: read-back does not match: $(jq -c '{title, status, priority, assigneeAgentId, projectId, concurrencyPolicy, catchUpPolicy, triggers: [.triggers[] | {cronExpression, timezone, enabled}]}' <<<"$detail")"
       log "  $title: verified; next run $(jq -r '[.triggers[] | select(.kind == "schedule")][0].nextRunAt' <<<"$detail")"
