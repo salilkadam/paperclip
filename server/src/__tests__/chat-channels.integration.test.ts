@@ -9350,7 +9350,9 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       });
       expect((await service.get(endpoint.id)).botExternalId).toBe(botUserId);
       const thread = makeThread({ channelId: "C-RACE", id: "slack:C-RACE:7500.1", isDM: false });
-      const raw = { type: "message", channel: "C-RACE", ts: "7500.1", user: "U-EXTERNAL", text: `<@${botUserId}|maya> can this be done?` };
+      // Slack may label the token with the display name, which the SDK reads as
+      // "@maya-bot" and does not match against the bot username.
+      const raw = { type: "message", channel: "C-RACE", ts: "7500.1", user: "U-EXTERNAL", text: `<@${botUserId}|maya-bot> can this be done?` };
       // Plain copy first, unflagged, exactly as the SDK builds it.
       await deliverMessage({ callbacks, endpointId: endpoint.id, thread: thread.thread,
         message: makeMessage({ id: "7500.1", text: "@maya can this be done?", raw }), trigger: plainTrigger });
@@ -9368,6 +9370,10 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       const [stillFiltered] = await db.select().from(chatDeliveries).where(and(
         eq(chatDeliveries.endpointId, endpoint.id), eq(chatDeliveries.state, "filtered")));
       expect(stillFiltered.redactedError).toBe("Message did not @mention the bot");
+      // A user id that only starts with the bot's id is someone else.
+      await deliverMessage({ callbacks, endpointId: endpoint.id, thread: thread.thread,
+        message: makeMessage({ id: "7500.3", text: "@lookalike", raw: { ...raw, ts: "7500.3", text: `<@${botUserId}9> look` } }), trigger: plainTrigger });
+      expect(wakeup).toHaveBeenCalledTimes(1);
     },
   );
 
