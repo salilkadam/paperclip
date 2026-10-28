@@ -42,10 +42,13 @@ Composio and Ghost tools come through the Paperclip tool gateway (see the
   (`"session": {"generate_id": true}`); reuse the returned `session_id` in every
   later Composio call. It also reports which toolkits are connected.
 - `COMPOSIO_MULTI_EXECUTE_TOOL` — runs the search tools below.
-- `COMPOSIO_REMOTE_BASH_TOOL` — runs `curl` in Composio's sandbox (Hacker News).
+
+Composio's sandboxes (`COMPOSIO_REMOTE_BASH_TOOL`, `COMPOSIO_REMOTE_WORKBENCH`) are
+blocked at the gateway, and so is any Reddit or Stack Exchange write: this skill
+only reads. Fetch Hacker News from your own runtime with `curl` (below).
 
 Use **only** these toolkits: `reddit` and `stack_exchange` (our own connected
-accounts) and the public Hacker News API through the sandbox. Do **not** use
+accounts) and the public Hacker News API from your own runtime. Do **not** use
 toolkits Composio offers through an "instant account" (`scrapecreators`,
 `serpapi`, `tik_hub`, `just_one_api` and similar): each call is billed. Never call
 `COMPOSIO_MANAGE_CONNECTIONS`; if a toolkit you need is not connected, say so in
@@ -75,7 +78,7 @@ Keep Reddit queries simple: one `subreddit:` plus at most one keyword. Boolean
 shapes are Composio's and may change: if a call fails, re-read the schema with
 `COMPOSIO_GET_TOOL_SCHEMAS` before giving up.
 
-Hacker News (stories and Ask HN, last 7 days), through `COMPOSIO_REMOTE_BASH_TOOL`:
+Hacker News (stories and Ask HN, last 7 days), with `curl` from your own runtime:
 
 ```sh
 FROM=$(date -d '7 days ago' +%s)
@@ -166,7 +169,9 @@ not finished.
 
 ## 5. Record
 
-- Ledger line: `YYYY-MM-DD | drafted|banked | <title or topic> | <source links> | <ghost slug>`.
+- Ledger line: `YYYY-MM-DD | drafted|banked | <title or topic> | <source URL> | <source type: reddit|hn|stackexchange|article> | <named author, only for a real article or postmortem, never an anonymous poster> | <ghost slug>`.
+  The **source-back-post** skill uses the source URL and type to find the thread
+  once the blog is live.
 - In the task: the shortlist (one line each, with links and engagement), why the
   chosen one won, the matched capability (its `items.yaml` id), the sources you
   verified, and the draft's title and slug. Write for the board: titles and
