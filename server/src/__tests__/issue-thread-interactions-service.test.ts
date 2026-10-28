@@ -2155,6 +2155,113 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     }
   });
 
+  it("never sweeps governed-action cards (tool approvals, secret proposals): each is a distinct decision, not a draft of the same ask", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Tool approvals survive the startup sweep");
+    const agentId = randomUUID();
+    await db.insert(agents).values([activeCodexAgentRow(agentId, companyId, "Marketer", "engineer")]);
+    // three different gated actions from one agent on one task (e.g. three LinkedIn posts to schedule),
+    // plus two plain confirmation drafts from the same agent
+    const toolIds = [randomUUID(), randomUUID(), randomUUID()];
+    const draftIds = [randomUUID(), randomUUID()];
+    await db.insert(issueThreadInteractions).values([
+      ...toolIds.map((id, index) => ({
+        id,
+        companyId,
+        issueId,
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        createdByAgentId: agentId,
+        payload: {
+          version: 1 as const,
+          prompt: `Approve: Schedule social post ${index + 1}?`,
+          toolAction: {
+            version: 1 as const, actionRequestId: randomUUID(), invocationId: randomUUID(),
+            toolName: "mcp.x:update-post-tool", toolDisplayName: "Update post", connectionId: null, applicationId: null,
+            appDisplayName: null, risk: "write" as const, previewMarkdown: `Schedule post ${index + 1}`,
+            argumentsSummaryJson: "{}", argumentsHash: `hash-${index}`, expiresAt: "2026-07-03T12:00:00.000Z",
+          },
+        },
+        createdAt: new Date(`2026-07-02T12:0${index}:00.000Z`),
+        updatedAt: new Date(`2026-07-02T12:0${index}:00.000Z`),
+      })),
+      ...draftIds.map((id, index) => ({
+        id,
+        companyId,
+        issueId,
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        createdByAgentId: agentId,
+        payload: { version: 1 as const, prompt: `Plan draft ${index + 1}` },
+        createdAt: new Date(`2026-07-02T13:0${index}:00.000Z`),
+        updatedAt: new Date(`2026-07-02T13:0${index}:00.000Z`),
+      })),
+    ]);
+
+    // two secret-binding proposals (also governed actions) and one tool card NEWER than both drafts,
+    // so a skipped governed card is never taken as the group's "newest"
+    const secretIds = [randomUUID(), randomUUID()];
+    const lateToolId = randomUUID();
+    await db.insert(issueThreadInteractions).values([
+      ...secretIds.map((id, index) => ({
+        id,
+        companyId,
+        issueId,
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        createdByAgentId: agentId,
+        payload: {
+          version: 1 as const,
+          prompt: `Approve secret binding ${index + 1}?`,
+          secretProposal: {
+            version: 1 as const, proposalId: randomUUID(), sourceSecretLabel: `Key ${index + 1}`, configPath: "env.KEY",
+            targetAgentId: agentId, targetAgentName: "Marketer", justification: "Needed for the routine",
+            expiresAt: "2026-07-03T12:00:00.000Z",
+          },
+        },
+        createdAt: new Date(`2026-07-02T11:0${index}:00.000Z`),
+        updatedAt: new Date(`2026-07-02T11:0${index}:00.000Z`),
+      })),
+      {
+        id: lateToolId,
+        companyId,
+        issueId,
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        createdByAgentId: agentId,
+        payload: {
+          version: 1 as const,
+          prompt: "Approve: Publish social post now?",
+          toolAction: {
+            version: 1 as const, actionRequestId: randomUUID(), invocationId: randomUUID(),
+            toolName: "mcp.x:publish-post-tool", toolDisplayName: "Publish post", connectionId: null, applicationId: null,
+            appDisplayName: null, risk: "destructive" as const, previewMarkdown: "Publish now",
+            argumentsSummaryJson: "{}", argumentsHash: "hash-late", expiresAt: "2026-07-03T12:00:00.000Z",
+          },
+        },
+        createdAt: new Date("2026-07-02T14:00:00.000Z"),
+        updatedAt: new Date("2026-07-02T14:00:00.000Z"),
+      },
+    ]);
+
+    await expect(interactionsSvc.sweepSupersededPendingRequestConfirmations())
+      .resolves.toEqual({ expired: 1 });
+    const interactions = await interactionsSvc.listForIssue(issueId);
+    for (const id of [...toolIds, ...secretIds, lateToolId]) {
+      expect(interactions.find((interaction) => interaction.id === id)?.status).toBe("pending");
+    }
+    expect(interactions.find((interaction) => interaction.id === draftIds[0])).toMatchObject({
+      status: "expired",
+      result: { outcome: "superseded_by_newer_request", supersededByInteractionId: draftIds[1] },
+    });
+    expect(interactions.find((interaction) => interaction.id === draftIds[1])?.status).toBe("pending");
+    await expect(interactionsSvc.sweepSupersededPendingRequestConfirmations())
+      .resolves.toEqual({ expired: 0 });
+  });
+
   it("sweeps historical confirmation pile-ups idempotently per issue, kind, and agent", async () => {
     const { companyId, issueId } = await seedConfirmationIssue("Historical confirmation sweep");
     const firstAgentId = randomUUID();
