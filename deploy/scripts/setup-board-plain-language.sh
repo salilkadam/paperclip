@@ -68,7 +68,8 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
     fi
     if resolved <<<"$state"; then log "$cname / $aname: ok"; done_n=$((done_n + 1)); continue; fi
     if (( DRY )); then log "$cname / $aname: DRY-RUN would add $SKILL"; continue; fi
-    api POST "/agents/$aid/skills/sync" "$WORK/add.json" | resolved \
+    synced="$(api POST "/agents/$aid/skills/sync" "$WORK/add.json")"
+    resolved <<<"$synced" \
       || die "$cname / $aname: $SKILL is not desired and resolved after sync (is the server image new enough to bundle it?)"
     log "$cname / $aname: added"; done_n=$((done_n + 1))
   done < <(jq -c '.[]' <<<"$agents")

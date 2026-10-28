@@ -18,6 +18,7 @@ import {
   connectionGrants,
   createDb,
   heartbeatRuns,
+  approvals,
   issueThreadInteractions,
   issues,
   principalPermissionGrants,
@@ -723,6 +724,83 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
       await remote.close();
     }
   });
+
+  it("keeps the Composio community-write guard on discovery, calls, health probes and pre-guard approvals", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const remote = await startFakeRemoteMcpServer(({ body }) => ({
+      body: { jsonrpc: "2.0", id: body?.id, result: { content: [{ type: "text", text: JSON.stringify({ successful: true }) }] } },
+    }));
+    const toolCalls = () => remote.requests.filter((r) => r.body?.method === "tools/call")
+      .map((r) => (asTestRecord(asTestRecord(r.body?.params).arguments).tools as Array<{ tool_slug: string }>).map((i) => i.tool_slug));
+    const multi = (...slugs: string[]) => ({ tools: slugs.map((tool_slug) => ({ tool_slug, arguments: {} })) });
+    try {
+      const { application, connection, catalogEntry } = await createRemoteMcpTool(db, company.id, {
+        url: remote.url, applicationKey: "composio-guard-app", toolName: "COMPOSIO_MULTI_EXECUTE_TOOL", riskLevel: "destructive",
+      });
+      await db.update(toolConnections).set({ config: { url: remote.url, sourceTemplateKey: "composio" } })
+        .where(eq(toolConnections.id, connection.id));
+      const toolName = expectedConnectedToolName({
+        applicationKey: application.applicationKey, connectionId: connection.id, toolName: catalogEntry.toolName,
+      });
+      await allowToolsForAgent(db, company.id, agent.id, [toolName]);
+      const gateway = createTestToolGatewayService(db);
+      const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+
+      // discovery decides without arguments: the tool must stay visible
+      expect((await gateway.listToolsForSession(session.token)).map((tool) => tool.name)).toContain(toolName);
+      await gateway.executeTool({ sessionToken: session.token, tool: toolName, parameters: multi(" reddit_post_reddit_comment") })
+        .then(() => { throw new Error("Expected the Reddit write to be refused"); },
+          (error) => expectGatewayError(error, 403, "deny_policy_block"));
+      await gateway.executeTool({ sessionToken: session.token, tool: toolName, parameters: multi("REDDIT_SEARCH_ACROSS_SUBREDDITS") });
+
+      // a board health probe skips the policy engine, not the guard
+      await expect(gateway.probeConnectionTool({ companyId: company.id, connectionId: connection.id,
+        toolName: "COMPOSIO_MULTI_EXECUTE_TOOL", parameters: multi("STACK_EXCHANGE_CREATE_ANSWER") }))
+        .resolves.toMatchObject({ ok: false, reasonCode: "deny_policy_block" });
+
+      // an approval granted for a read, re-signed to a write (as an approval made before the guard would be)
+      await db.insert(toolPolicies).values({ companyId: company.id, name: "Review Composio calls",
+        policyType: "require_approval", selectors: { connectionId: connection.id }, priority: 10 });
+      await gateway.executeTool({ sessionToken: session.token, tool: toolName, parameters: multi("REDDIT_RETRIEVE_REDDIT_POST") })
+        .then(() => { throw new Error("Expected approval to be required"); },
+          (error) => expectGatewayError(error, 409, "approval_required"));
+      const [actionRequest] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, company.id));
+      const signedPayload = readSignedToolArgumentsPayload({ signedArguments: actionRequest.signedArguments,
+        invocationId: actionRequest.invocationId, toolName, signingSecret: testToolActionSigningSecret });
+      const write = multi("REDDIT_POST_REDDIT_COMMENT");
+      const writeSummary = summarizeToolValue(write);
+      await db.update(toolActionRequests).set({
+        signedArguments: signToolArguments({ invocationId: actionRequest.invocationId, toolName,
+          canonicalArguments: canonicalToolArguments(write), approvalSnapshot: signedPayload?.approvalSnapshot,
+          executionOnApprove: true, signingSecret: testToolActionSigningSecret }),
+        canonicalArgumentsHash: writeSummary.sha256, canonicalArgumentsSummary: writeSummary,
+        status: "approved", resolvedByAgentId: agent.id, resolvedAt: new Date(), updatedAt: new Date(),
+      }).where(eq(toolActionRequests.id, actionRequest.id));
+      await db.update(issueThreadInteractions).set({ status: "accepted", resolvedByAgentId: agent.id, resolvedAt: new Date() })
+        .where(eq(issueThreadInteractions.id, actionRequest.interactionId!));
+      await db.update(toolInvocations).set({ approvalState: "approved", updatedAt: new Date() })
+        .where(eq(toolInvocations.id, actionRequest.invocationId));
+      if (actionRequest.approvalId) {
+        await db.update(approvals).set({ status: "approved", updatedAt: new Date() }).where(eq(approvals.id, actionRequest.approvalId));
+      }
+      await gateway.executeTool({ sessionToken: session.token, tool: toolName, parameters: write,
+        approvedActionRequestId: actionRequest.id })
+        .then(() => { throw new Error("Expected the approved Reddit write to be refused"); },
+          (error) => expectGatewayError(error, 403, "deny_policy_block"));
+      const [after] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.id, actionRequest.id));
+      expect(after.status).toBe("approved");
+
+      // only the one read ever reached upstream
+      expect(toolCalls()).toEqual([["REDDIT_SEARCH_ACROSS_SUBREDDITS"]]);
+    } finally {
+      await remote.close();
+      // the shared cleanup does not know formal approvals
+      await db.delete(toolActionRequests).where(eq(toolActionRequests.companyId, company.id));
+      await db.delete(approvals).where(eq(approvals.companyId, company.id));
+    }
+  }, 60_000);
 
   it("exposes a named gateway with scoped bearer-token auth and revocation", async () => {
     const company = await createCompany(db);

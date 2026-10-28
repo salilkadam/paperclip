@@ -203,7 +203,7 @@ Times are America/Los_Angeles.
 5. If you requested anything, post one note per the **board-approval-notify** skill (#reliora-board) with the
    task link, written by the **board-plain-language** skill: which blog the repost is about (its
    title), the first line of your blurb in quotes, and the time ("Personal repost ready: Approve on this task").
-   Never put a raw post or card id in front of the board. Set the task to `in_review` and end the run.
+   Never put a raw post or card id in the main text (only on a last "For the record:" line). Set the task to `in_review` and end the run.
    Nothing to do: comment "No new company post to repost" and mark the task done.
 6. After the board's decision: check with `get-post-tool` (status `scheduled`), record it, mark the task done.
    Rejected: put the post back to `draft`, record the reason, mark the task done.

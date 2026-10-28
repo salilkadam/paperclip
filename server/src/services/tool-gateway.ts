@@ -1,5 +1,6 @@
 import type { runPromptInjectionProvider } from "./prompt-injection-provider.js";
 import { promptInjectionPreventionService } from "./prompt-injection-prevention.js";
+import { composioGuardRefusal, isComposioConnection } from "./connectors/composio-guard.js";
 import { adapterExecutionControls } from "./adapter-execution-control.js";
 import type { BudgetServiceHooks } from "./budgets.js";
 import type { PromptInjectionDetectorMetadata } from "@paperclipai/shared";
@@ -5125,6 +5126,17 @@ export function createToolGatewayService(
     return { entry, connection };
   }
 
+  // Owner's decision (2026-10-28), for the dispatch paths that do not take a fresh policy decision:
+  // approved action requests and board health probes. Every other path meets the guard in the policy decision.
+  async function assertComposioGuard(companyId: string, tool: ToolGatewayDescriptor, parameters: unknown) {
+    if (!tool.connectionId) return;
+    const [connection] = await db.select({ config: toolConnections.config }).from(toolConnections)
+      .where(and(eq(toolConnections.id, tool.connectionId), eq(toolConnections.companyId, companyId)));
+    if (!connection || !isComposioConnection(connection)) return;
+    const refusal = composioGuardRefusal([tool.name, tool.upstreamToolName], parameters);
+    if (refusal) throw new ToolGatewayHttpError(403, refusal.explanation, "deny_policy_block");
+  }
+
   async function governedToolArguments(
     session: ToolGatewaySession,
     tool: ToolGatewayDescriptor,
@@ -9851,6 +9863,8 @@ export function createToolGatewayService(
           expiresAt: new Date(Date.now() + DEFAULT_SESSION_TTL_MS),
         };
         const parameters = await governedToolArguments(session, tool, input.parameters ?? {});
+        // probes skip the policy engine, not the Composio community-write guard
+        await assertComposioGuard(input.companyId, tool, parameters);
         const execution = await executeRemoteHttpTool(
           session,
           tool,
@@ -10947,6 +10961,8 @@ export function createToolGatewayService(
             toolName: storedInvocation.toolName,
           });
         }
+        // An approval does not lift the Composio community-write guard (one granted before it existed included).
+        await assertComposioGuard(session.companyId, tool, storedParameters);
         const claimedAt = new Date();
         const [claimed] = await db
           .update(toolActionRequests)

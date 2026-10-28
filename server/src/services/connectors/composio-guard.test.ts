@@ -13,6 +13,8 @@ describe("composio guard", () => {
     expect(isComposioConnection({ config: { url: "https://composio.dev.evil.example/mcp" } })).toBe(false);
     expect(isComposioConnection({ config: { url: "https://mcp.baisoln.com/ghost/mcp" } })).toBe(false);
     expect(isComposioConnection({ config: null })).toBe(false);
+    expect(isComposioConnection({ config: { endpoint: "https://connect.composio.dev/mcp" } })).toBe(true);
+    expect(isComposioConnection({ config: { remoteUrl: "https://apollo-x.composio.dev/mcp" } })).toBe(true);
   });
 
   it("refuses Reddit, Hacker News and Stack Exchange writes in any item, case or padding", () => {
@@ -26,9 +28,15 @@ describe("composio guard", () => {
     expect(code(["REDDIT_POST_REDDIT_COMMENT"], {})).toBe("composio_community_write");
   });
 
+  it("lets discovery see multi-execute: a call without tools executes nothing", () => {
+    expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], {})).toBeNull();
+    expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], undefined)).toBeNull();
+  });
+
   it("leaves reads and other apps alone", () => {
     for (const s of ["REDDIT_SEARCH_ACROSS_SUBREDDITS", "REDDIT_RETRIEVE_POST_COMMENTS", "REDDIT_RETRIEVE_REDDIT_POST",
-      "STACK_EXCHANGE_SEARCH_ADVANCED", "STACK_EXCHANGE_GET_QUESTION_ANSWERS", "HACKERNEWS_GET_ITEM", "GITHUB_CREATE_AN_ISSUE"]) {
+      "STACK_EXCHANGE_SEARCH_ADVANCED", "STACK_EXCHANGE_GET_QUESTION_ANSWERS", "HACKERNEWS_GET_ITEM", "GITHUB_CREATE_AN_ISSUE",
+      "REDDIT_EXPAND_MORE_COMMENTS", "STACK_EXCHANGE_FIND_SIMILAR_QUESTIONS"]) {
       expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], multi({ ...slug(s), account: "work" }))).toBeNull();
     }
     for (const t of ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_USE_SKILL"]) {
@@ -41,7 +49,10 @@ describe("composio guard", () => {
     const unreadable = "composio_unreadable_call";
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], { tools: JSON.stringify([slug("REDDIT_POST_REDDIT_COMMENT")]) })).toBe(unreadable);
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], { tools: { 0: slug("REDDIT_POST_REDDIT_COMMENT") } })).toBe(unreadable);
-    expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], {})).toBe(unreadable);
+    expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], { tools: null })).toBe(unreadable);
+    for (const meta of ["COMPOSIO_REMOTE_BASH_TOOL", "composio_multi_execute_tool", "COMPOSIO_SEARCH_TOOLS"]) {
+      expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], multi(slug(meta)))).toBe(unreadable);
+    }
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], multi("REDDIT_POST_REDDIT_COMMENT"))).toBe(unreadable);
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], multi({ tool: "REDDIT_POST_REDDIT_COMMENT", arguments: {} }))).toBe(unreadable);
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], multi({ tool_slug: ["REDDIT_POST_REDDIT_COMMENT"], arguments: {} }))).toBe(unreadable);

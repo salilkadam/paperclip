@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { composioGuardRefusal, isComposioConnection } from "./connectors/composio-guard.js";
+import { composioGuardRefusal, isComposioConnection, type ComposioGuardRefusal } from "./connectors/composio-guard.js";
 import { boundRunIssueIdSql } from "./run-task-binding.js";
 import { and, asc, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -955,7 +955,7 @@ export function toolAccessPolicyService(db: Db) {
   }
 
   async function loadContext(input: ToolAccessDecisionInput, cache?: ToolAccessDecisionCache): Promise<
-    | { ok: true; ctx: ToolAccessContext; redaction: RedactionResult }
+    | { ok: true; ctx: ToolAccessContext; redaction: RedactionResult; guardRefusal: ComposioGuardRefusal | null }
     | { ok: false; decision: ToolAccessDecision; redaction: RedactionResult }
   > {
     const redaction = summarizeAndRedact(input.request.arguments ?? {});
@@ -1046,6 +1046,7 @@ export function toolAccessPolicyService(db: Db) {
     let upstreamToolName = typeof input.request.upstreamToolName === "string" ? input.request.upstreamToolName : null;
     let riskLevel = asToolRiskLevel(input.request.riskLevel);
     let connectionTransport: string | null = null;
+    let guardRefusal: ComposioGuardRefusal | null = null;
     let applicationType: string | null = null;
 
     if (catalogEntryId) {
@@ -1100,15 +1101,8 @@ export function toolAccessPolicyService(db: Db) {
       }
       applicationId = connection.applicationId;
       connectionTransport = connection.transport;
-      // Owner's decision, enforced before any company policy, grant or trust rule (connectors/composio-guard.ts).
       if (isComposioConnection(connection)) {
-        const refusal = composioGuardRefusal([input.request.toolName, upstreamToolName], input.request.arguments ?? {});
-        if (refusal) {
-          return { ok: false, redaction, decision: decision("deny", "deny_policy_block", refusal.explanation, [], [], {
-            redactionPlan: redaction.redactionPlan,
-            policyExplanation: { guard: "composio", guardCode: refusal.code },
-          }) };
-        }
+        guardRefusal = composioGuardRefusal([input.request.toolName, upstreamToolName], input.request.arguments ?? {});
       }
     }
     if (applicationId) {
@@ -1145,6 +1139,7 @@ export function toolAccessPolicyService(db: Db) {
     return {
       ok: true,
       redaction,
+      guardRefusal,
       ctx: {
         companyId: input.companyId,
         actorType: input.actor.actorType,
@@ -1406,6 +1401,14 @@ export function toolAccessPolicyService(db: Db) {
     const loaded = await loadContext(input, cache);
     if (!loaded.ok) return loaded.decision;
     const { ctx, redaction } = loaded;
+    // Owner's decision (2026-10-28), before any company policy, grant or trust rule (connectors/composio-guard.ts).
+    // A deny here, not in loadContext, so the refused call is still recorded and audited like a policy block.
+    if (loaded.guardRefusal) {
+      return decision("deny", "deny_policy_block", loaded.guardRefusal.explanation, [], [], {
+        redactionPlan: redaction.redactionPlan,
+        policyExplanation: { guard: "composio", guardCode: loaded.guardRefusal.code },
+      });
+    }
     // A final handoff rechecks current permissions for work already admitted by
     // the gateway. Its own last consumed slot cannot reject that same work.
     // Only durable consumption of an unchanged rule retains that slot; new or

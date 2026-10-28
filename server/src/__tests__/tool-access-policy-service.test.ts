@@ -744,6 +744,8 @@ describeEmbeddedPostgres("tool access policy service", () => {
       .resolves.toMatchObject({ decision: "deny", policyExplanation: { guardCode: "composio_sandbox" } });
     await expect(call("COMPOSIO_SOMETHING_NEW", {}))
       .resolves.toMatchObject({ decision: "deny", policyExplanation: { guardCode: "composio_unreviewed_tool" } });
+    // discovery decides without arguments; the tool must stay visible
+    await expect(call("COMPOSIO_MULTI_EXECUTE_TOOL", {})).resolves.toMatchObject({ decision: "allow", reasonCode: "allow_policy" });
     // reads still reach the company's own rules
     await expect(call("COMPOSIO_MULTI_EXECUTE_TOOL", multi("REDDIT_SEARCH_ACROSS_SUBREDDITS", "STACK_EXCHANGE_GET_QUESTION_ANSWERS")))
       .resolves.toMatchObject({ decision: "allow", reasonCode: "allow_policy", matchedPolicyIds: [allowAll.id] });
