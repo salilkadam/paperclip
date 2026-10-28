@@ -8,6 +8,37 @@ import { RAILWAY_MCP_URL } from "../services/railway.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 
 describe("reviewed connector risk dispatch", () => {
+  it("labels our Ghost and TryPost MCP tools by review, not by the verb heuristic", () => {
+    // the heuristic: "post" anywhere reads as a write, and "upload" is not a write verb
+    expect(classifyRisk({ name: "gh_get_post" })).toBe("write");
+    expect(classifyRisk({ name: "gh_upload_image" })).toBe("read");
+    const ghost = connectorToolPolicy(null, { transport: "mcp_remote", config: { url: "https://mcp.baisoln.com/ghost/mcp" } });
+    expect(ghost.sourceTemplateKey).toBe("baisoln-ghost-mcp");
+    for (const [name, risk] of [
+      ["gh_get_post", "read"], ["gh_list_posts", "read"], ["gh_list_tags", "read"], ["gh_site_info", "read"], ["gh_list_sites", "read"],
+      ["gh_upload_image", "write"], ["gh_create_post", "write"], ["gh_update_post", "write"], ["gh_create_tag", "write"],
+      ["gh_publish_post", "write"], ["gh_unpublish_post", "destructive"], ["gh_delete_post", "destructive"],
+    ] as const) expect(classifyRisk({ name }, ghost.sourceTemplateKey), name).toBe(risk);
+    // a provider's destructive hint still wins; an unknown tool falls back to the heuristic
+    expect(classifyRisk({ name: "gh_get_post", annotations: { destructiveHint: true } }, ghost.sourceTemplateKey)).toBe("destructive");
+    expect(classifyRisk({ name: "gh_new_tool_delete" }, ghost.sourceTemplateKey)).toBe("destructive");
+    expect(connectorToolPolicy(null, { transport: "mcp_remote", config: { url: "https://mcp.baisoln.com/ghost/mcp/" } }).sourceTemplateKey).toBe("baisoln-ghost-mcp");
+
+    const tryPost = connectorToolPolicy(null, { transport: "mcp_remote", config: { url: "https://socialx.baisoln.com/mcp/trypost" } });
+    expect(tryPost.sourceTemplateKey).toBe("baisoln-trypost-mcp");
+    for (const [name, risk] of [
+      ["get-post-tool", "read"], ["get-post-metrics-tool", "read"], ["list-posts-tool", "read"], ["preview-post-tool", "read"],
+      ["create-post-tool", "write"], ["update-post-tool", "write"], ["publish-post-tool", "write"], ["delete-post-tool", "destructive"],
+      ["attach-media-from-url-tool", "read"], // unchanged heuristic outcome, not reviewed here
+    ] as const) expect(classifyRisk({ name }, tryPost.sourceTemplateKey), name).toBe(risk);
+    expect(classifyRisk({ name: "get-post-tool", annotations: { readOnlyHint: false } }, tryPost.sourceTemplateKey)).toBe("write");
+
+    // look-alike endpoints are not reviewed
+    for (const url of ["https://mcp.baisoln.com/ghost/mcp-evil", "https://evil.example/ghost/mcp", "https://mcp.baisoln.com.evil.example/ghost/mcp", "not a url"]) {
+      expect(connectorToolPolicy(null, { transport: "mcp_remote", config: { url } }).sourceTemplateKey, url).toBeNull();
+    }
+  });
+
   it("keeps destructive provider hints above every reviewed classifier", () => {
     for (const [source, name] of [
       ["railway", "list-projects"], ["daytona", "daytona_api_list_sandboxes"],
