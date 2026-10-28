@@ -9337,6 +9337,40 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await expect(resolveSlackTaskAuthority(db, binding)).resolves.toMatchObject({ slackUserId: "UBOARD" });
   });
 
+  it.each(["unaddressed_message", "subscribed_message"] as const)(
+    "admits a required-mention Slack channel mention when the plain message copy arrives before app_mention (%s)",
+    async (plainTrigger) => {
+      // Production 2026-10-28: Slack sends `message` and `app_mention` for one
+      // mention. The SDK flags only `app_mention`; when the plain copy arrived
+      // first it was filtered and the app_mention was dropped as its duplicate.
+      const fixture = await seedCompany();
+      const botUserId = plainTrigger === "subscribed_message" ? "U0BOTMAYA2" : "U0BOTMAYA1";
+      const { callbacks, endpoint, service, wakeup } = await configuredSlackEndpoint(fixture, {
+        requireAtMention: true, fetch: fakeSlackFetch(botUserId) as typeof globalThis.fetch,
+      });
+      expect((await service.get(endpoint.id)).botExternalId).toBe(botUserId);
+      const thread = makeThread({ channelId: "C-RACE", id: "slack:C-RACE:7500.1", isDM: false });
+      const raw = { type: "message", channel: "C-RACE", ts: "7500.1", user: "U-EXTERNAL", text: `<@${botUserId}|maya> can this be done?` };
+      // Plain copy first, unflagged, exactly as the SDK builds it.
+      await deliverMessage({ callbacks, endpointId: endpoint.id, thread: thread.thread,
+        message: makeMessage({ id: "7500.1", text: "@maya can this be done?", raw }), trigger: plainTrigger });
+      // The app_mention copy second.
+      await deliverMessage({ callbacks, endpointId: endpoint.id, thread: thread.thread,
+        message: makeMessage({ id: "7500.1", text: "@maya can this be done?", raw: { ...raw, type: "app_mention" }, mentioned: true }), trigger: "mention" });
+      expect(wakeup).toHaveBeenCalledTimes(1);
+      const filtered = await db.select().from(chatDeliveries).where(and(
+        eq(chatDeliveries.endpointId, endpoint.id), eq(chatDeliveries.state, "filtered")));
+      expect(filtered).toHaveLength(0);
+      // A plain message that mentions someone else stays filtered.
+      await deliverMessage({ callbacks, endpointId: endpoint.id, thread: thread.thread,
+        message: makeMessage({ id: "7500.2", text: "@someone else", raw: { ...raw, ts: "7500.2", text: "<@UOTHERUSER> look" } }), trigger: plainTrigger });
+      expect(wakeup).toHaveBeenCalledTimes(1);
+      const [stillFiltered] = await db.select().from(chatDeliveries).where(and(
+        eq(chatDeliveries.endpointId, endpoint.id), eq(chatDeliveries.state, "filtered")));
+      expect(stillFiltered.redactedError).toBe("Message did not @mention the bot");
+    },
+  );
+
   it.each([false, true])("applies Slack mention settings to channel replies while exempting DMs (DM=%s)", async (isDM) => {
     const fixture = await seedCompany();
     const { callbacks, endpoint, service, wakeup } = await configuredSlackEndpoint(fixture);

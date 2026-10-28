@@ -11,7 +11,7 @@ import { githubInboundTaskTitle, githubInboundCommentText, githubAssignedAgentRe
 import { applyChatTaskReviewContainment } from "./chat-channels/inbound/task-trust.js";
 import { photonConversationBindingIsComplete, photonControlTargetsConversation, photonReplyMetadata, recordPhotonInboundActivity } from "./chat-channels/imessage-photon/messages.js";
 import { deferTeamsSetupReply } from "./chat-channels/microsoft-teams/setup-replies.js";
-import { slackOrphanFollowUp, stripSlackTitleMentions, slackMessageMeetsMentionRequirement } from "./chat-channels/slack/messages.js";
+import { slackOrphanFollowUp, stripSlackTitleMentions, slackMessageMeetsMentionRequirement, slackRawTextMentionsUser } from "./chat-channels/slack/messages.js";
 import { createChatPublicationResolution } from "./chat-channels/publications/resolution.js";
 import { createChatPublicationRequests } from "./chat-channels/publications/requests.js";
 import { createTeamsBoardSendPreparation } from "./chat-channels/microsoft-teams/board-send-preparation.js";
@@ -1407,6 +1407,15 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       message.author.isSystem
     )
       return;
+    // Either Slack copy of a channel mention may arrive first; both must read
+    // as a mention or the plain copy is filtered and the app_mention dropped
+    // as its duplicate (see slackRawTextMentionsUser).
+    if (
+      endpoint.provider === "slack" &&
+      message.isMention !== true &&
+      slackRawTextMentionsUser(message.raw, endpoint.botExternalId)
+    )
+      message.isMention = true;
     // One provider message can match both a mention handler and the catch-all
     // new-message handler. The trigger is policy metadata, not provider event
     // identity, so it must not defeat durable deduplication.
