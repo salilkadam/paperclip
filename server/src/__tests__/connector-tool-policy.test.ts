@@ -8,7 +8,7 @@ import { RAILWAY_MCP_URL } from "../services/railway.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 
 describe("reviewed connector risk dispatch", () => {
-  it("labels our Ghost and TryPost MCP tools by review, not by the verb heuristic", () => {
+  it("labels every tool of our Ghost and TryPost MCP servers by review, not by the verb heuristic", () => {
     // the heuristic: "post" anywhere reads as a write, and "upload" is not a write verb
     expect(classifyRisk({ name: "gh_get_post" })).toBe("write");
     expect(classifyRisk({ name: "gh_upload_image" })).toBe("read");
@@ -28,13 +28,19 @@ describe("reviewed connector risk dispatch", () => {
     expect(tryPost.sourceTemplateKey).toBe("baisoln-trypost-mcp");
     for (const [name, risk] of [
       ["get-post-tool", "read"], ["get-post-metrics-tool", "read"], ["list-posts-tool", "read"], ["preview-post-tool", "read"],
-      ["create-post-tool", "write"], ["update-post-tool", "write"], ["publish-post-tool", "write"], ["delete-post-tool", "destructive"],
-      ["attach-media-from-url-tool", "read"], // unchanged heuristic outcome, not reviewed here
+      ["list-post-notes-tool", "read"],
+      // mutations the heuristic called reads (repurposes auto-post)
+      ["attach-media-from-url-tool", "write"], ["request-media-upload-tool", "write"], ["activate-repurpose-tool", "write"],
+      ["resume-repurpose-tool", "write"], ["reorder-queue-tool", "write"], ["copy-posting-schedule-tool", "write"],
+      ["create-post-tool", "write"], ["update-post-tool", "write"],
+      ["publish-post-tool", "destructive"], ["delete-post-tool", "destructive"], ["rotate-webhook-secret-tool", "destructive"],
     ] as const) expect(classifyRisk({ name }, tryPost.sourceTemplateKey), name).toBe(risk);
-    expect(classifyRisk({ name: "get-post-tool", annotations: { readOnlyHint: false } }, tryPost.sourceTemplateKey)).toBe("write");
+    // an unknown tool is not trusted by its prefix: it falls back to the heuristic
+    expect(classifyRisk({ name: "list-and-delete-ideas-tool" }, tryPost.sourceTemplateKey)).toBe("destructive");
+    expect(classifyRisk({ name: "get-or-create-label-tool" }, tryPost.sourceTemplateKey)).toBe("write");
 
     // look-alike endpoints are not reviewed
-    for (const url of ["https://mcp.baisoln.com/ghost/mcp-evil", "https://evil.example/ghost/mcp", "https://mcp.baisoln.com.evil.example/ghost/mcp", "not a url"]) {
+    for (const url of ["http://mcp.baisoln.com/ghost/mcp", "wss://socialx.baisoln.com/mcp/trypost", "https://mcp.baisoln.com/ghost/mcp-evil", "https://evil.example/ghost/mcp", "https://mcp.baisoln.com.evil.example/ghost/mcp", "not a url"]) {
       expect(connectorToolPolicy(null, { transport: "mcp_remote", config: { url } }).sourceTemplateKey, url).toBeNull();
     }
   });
