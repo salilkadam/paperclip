@@ -1,5 +1,6 @@
 import type { runPromptInjectionProvider } from "./prompt-injection-provider.js";
 import { promptInjectionPreventionService } from "./prompt-injection-prevention.js";
+import { composioGuardRefusal, isComposioConnection } from "./connectors/composio-guard.js";
 import { adapterExecutionControls } from "./adapter-execution-control.js";
 import type { BudgetServiceHooks } from "./budgets.js";
 import type { PromptInjectionDetectorMetadata } from "@paperclipai/shared";
@@ -5125,6 +5126,41 @@ export function createToolGatewayService(
     return { entry, connection };
   }
 
+  // Owner's decision (2026-10-28), for the dispatch paths that do not take a fresh policy decision:
+  // approved action requests and board health probes. Every other path meets the guard in the policy decision.
+  // A refusal is audited as tool_gateway.call_denied, like a policy block on the decision path.
+  async function assertComposioGuard(
+    session: ToolGatewaySession,
+    tool: ToolGatewayDescriptor,
+    parameters: unknown,
+    source: "approved_action" | "health_probe",
+  ) {
+    if (!tool.connectionId) return;
+    const [connection] = await db.select({ config: toolConnections.config }).from(toolConnections)
+      .where(and(eq(toolConnections.id, tool.connectionId), eq(toolConnections.companyId, session.companyId)));
+    if (!connection || !isComposioConnection(connection)) return;
+    const refusal = composioGuardRefusal([tool.name, tool.upstreamToolName], parameters);
+    if (!refusal) return;
+    await writeAudit({
+      session,
+      companyId: session.companyId,
+      agentId: session.agentId,
+      runId: session.runId,
+      issueId: session.issueId,
+      action: "tool_gateway.call_denied",
+      details: {
+        source,
+        decision: "deny",
+        reasonCode: "deny_policy_block",
+        reasonText: refusal.explanation,
+        policyExplanation: { guard: "composio", guardCode: refusal.code },
+        tool: tool.name,
+        ...toolAuditMetadata(tool),
+      },
+    });
+    throw new ToolGatewayHttpError(403, refusal.explanation, "deny_policy_block");
+  }
+
   async function governedToolArguments(
     session: ToolGatewaySession,
     tool: ToolGatewayDescriptor,
@@ -9851,6 +9887,8 @@ export function createToolGatewayService(
           expiresAt: new Date(Date.now() + DEFAULT_SESSION_TTL_MS),
         };
         const parameters = await governedToolArguments(session, tool, input.parameters ?? {});
+        // probes skip the policy engine, not the Composio community-write guard
+        await assertComposioGuard(session, tool, parameters, "health_probe");
         const execution = await executeRemoteHttpTool(
           session,
           tool,
@@ -10946,6 +10984,29 @@ export function createToolGatewayService(
             invocationId: storedInvocation.id,
             toolName: storedInvocation.toolName,
           });
+        }
+        // An approval does not lift the Composio community-write guard (one granted before it existed included).
+        // A refused approval is settled as failed, like the legacy-approval path above, so its card closes.
+        try {
+          await assertComposioGuard(session, tool, storedParameters, "approved_action");
+        } catch (error) {
+          const refusedAt = new Date();
+          const [claimed] = await db
+            .update(toolActionRequests)
+            .set({ status: "executing", resolvedByAgentId: session.agentId, updatedAt: refusedAt })
+            .where(and(eq(toolActionRequests.id, actionRequest.id), eq(toolActionRequests.status, "approved")))
+            .returning();
+          if (claimed) {
+            await reflectToolActionInteractionLifecycle({ actionRequestId: claimed.id, status: "executing" });
+            await markApprovedActionFailed({
+              actionRequestId: claimed.id,
+              invocationId: storedInvocation.id,
+              claimUpdatedAt: claimed.updatedAt,
+              expectedInvocationStatus: "awaiting_approval",
+              error,
+            });
+          }
+          throw error;
         }
         const claimedAt = new Date();
         const [claimed] = await db

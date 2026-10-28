@@ -144,7 +144,7 @@ fi)
   \`linkedin\` without the \`#\`: it becomes a public tag shown on the company website.
 - Company LinkedIn page: **$page**
 - Personal LinkedIn profile for the repost: **$PERSONAL_PROFILE** (the only personal profile you may post to)
-- Board Slack channel: \`$chan\`. Send the board note by following the company's **board-approval-notify** skill. If that skill is not available to you, post with your Slack tools, or create the "Slack board note" subtask for your manager (the CMO), whose bot (cmo-$site) posts it.
+- Board Slack channel: \`$chan\`. Send the board note by following the company's **board-approval-notify** skill, written by the **board-plain-language** skill. If that skill is not available to you, post with your Slack tools, or create the "Slack board note" subtask for your manager (the CMO), whose bot (cmo-$site) posts it.
 
 Pick one new draft blog, publish it, and schedule its company and personal LinkedIn
 posts. All of this goes through ONE board decision (Approve all on this task).

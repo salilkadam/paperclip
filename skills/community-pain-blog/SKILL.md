@@ -174,7 +174,7 @@ not finished.
   once the blog is live.
 - In the task: the shortlist (one line each, with links and engagement), why the
   chosen one won, the matched capability (its `items.yaml` id), the sources you
-  verified, and the draft's title and slug. Write for the board: titles and
-  links, no raw ids.
+  verified, and the draft's title and slug. Write for the board per
+  **board-plain-language**: titles and links, plain words, no raw ids.
 - If a source was unreachable or a toolkit not connected, say which and what you
   did instead. A scan that searched nothing is a failed scan, not an empty one.

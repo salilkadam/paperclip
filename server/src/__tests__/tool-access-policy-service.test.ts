@@ -714,6 +714,52 @@ describeEmbeddedPostgres("tool access policy service", () => {
     });
   });
 
+  it("refuses Composio community writes before any company policy, even an allow rule", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { connection, catalogEntry } = await createTool(db, company.id);
+    await db.update(toolConnections).set({ config: { url: "https://connect.composio.dev/mcp", sourceTemplateKey: "composio" } })
+      .where(eq(toolConnections.id, connection.id));
+    const allowAll = await db.insert(toolPolicies).values({
+      companyId: company.id,
+      name: "Allow everything (worst case)",
+      policyType: "allow",
+      priority: 0,
+      selectors: {},
+    }).returning().then((rows) => rows[0]!);
+    const svc = toolAccessPolicyService(db);
+    const call = (toolName: string, args: Record<string, unknown>) => svc.decide({
+      companyId: company.id,
+      actor: { actorType: "agent", actorId: agent.id, agentId: agent.id },
+      request: { connectionId: connection.id, catalogEntryId: catalogEntry.id, toolName, upstreamToolName: toolName, arguments: args },
+    });
+    const multi = (...slugs: string[]) => ({ tools: slugs.map(tool_slug => ({ tool_slug, arguments: {} })) });
+
+    await expect(call("COMPOSIO_MULTI_EXECUTE_TOOL", multi("REDDIT_SEARCH_ACROSS_SUBREDDITS", " reddit_post_reddit_comment")))
+      .resolves.toMatchObject({ decision: "deny", reasonCode: "deny_policy_block", matchedPolicyIds: [],
+        policyExplanation: { guard: "composio", guardCode: "composio_community_write" } });
+    await expect(call("COMPOSIO_MULTI_EXECUTE_TOOL", { tools: JSON.stringify(multi("REDDIT_POST_REDDIT_COMMENT").tools) }))
+      .resolves.toMatchObject({ decision: "deny", policyExplanation: { guardCode: "composio_unreadable_call" } });
+    await expect(call("COMPOSIO_REMOTE_BASH_TOOL", { command: "true" }))
+      .resolves.toMatchObject({ decision: "deny", policyExplanation: { guardCode: "composio_sandbox" } });
+    await expect(call("COMPOSIO_SOMETHING_NEW", {}))
+      .resolves.toMatchObject({ decision: "deny", policyExplanation: { guardCode: "composio_unreviewed_tool" } });
+    // discovery decides without arguments; the tool must stay visible
+    await expect(call("COMPOSIO_MULTI_EXECUTE_TOOL", {})).resolves.toMatchObject({ decision: "allow", reasonCode: "allow_policy" });
+    // reads still reach the company's own rules
+    await expect(call("COMPOSIO_MULTI_EXECUTE_TOOL", multi("REDDIT_SEARCH_ACROSS_SUBREDDITS", "STACK_EXCHANGE_GET_QUESTION_ANSWERS")))
+      .resolves.toMatchObject({ decision: "allow", reasonCode: "allow_policy", matchedPolicyIds: [allowAll.id] });
+
+    // the guard is scoped to Composio: the same call on another connection is left to policy
+    await db.update(toolConnections).set({ config: { url: "https://example.invalid/mcp" } }).where(eq(toolConnections.id, connection.id));
+    await expect(toolAccessPolicyService(db).decide({
+      companyId: company.id,
+      actor: { actorType: "agent", actorId: agent.id, agentId: agent.id },
+      request: { connectionId: connection.id, catalogEntryId: catalogEntry.id, toolName: "COMPOSIO_MULTI_EXECUTE_TOOL",
+        upstreamToolName: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: multi("REDDIT_POST_REDDIT_COMMENT") },
+    })).resolves.toMatchObject({ decision: "allow", reasonCode: "allow_policy" });
+  });
+
   it("rejects agent-supplied run context that belongs to another agent", async () => {
     const company = await createCompany(db);
     const actorAgent = await createAgent(db, company.id);
