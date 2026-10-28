@@ -134,6 +134,10 @@ export function IdentitiesSection({
   const currentUserId = grantsQuery?.currentUserId ?? null;
   const members = grantsQuery?.members ?? [];
   const orgGrant = useMemo(() => organizationGrant(grants), [grants]);
+  // A failed grant already gets the Reconnect banner; this is for a working one.
+  const canReauthorizeOrganization = Boolean(
+    onReauthorizeOrganization && capabilities?.canConfigure && orgGrant?.status === "active",
+  );
   const myGrant = useMemo(() => personalGrantFor(grants, currentUserId), [grants, currentUserId]);
   const personalGrant = useMemo(() => {
     const personalGrants = grants.filter((grant) => grant.kind === "user");
@@ -253,9 +257,9 @@ export function IdentitiesSection({
           )
         ) : (
           orgGrant ? (
-            orgGrant.capabilities?.canEditAudience || (onReauthorizeOrganization && capabilities?.canConfigure) ? (
+            orgGrant.capabilities?.canEditAudience || canReauthorizeOrganization ? (
               <div className="flex justify-end gap-2">
-                  {onReauthorizeOrganization && capabilities?.canConfigure ? (
+                  {canReauthorizeOrganization ? (
                     <Button size="sm" variant="outline" disabled={connectPending} onClick={onReauthorizeOrganization}>
                       {connectPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
                       Sign in again

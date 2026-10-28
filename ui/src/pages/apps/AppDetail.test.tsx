@@ -965,6 +965,44 @@ describe("AppDetail", () => {
     expect(findButton("Sign in again")).toBeUndefined();
   });
 
+  it("hides Sign in again on an AI subscription, which reconnects through its own setup", async () => {
+    mockParams.tab = "permissions";
+    getConnectionMock.mockResolvedValue(connection({
+      authKind: "oauth",
+      connectionPurpose: "ai",
+      transport: "runtime_auth",
+      healthStatus: "ok",
+      config: { provider: "anthropic", method: "ai-subscription" },
+    }));
+    listConnectionGrantsMock.mockResolvedValue({
+      connection: { id: "conn-1", uid: "conn-1" },
+      grants: [organizationGrant()],
+      capabilities: fullCapabilities(),
+      currentUserId: "user-1",
+      members: [],
+    });
+
+    await renderAppDetail();
+
+    expect(findButton("Sign in again")).toBeUndefined();
+  });
+
+  it("leaves a revoked organization sign-in to the Reconnect banner", async () => {
+    mockParams.tab = "permissions";
+    getConnectionMock.mockResolvedValue(connection({ authKind: "oauth" }));
+    listConnectionGrantsMock.mockResolvedValue({
+      connection: { id: "conn-1", uid: "conn-1" },
+      grants: [organizationGrant({ status: "revoked" })],
+      capabilities: fullCapabilities(),
+      currentUserId: "user-1",
+      members: [],
+    });
+
+    await renderAppDetail();
+
+    expect(findButton("Sign in again")).toBeUndefined();
+  });
+
   it("hides Sign in again for a connection that does not sign in through OAuth", async () => {
     mockParams.tab = "permissions";
     getConnectionMock.mockResolvedValue(connection({ authKind: "api_key" }));

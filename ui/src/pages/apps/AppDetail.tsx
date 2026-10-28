@@ -676,7 +676,7 @@ function StandardAppDetail({ renderActions, renderAgentSettings, renderConnectio
                 }}
                 onConnectAsMe={() => onReconnect ? onReconnect(connection) : startPersonalAuth.mutate()}
                 onConnectOrganization={() => onReconnect ? onReconnect(connection) : startOAuth.mutate()}
-                onReauthorizeOrganization={connection.authKind === "oauth" ? () => onReconnect ? onReconnect(connection) : startOAuth.mutate() : undefined}
+                onReauthorizeOrganization={connection.authKind === "oauth" && connection.connectionPurpose !== "ai" ? () => onReconnect ? onReconnect(connection) : startOAuth.mutate() : undefined}
                 onConnectAgent={(agentId) => startOAuth.mutate({ asAgentId: agentId })}
                 onRefreshAccess={() => refreshGitHubAccess.mutate()}
                 refreshAccessPending={refreshGitHubAccess.isPending}
