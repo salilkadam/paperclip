@@ -100,6 +100,22 @@ export function stripSlackTitleMentions(text: string): string {
   return text.replace(/<@[A-Z0-9]+>/gi, "");
 }
 
+/**
+ * Slack delivers one channel mention twice: as `app_mention` and as a plain
+ * `message`, and whichever copy arrives first wins durable deduplication. The
+ * `app_mention` copy is always flagged. The SDK flags the plain copy only when
+ * its rendered text matches `@<botUserId>` or `@<botUsername>`, so a token
+ * labelled with the display name (`<@U123|cmo-reliora>` for username
+ * `cmoreliora`) reads as unmentioned. When that copy won, a required-mention
+ * endpoint filtered a real mention and ignored the `app_mention` as its
+ * duplicate. Match the user id in the raw token, ignoring any label.
+ */
+export function slackRawTextMentionsUser(raw: unknown, userId: string | null | undefined): boolean {
+  if (!userId || !/^[UW][A-Z0-9]+$/.test(userId) || !raw || typeof raw !== "object") return false;
+  const text = (raw as { text?: unknown }).text;
+  return typeof text === "string" && new RegExp(`<@${userId}(?:\\|[^>]*)?>`).test(text);
+}
+
 export function slackMessageMeetsMentionRequirement(
   endpoint: Pick<EndpointRow, "requireAtMention">,
   thread: Pick<Thread, "isDM">,
