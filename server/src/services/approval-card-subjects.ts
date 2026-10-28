@@ -196,12 +196,19 @@ function ghostSubject(action: string, args: Record<string, unknown>): CardSubjec
 }
 
 // ---- TryPost social posts ---------------------------------------------------------------
-const changesText = (args: Record<string, unknown>) => typeof args.content === "string" || args.media !== undefined;
+const changesText = (args: Record<string, unknown>) => typeof args.content === "string";
+const changesMedia = (args: Record<string, unknown>) => args.media !== undefined;
+/** What else the request replaces besides the schedule: its text, its images, or both. */
+const replaces = (args: Record<string, unknown>) =>
+  changesText(args) && changesMedia(args) ? " and replace its text and images"
+    : changesText(args) ? " and replace its text"
+      : changesMedia(args) ? " and replace its images"
+        : "";
 
 const TRYPOST_ACTIONS: Record<string, (account: string, args: Record<string, unknown>, now: number, timeZone: unknown) => string | null> = {
   "update-post-tool": (account, args, now, timeZone) => {
     const when = formatWhenIn(args.scheduled_at, timeZone) ?? formatWhen(args.scheduled_at);
-    const edit = changesText(args) ? " and replace its text" : "";
+    const edit = replaces(args);
     if (args.status === "scheduled") {
       if (!when) return `Schedule social post on ${account}${edit}`;
       const past = (parseCardTime(args.scheduled_at) ?? Infinity) <= now + 60_000 ? " (that time has already passed)" : "";
@@ -237,6 +244,10 @@ function tryPostSubject(action: string, args: Record<string, unknown>): CardSubj
         if (next) lines.push(`New first line (from this request): ${quoted(next)}`);
       } else if (current) {
         lines.push(`First line: ${quoted(current)}`);
+      }
+      if (changesMedia(args)) {
+        const count = Array.isArray(args.media) ? args.media.length : 0;
+        lines.push(count === 0 ? "Images: removes all of the post's images" : `Images after this change: ${count}`);
       }
       if (typeof post.status === "string") lines.push(`Status when requested: ${plainCardText(post.status, 20)}`);
       const timeZone = asRecord(post.social_account)?.timezone;
