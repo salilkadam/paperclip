@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reliora content research: two routines for the Content Marketer (the CMO's
+# Reliora content research: three routines for the Content Marketer (the CMO's
 # direct report) that feed the content calendar with blogs about problems
 # people are posting this week.
 #
@@ -8,8 +8,8 @@
 #      in the marketer's memory ($AGENT_HOME/life/resources/srenix/). Skill:
 #      product-capability-notes.
 #   2. "Reliora community scan" — daily 06:00 PT, an hour before the calendar.
-#      Searches Reddit, Hacker News and Stack Exchange through the Composio
-#      connection, matches the problems against the notes, and writes at most one
+#      Searches Reddit and Stack Exchange through the Composio connection and
+#      Hacker News through its public API, matches the problems against the notes, and writes at most one
 #      Ghost draft. Skill: community-pain-blog. The draft's "post created"
 #      webhook wakes "Reliora content calendar" (setup-reliora-content-calendar.sh),
 #      which formats, schedules and asks the board. Creating a post that is not a
@@ -20,6 +20,10 @@
 #   - blocks every GitHub tool of risk write/destructive for the marketer (a
 #     company policy scoped to the marketer and that connection), then proves
 #     it: a write test call must be refused, a read allowed;
+#   - "Reliora source back-post" — daily 09:30 PT: drafts one community reply a
+#     person posts (skill source-back-post); posting is blocked at the gateway
+#     (setup-composio-governance.sh). Private agent copies of community-pain-blog
+#     and source-back-post are unselected;
 #   - adds the routines' skills to the marketer (mode "add") and checks they
 #     resolved;
 #   - creates the seed task "Srenix capability notes: seed" (unassigned, done)
@@ -52,7 +56,11 @@ COMPOSIO_CONN="Composio"
 GH_BLOCK_POLICY="org-instructions: content marketer reads GitHub only"
 REPOS_FILE="${REPOS_FILE:-$HOME/.reliora-research-repos}"
 SEED_DIR="${SEED_DIR:-}"
-MARKETER_SKILLS=(paperclipai/paperclip/product-capability-notes paperclipai/paperclip/community-pain-blog paperclipai/paperclip/blog-visuals paperclipai/paperclip/para-memory-files)
+BACK_TITLE="Reliora source back-post"
+BACK_CRON="30 9 * * *"
+MARKETER_SKILLS=(paperclipai/paperclip/product-capability-notes paperclipai/paperclip/community-pain-blog paperclipai/paperclip/blog-visuals paperclipai/paperclip/source-back-post paperclipai/paperclip/para-memory-files)
+# private company copies the agent made on 28 Oct; the bundled skills above replace them
+RETIRED_SKILLS=(community-pain-blog source-back-post)
 DRY=0
 for a in "$@"; do
   case "$a" in
@@ -115,15 +123,30 @@ Daily community scan for reliora.ai. Use the **community-pain-blog** skill. Time
   `expiring-certificates-outage` and `crashloopbackoff-six-causes`.
 - Product notes: `$AGENT_HOME/life/resources/srenix/` (kept by "Reliora product research"). Topic ledger:
   `$AGENT_HOME/life/resources/blog-topics/ledger.md`.
-- Sources (Composio connection): Reddit `kubernetes`, `sre`, `devops`; Stack Exchange `serverfault`,
-  `stackoverflow` and `devops` (tag `kubernetes`); Hacker News queries `kubernetes`, `outage`, `postmortem`,
-  `postgres`, `on-call`.
+- Sources: through the Composio connection, Reddit `kubernetes`, `sre`, `devops` and Stack Exchange
+  `serverfault`, `stackoverflow` and `devops` (tag `kubernetes`); Hacker News queries `kubernetes`, `outage`,
+  `postmortem`, `postgres`, `on-call` through its public Algolia API from your own runtime.
 - Queue limit: 6 (see the skill for what counts). At or above it, bank the topic instead of drafting.
 
 At most one new **draft** (`status: "draft"`, sent explicitly). Never publish or schedule: the "Reliora content
 calendar" routine does that with the board's approval when Ghost reports the draft. Finish with the shortlist
 and the draft's title (or why none), in plain words, and mark the task done.
 EOF
+
+read -r -d '' BACK_DESC <<'DESC' || true
+Daily source back-post for reliora.ai. Use the **source-back-post** skill. Times are America/Los_Angeles.
+
+- Ghost tenant `reliora`; public blog https://reliora.ai/blog/ . Ledger and reply log in
+  `$AGENT_HOME/life/resources/blog-topics/` (`ledger.md`, `replies.md`). If they are missing there, copy them
+  once from `/paperclip/instances/default/skills/62d63984-df6c-49be-981c-1273f68a451c/community-pain-blog/blog-topics/`.
+- Owner's decisions (2026-10-28): every community reply is **posted by a person**; you only draft it. Threads:
+  the blog's own source, and recent threads a live blog genuinely answers (relevance gate). Limits: 1 reply per
+  thread, 1 per subreddit/site per 7 days, 2 per blog. The first two replies go to the CMO before the board.
+- You cannot post to Reddit, Hacker News or Stack Exchange: the gateway blocks it. Never ask for that access.
+
+At most one reply per run. Finish with the thread, the ready-to-post reply (or why nothing passed), in plain
+words, and set the task `in_review` when a reply waits for a person, otherwise `done`.
+DESC
 
 companies="$(api GET /companies)"
 cid="$(jq -r --arg n "$COMPANY" '[.[] | select(.name == $n and .status == "active")] | if length == 1 then .[0].id else "" end' <<<"$companies")"
@@ -211,6 +234,18 @@ if (( ! DRY )); then
       || die "marketer skill $k is not desired and resolved after sync (is the server image new enough to bundle it?): $(jq -c --arg k "$k" '[.entries[]? | select(.key == $k)]' <<<"$skills")"
   done
   log "  marketer skills: ${MARKETER_SKILLS[*]} desired"
+  # retire the agent's private copies: unselect company/<cid>/<slug> so only the bundled skill loads
+  retire="$(jq -c --arg cid "$cid" '[.entries[]? | .key as $k | select($k | startswith("company/" + $cid + "/"))
+            | select(($k | split("/") | last | sub("-[0-9]+$"; "")) as $s | $ARGS.positional | index($s)) | select(.desired) | $k]' \
+            --args "${RETIRED_SKILLS[@]}" <<<"$skills")"
+  if [[ "$retire" != "[]" ]]; then
+    jq -n --argjson k "$retire" '{mode: "remove", desiredSkills: $k}' > "$WORK/rs.json"
+    skills="$(api POST "/agents/$marketer/skills/sync" "$WORK/rs.json")"
+    log "  retired private copies: $(jq -r 'join(", ")' <<<"$retire")"
+  fi
+  jq -e --arg cid "$cid" '[.entries[]? | select(.key | startswith("company/" + $cid + "/")) | select(.desired)
+        | select(.key | test("/(community-pain-blog|source-back-post)(-[0-9]+)?$"))] | length == 0' <<<"$skills" >/dev/null \
+    || die "a private copy of community-pain-blog or source-back-post is still selected"
 fi
 
 # the seed task for the first research run
@@ -251,15 +286,24 @@ ensure_routine() {
   fi
   if [[ "$rid" != DRY-RUN ]]; then
     detail="$(api GET "/routines/$rid")"
-    if ! jq -e --arg c "$cron" --arg z "$TZ_NAME" '[.triggers[]? | select(.kind == "schedule" and .cronExpression == $c and .timezone == $z)] | length == 1' <<<"$detail" >/dev/null; then
+    # exactly one enabled schedule trigger, the wanted one: keep the first match (enabled), disable every other schedule
+    keep="$(jq -r --arg c "$cron" --arg z "$TZ_NAME" '[.triggers[]? | select(.kind == "schedule" and .cronExpression == $c and .timezone == $z)]
+              | (map(select(.enabled)) + map(select(.enabled | not)))[0].id // ""' <<<"$detail")"
+    if [[ -z "$keep" ]]; then
       jq -n --arg c "$cron" --arg z "$TZ_NAME" --arg l "$label" '{kind: "schedule", label: $l, cronExpression: $c, timezone: $z, enabled: true}' > "$WORK/t.json"
       write POST "/routines/$rid/triggers" "$WORK/t.json" >/dev/null; log "  $title: trigger created ($label)"
+    elif ! jq -e --arg k "$keep" '.triggers[] | select(.id == $k) | .enabled' <<<"$detail" >/dev/null; then
+      echo '{"enabled": true}' > "$WORK/t.json"; write PATCH "/routine-triggers/$keep" "$WORK/t.json" >/dev/null; log "  $title: trigger re-enabled ($label)"
     fi
+    for extra in $(jq -r --arg k "$keep" '.triggers[]? | select(.kind == "schedule" and .enabled and .id != $k) | .id' <<<"$detail"); do
+      echo '{"enabled": false}' > "$WORK/t.json"; write PATCH "/routine-triggers/$extra" "$WORK/t.json" >/dev/null; log "  $title: extra schedule trigger $extra disabled"
+    done
     if (( ! DRY )); then
       detail="$(api GET "/routines/$rid")"
       jq -e --arg t "$title" --arg a "$marketer" --arg p "$pid" --arg c "$cron" --arg z "$TZ_NAME" --arg d "$desc" '
         .title == $t and .assigneeAgentId == $a and .projectId == $p and .status == "active" and .priority == "medium"
         and .concurrencyPolicy == "skip_if_active" and .catchUpPolicy == "skip_missed" and .description == $d
+        and ([.triggers[] | select(.kind == "schedule" and .enabled)] | length == 1)
         and ([.triggers[] | select(.kind == "schedule" and .enabled and .cronExpression == $c and .timezone == $z)] | length == 1)' \
         <<<"$detail" >/dev/null || die "$title: read-back does not match: $(jq -c '{title, status, priority, assigneeAgentId, projectId, concurrencyPolicy, catchUpPolicy, triggers: [.triggers[] | {cronExpression, timezone, enabled}]}' <<<"$detail")"
       log "  $title: verified; next run $(jq -r '[.triggers[] | select(.kind == "schedule")][0].nextRunAt' <<<"$detail")"
@@ -270,4 +314,5 @@ ensure_routine() {
 
 ensure_routine "$RES_TITLE" "$RES_DESC" "$RES_CRON" "Mondays 05:00 PT"
 ensure_routine "$SCAN_TITLE" "$SCAN_DESC" "$SCAN_CRON" "daily 06:00 PT"
+ensure_routine "$BACK_TITLE" "$BACK_DESC" "$BACK_CRON" "daily 09:30 PT"
 log "done"
