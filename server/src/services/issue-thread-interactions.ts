@@ -950,6 +950,17 @@ function buildStaleTargetResult(
   } as const;
 }
 
+/**
+ * A request_confirmation that carries a server-owned governed action (a tool approval or a
+ * secret-binding proposal) is one distinct decision, not a draft of the same ask: it is
+ * never superseded by a newer card from the same agent, at creation or by the startup sweep.
+ */
+function isGovernedActionConfirmation(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const record = payload as { toolAction?: unknown; secretProposal?: unknown };
+  return record.toolAction !== undefined || record.secretProposal !== undefined;
+}
+
 function buildSupersededByNewerRequestResult(replacementInteractionId: string) {
   return {
     version: 1,
@@ -3311,12 +3322,11 @@ export function issueThreadInteractionService(
       }> = [];
       for (const row of rows) {
         if (!row.createdByAgentId) continue;
-        // A tool-approval card is one distinct gated action (its own request, arguments and
-        // signature), not a draft of the same ask: creation never supersedes them, and neither
-        // may this startup sweep. It used to keep only the newest per agent and task, so every
-        // deploy silently expired all but one pending approval on a task (13 cards, 26-28 Oct).
-        const payload = row.payload as { toolAction?: unknown } | null;
-        if (payload && typeof payload === "object" && payload.toolAction !== undefined) continue;
+        // Governed-action cards (tool approvals, secret proposals) are never superseded at
+        // creation, and neither may this startup sweep supersede them. It used to keep only the
+        // newest card per agent and task, so every deploy silently expired all but one pending
+        // approval on a task (13 tool-approval cards, 26-28 Oct).
+        if (isGovernedActionConfirmation(row.payload)) continue;
         const groupKey = `${row.companyId}:${row.issueId}:${row.kind}:${row.createdByAgentId}`;
         const newest = newestByGroup.get(groupKey);
         if (!newest) {
@@ -3735,8 +3745,7 @@ export function issueThreadInteractionService(
           const canSupersedeSiblingCards =
             options.supersedePendingSiblingInteractions !== false &&
             ((data.kind === "request_confirmation" &&
-              data.payload.toolAction === undefined &&
-              data.payload.secretProposal === undefined) ||
+              !isGovernedActionConfirmation(data.payload)) ||
               (data.kind === "ask_user_questions" && (!issueRow.conversationAgentId || !issueRow.conversationUserId)));
           if (!actor.agentId || !canSupersedeSiblingCards) {
             await enqueueIssueInteractionChatPublications(
