@@ -29,7 +29,8 @@ export const COMPOSIO_REVIEWED_META_TOOLS: ReadonlySet<string> = new Set([
   "COMPOSIO_MULTI_EXECUTE_TOOL",
   "COMPOSIO_MANAGE_CONNECTIONS",
   "COMPOSIO_WAIT_FOR_CONNECTIONS",
-  // load / search / edit Markdown guidance; they run no tools
+  // load / search / edit Markdown guidance; they run no tools (their descriptions in the live catalog, 2026-10-28;
+  // SUBMIT_FEEDBACK reports a result, WAIT_FOR_CONNECTIONS polls an auth flow)
   "COMPOSIO_SEARCH_SKILLS",
   "COMPOSIO_USE_SKILL",
   "COMPOSIO_MANAGE_SKILL",
@@ -43,6 +44,7 @@ const COMMUNITY_TOOLKITS = [
 ];
 // EXPAND (REDDIT_EXPAND_MORE_COMMENTS) and FIND (STACK_EXCHANGE_FIND_SIMILAR_QUESTIONS) are reads too
 const READ_VERBS = ["SEARCH", "RETRIEVE", "GET", "LIST", "FETCH", "EXPAND", "FIND"];
+// the item schema in the live catalog (2026-10-28): tool_slug, arguments, account; additionalProperties false
 const MULTI_EXECUTE_ITEM_KEYS = new Set(["tool_slug", "arguments", "account"]);
 
 export type ComposioGuardRefusal = { code: string; explanation: string };
@@ -81,7 +83,11 @@ function multiExecuteRefusal(args: Record<string, unknown>): ComposioGuardRefusa
   const tools = args.tools;
   // No tools: the call can execute nothing. This is also how tool discovery asks (no arguments), and
   // refusing it would hide multi-execute from every agent.
-  if (tools === undefined) return null;
+  if (tools === undefined) {
+    // ...unless the list hides under another spelling the upstream might accept
+    const variant = Object.keys(args).find(key => key !== "tools" && key.toLowerCase().replace(/[^a-z]/g, "") === "tools");
+    return variant ? unreadable(`unexpected field "${variant}"`) : null;
+  }
   if (!Array.isArray(tools)) return unreadable("tools is not a list");
   for (const item of tools) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return unreadable("an item is not an object");

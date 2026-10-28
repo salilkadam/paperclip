@@ -5128,13 +5128,37 @@ export function createToolGatewayService(
 
   // Owner's decision (2026-10-28), for the dispatch paths that do not take a fresh policy decision:
   // approved action requests and board health probes. Every other path meets the guard in the policy decision.
-  async function assertComposioGuard(companyId: string, tool: ToolGatewayDescriptor, parameters: unknown) {
+  // A refusal is audited as tool_gateway.call_denied, like a policy block on the decision path.
+  async function assertComposioGuard(
+    session: ToolGatewaySession,
+    tool: ToolGatewayDescriptor,
+    parameters: unknown,
+    source: "approved_action" | "health_probe",
+  ) {
     if (!tool.connectionId) return;
     const [connection] = await db.select({ config: toolConnections.config }).from(toolConnections)
-      .where(and(eq(toolConnections.id, tool.connectionId), eq(toolConnections.companyId, companyId)));
+      .where(and(eq(toolConnections.id, tool.connectionId), eq(toolConnections.companyId, session.companyId)));
     if (!connection || !isComposioConnection(connection)) return;
     const refusal = composioGuardRefusal([tool.name, tool.upstreamToolName], parameters);
-    if (refusal) throw new ToolGatewayHttpError(403, refusal.explanation, "deny_policy_block");
+    if (!refusal) return;
+    await writeAudit({
+      session,
+      companyId: session.companyId,
+      agentId: session.agentId,
+      runId: session.runId,
+      issueId: session.issueId,
+      action: "tool_gateway.call_denied",
+      details: {
+        source,
+        decision: "deny",
+        reasonCode: "deny_policy_block",
+        reasonText: refusal.explanation,
+        policyExplanation: { guard: "composio", guardCode: refusal.code },
+        tool: tool.name,
+        ...toolAuditMetadata(tool),
+      },
+    });
+    throw new ToolGatewayHttpError(403, refusal.explanation, "deny_policy_block");
   }
 
   async function governedToolArguments(
@@ -9864,7 +9888,7 @@ export function createToolGatewayService(
         };
         const parameters = await governedToolArguments(session, tool, input.parameters ?? {});
         // probes skip the policy engine, not the Composio community-write guard
-        await assertComposioGuard(input.companyId, tool, parameters);
+        await assertComposioGuard(session, tool, parameters, "health_probe");
         const execution = await executeRemoteHttpTool(
           session,
           tool,
@@ -10962,7 +10986,28 @@ export function createToolGatewayService(
           });
         }
         // An approval does not lift the Composio community-write guard (one granted before it existed included).
-        await assertComposioGuard(session.companyId, tool, storedParameters);
+        // A refused approval is settled as failed, like the legacy-approval path above, so its card closes.
+        try {
+          await assertComposioGuard(session, tool, storedParameters, "approved_action");
+        } catch (error) {
+          const refusedAt = new Date();
+          const [claimed] = await db
+            .update(toolActionRequests)
+            .set({ status: "executing", resolvedByAgentId: session.agentId, updatedAt: refusedAt })
+            .where(and(eq(toolActionRequests.id, actionRequest.id), eq(toolActionRequests.status, "approved")))
+            .returning();
+          if (claimed) {
+            await reflectToolActionInteractionLifecycle({ actionRequestId: claimed.id, status: "executing" });
+            await markApprovedActionFailed({
+              actionRequestId: claimed.id,
+              invocationId: storedInvocation.id,
+              claimUpdatedAt: claimed.updatedAt,
+              expectedInvocationStatus: "awaiting_approval",
+              error,
+            });
+          }
+          throw error;
+        }
         const claimedAt = new Date();
         const [claimed] = await db
           .update(toolActionRequests)

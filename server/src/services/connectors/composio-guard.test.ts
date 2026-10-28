@@ -31,6 +31,9 @@ describe("composio guard", () => {
   it("lets discovery see multi-execute: a call without tools executes nothing", () => {
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], {})).toBeNull();
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], undefined)).toBeNull();
+    expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], { session_id: "s", thought: "t" })).toBeNull();
+    expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], { Tools: [slug("REDDIT_POST_REDDIT_COMMENT")] })).toBe("composio_unreadable_call");
+    expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], { TOOLS: [] })).toBe("composio_unreadable_call");
   });
 
   it("leaves reads and other apps alone", () => {

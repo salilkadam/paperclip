@@ -789,8 +789,14 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
         approvedActionRequestId: actionRequest.id })
         .then(() => { throw new Error("Expected the approved Reddit write to be refused"); },
           (error) => expectGatewayError(error, 403, "deny_policy_block"));
+      // the refused approval is closed (failed) and the refusal audited
       const [after] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.id, actionRequest.id));
-      expect(after.status).toBe("approved");
+      expect(after.status).toBe("failed");
+      expect(await db.select().from(toolInvocations).where(eq(toolInvocations.id, actionRequest.invocationId)))
+        .toEqual([expect.objectContaining({ status: "failed", errorCode: "deny_policy_block" })]);
+      const guardAudits = (await db.select().from(toolAccessAuditEvents).where(eq(toolAccessAuditEvents.companyId, company.id)))
+        .filter((event) => JSON.stringify(event).includes("composio_community_write"));
+      expect(guardAudits.length).toBeGreaterThanOrEqual(3);
 
       // only the one read ever reached upstream
       expect(toolCalls()).toEqual([["REDDIT_SEARCH_ACROSS_SUBREDDITS"]]);
