@@ -3311,6 +3311,12 @@ export function issueThreadInteractionService(
       }> = [];
       for (const row of rows) {
         if (!row.createdByAgentId) continue;
+        // A tool-approval card is one distinct gated action (its own request, arguments and
+        // signature), not a draft of the same ask: creation never supersedes them, and neither
+        // may this startup sweep. It used to keep only the newest per agent and task, so every
+        // deploy silently expired all but one pending approval on a task (13 cards, 26-28 Oct).
+        const payload = row.payload as { toolAction?: unknown } | null;
+        if (payload && typeof payload === "object" && payload.toolAction !== undefined) continue;
         const groupKey = `${row.companyId}:${row.issueId}:${row.kind}:${row.createdByAgentId}`;
         const newest = newestByGroup.get(groupKey);
         if (!newest) {
