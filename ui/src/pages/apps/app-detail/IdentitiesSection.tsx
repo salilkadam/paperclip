@@ -85,6 +85,7 @@ export function IdentitiesSection({
   error,
   onConnectAsMe,
   onConnectOrganization,
+  onReauthorizeOrganization,
   onConnectAgent,
   onRefreshAccess,
   refreshAccessPending = false,
@@ -106,6 +107,12 @@ export function IdentitiesSection({
   error: boolean;
   onConnectAsMe: () => void;
   onConnectOrganization: () => void;
+  /**
+   * Sign the organization identity in again while its grant still works, e.g.
+   * to move it to another provider workspace. Omitted for connections that do
+   * not sign in through OAuth.
+   */
+  onReauthorizeOrganization?: () => void;
   onConnectAgent: (agentId: string) => void;
   onRefreshAccess?: () => void;
   refreshAccessPending?: boolean;
@@ -246,11 +253,19 @@ export function IdentitiesSection({
           )
         ) : (
           orgGrant ? (
-            orgGrant.capabilities?.canEditAudience ? (
-              <div className="flex justify-end">
-                  <Button size="sm" variant="outline" onClick={() => onOpenAudience(orgGrant.id)}>
-                    Manage access
-                  </Button>
+            orgGrant.capabilities?.canEditAudience || (onReauthorizeOrganization && capabilities?.canConfigure) ? (
+              <div className="flex justify-end gap-2">
+                  {onReauthorizeOrganization && capabilities?.canConfigure ? (
+                    <Button size="sm" variant="outline" disabled={connectPending} onClick={onReauthorizeOrganization}>
+                      {connectPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                      Sign in again
+                    </Button>
+                  ) : null}
+                  {orgGrant.capabilities?.canEditAudience ? (
+                    <Button size="sm" variant="outline" onClick={() => onOpenAudience(orgGrant.id)}>
+                      Manage access
+                    </Button>
+                  ) : null}
               </div>
             ) : null
           ) : (

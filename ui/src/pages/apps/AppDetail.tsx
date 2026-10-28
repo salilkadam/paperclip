@@ -51,6 +51,7 @@ import {
   appDefinitionName,
   appDefinitionSlug,
   type AppGalleryDisplayEntry,
+  galleryEntryByName,
 } from "./app-definition-display";
 import { appTabHref, appTabLabel, isAppTabKey, type AppTabKey } from "./app-tabs";
 import { ConnectionProvenanceChip } from "./ConnectionProvenanceChip";
@@ -675,6 +676,7 @@ function StandardAppDetail({ renderActions, renderAgentSettings, renderConnectio
                 }}
                 onConnectAsMe={() => onReconnect ? onReconnect(connection) : startPersonalAuth.mutate()}
                 onConnectOrganization={() => onReconnect ? onReconnect(connection) : startOAuth.mutate()}
+                onReauthorizeOrganization={connection.authKind === "oauth" ? () => onReconnect ? onReconnect(connection) : startOAuth.mutate() : undefined}
                 onConnectAgent={(agentId) => startOAuth.mutate({ asAgentId: agentId })}
                 onRefreshAccess={() => refreshGitHubAccess.mutate()}
                 refreshAccessPending={refreshGitHubAccess.isPending}
@@ -984,8 +986,5 @@ function galleryEntryFor(
     const keyed = apps.find((app) => appDefinitionSlug(app) === sourceSlug);
     if (keyed) return keyed;
   }
-  const name = connection.name.toLowerCase();
-  return apps.find((app) => appDefinitionName(app).toLowerCase() === name) ??
-    apps.find((app) => appDefinitionSlug(app) === name) ??
-    null;
+  return galleryEntryByName(apps, connection.name, connection);
 }
