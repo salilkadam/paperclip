@@ -252,8 +252,8 @@ record_run() {
     const json = o => JSON.stringify(o);
     const line = json(rec);
     // Optimistic concurrency. A blind merge-patch of a stale read lets two
-    // writers inside the same second overwrite each other: one component's
-    // normal-exit write silently erases another component's trap write, and
+    // writers inside the same second overwrite each other: the normal-exit
+    // write of one component silently erases the trap write of another, and
     // the deadline-killed run loses exactly the record written to survive it.
     // Carrying the resourceVersion just read makes the API server reject a
     // stale write with 409; re-read and re-append, bounded, so a contended
@@ -292,7 +292,10 @@ record_run() {
         if (rv) patchBody.metadata = { resourceVersion: rv };
         api("PATCH", "/" + cm, json(patchBody), "application/merge-patch+json", code2 => {
           console.log("[run-record] patch http " + code2);
-          if ((code2 === 409 || code2 === 404) && attempt < 3) append(attempt + 1);
+          if (code2 === 409 || code2 === 404) {
+            if (attempt < 3) append(attempt + 1);
+            else console.log("[run-record] patch lost every race, giving up");
+          }
         });
       } else {
         console.log("[run-record] get http " + code + ", skipping");
