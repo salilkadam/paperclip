@@ -16,9 +16,9 @@ import {
 import { AppLogo } from "@/pages/apps/AppLogo";
 import {
   appDefinitionLogoUrl,
-  appDefinitionName,
   appDefinitionSlug,
   type AppGalleryDisplayEntry,
+  galleryEntryByName,
 } from "@/pages/apps/app-definition-display";
 import { SidebarNavItem } from "./SidebarNavItem.production";
 
@@ -133,11 +133,7 @@ function galleryEntryFor(
     const keyed = apps.find((app) => appDefinitionSlug(app) === application.applicationKey);
     if (keyed) return keyed;
   }
-  const name = (connection?.name ?? application?.name)?.toLowerCase();
-  if (!name) return null;
-  return apps.find((app) => appDefinitionName(app).toLowerCase() === name) ??
-    apps.find((app) => appDefinitionSlug(app) === name) ??
-    null;
+  return galleryEntryByName(apps, connection?.name ?? application?.name, connection);
 }
 
 function latestArchivedConnection(connections: ToolConnection[]): ToolConnection | null {
