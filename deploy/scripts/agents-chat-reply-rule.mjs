@@ -42,12 +42,14 @@ const SECTION = [
   "- Post the full answer as a task comment, in plain language, before you exit.",
   "- This applies even where the `paperclip` skill describes a \"server-verified",
   "  external chat\" shortcut. In this company, always post the comment.",
-  "- Then set the task `done`. If you need a decision from the board, save the",
-  "  question as an interaction and set `in_review` instead. Never leave a chat",
-  "  task `in_progress` with nothing scheduled to wake you.",
-  "- If the work will take longer than this run, post a short comment saying what",
-  "  you are doing and when the answer will come, then follow the normal",
-  "  heartbeat rules.",
+  "- Once the comment answers the question, set the task `done`. If you need a",
+  "  decision from the board, save the question as an interaction and set",
+  "  `in_review` instead. Never leave a chat task `in_progress` with nothing",
+  "  scheduled to wake you.",
+  "- If the answer depends on work that will outlast this run, post a short",
+  "  comment saying what you are doing, then give the task a real wake path:",
+  "  a child task it is blocked by (`blockedByIssueIds`), or a scheduled issue",
+  "  monitor. A comment that promises a later answer is not a wake path.",
   END,
 ].join("\n");
 
@@ -73,24 +75,35 @@ async function api(path, init = {}) {
     .filter((a) => a.status !== "terminated" && a.adapterType !== "hermes_gateway");
   if (agents.length === 0) throw new Error("roster is empty; refusing to report success");
   const report = [];
-  let missing = 0;
+  let missing = 0, failed = 0;
   for (const a of agents) {
-    const q = encodeURIComponent("AGENTS.md");
-    const cur = await api(`/agents/${a.id}/instructions-bundle/file?path=${q}`);
-    const content = cur.content ?? "";
-    const next = content.includes(BEGIN)
-      ? content.replace(new RegExp(`${BEGIN}[\\s\\S]*?${END}`), SECTION)
-      : content.trimEnd() + "\n\n" + SECTION + "\n";
-    if (next === content) { report.push({ agent: a.name, result: "current" }); continue; }
-    if (CHECK) { missing++; report.push({ agent: a.name, result: "MISSING_OR_STALE" }); continue; }
-    await api(`/agents/${a.id}/instructions-bundle/file`, {
-      method: "PUT",
-      body: JSON.stringify({ path: "AGENTS.md", content: next, baseHash: cur.contentHash ?? null }),
-    });
-    const after = await api(`/agents/${a.id}/instructions-bundle/file?path=${q}`);
-    if (!(after.content ?? "").includes(SECTION)) throw new Error(`${a.name}: write not visible on re-read`);
-    report.push({ agent: a.name, result: "updated" });
+    try {
+      const q = encodeURIComponent("AGENTS.md");
+      const cur = await api(`/agents/${a.id}/instructions-bundle/file?path=${q}`);
+      const content = cur.content ?? "";
+      const b = content.split(BEGIN).length - 1, e = content.split(END).length - 1;
+      if (b !== e || b > 1 || (b === 1 && content.indexOf(END) < content.indexOf(BEGIN))) {
+        throw new Error(`malformed chat-replies markers (BEGIN x${b}, END x${e}); fix by hand`);
+      }
+      // "current" only when the exact current section is present, not on mere equality
+      if (content.includes(SECTION)) { report.push({ agent: a.name, result: "current" }); continue; }
+      if (CHECK) { missing++; report.push({ agent: a.name, result: "MISSING_OR_STALE" }); continue; }
+      const next = b === 1
+        ? content.replace(new RegExp(`${BEGIN}[\\s\\S]*?${END}`), () => SECTION)
+        : content.trimEnd() + "\n\n" + SECTION + "\n";
+      await api(`/agents/${a.id}/instructions-bundle/file`, {
+        method: "PUT",
+        body: JSON.stringify({ path: "AGENTS.md", content: next, baseHash: cur.contentHash ?? null }),
+      });
+      const after = await api(`/agents/${a.id}/instructions-bundle/file?path=${q}`);
+      if (!(after.content ?? "").includes(SECTION)) throw new Error("write not visible on re-read");
+      report.push({ agent: a.name, result: "updated" });
+    } catch (err) {
+      failed++;
+      report.push({ agent: a.name, result: "ERROR", error: err.message });
+    }
   }
   console.log(JSON.stringify(report, null, 1));
+  if (failed) { console.error(`FAILED: ${failed} agent(s) errored; see report`); process.exit(2); }
   if (CHECK && missing) { console.error(`CHECK FAILED: ${missing} agent(s) lack the chat-replies rule`); process.exit(1); }
 })().catch((e) => { console.error("ERR:", e.message); process.exit(2); });
