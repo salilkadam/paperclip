@@ -139,7 +139,8 @@ Daily source back-post for reliora.ai. Use the **source-back-post** skill. Times
 - Ghost tenant `reliora`; public blog https://reliora.ai/blog/ . Ledger and reply log in
   `$AGENT_HOME/life/resources/blog-topics/` (`ledger.md`, `replies.md`). If they are missing there, copy them
   once from `/paperclip/instances/default/skills/62d63984-df6c-49be-981c-1273f68a451c/community-pain-blog/blog-topics/`.
-- Owner's decisions (2026-10-28): every community reply is **posted by a person**; you only draft it. Threads:
+- Owner's decisions (2026-10-28/29): every community reply is **posted by Salil from his own account** (for
+  Reliora and Bionic alike); you only draft it. Threads:
   the blog's own source, and recent threads a live blog genuinely answers (relevance gate). Limits: 1 reply per
   thread, 1 per subreddit/site per 7 days, 2 per blog. The first two replies go to the CMO before the board.
 - You cannot post to Reddit, Hacker News or Stack Exchange: the gateway blocks it. Never ask for that access.
