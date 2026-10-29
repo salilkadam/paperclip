@@ -104,10 +104,29 @@ blog live?
   the exact reply in a code block, the posting note ("For Salil to post from
   his own account. The site's self-promotion rules and the community's vendor
   rules bind that account. Edit it into your own voice, and never post it as a
-  first-person experience you did not have"), and your relevance-gate answers. Notify the board per **board-approval-notify** (title,
-  thread link, first line of the reply). Write the task comment and the note by
-  **board-plain-language**: the ask first ("Please post this reply on r/…"),
-  where and why it helps, and what happens if nobody posts it (nothing). Set the task `in_review`.
+  first-person experience you did not have"), and your relevance-gate answers.
+- **Always post the request in the company's board Slack channel** (owner's
+  practice, 2026-10-29): Salil takes it up from Slack, so the message must be
+  complete on its own. Send it the way **board-approval-notify** sends board
+  notes (its channel table; your Slack tools, or the "Board note" subtask for the
+  CMO when you have none), written by **board-plain-language**:
+
+  ```
+  Reply ready for you to post: <site> - "<thread title>"
+  Thread: <thread URL>
+  Why it fits: <one sentence: the problem they have that the blog answers>
+  Links to: "<blog title>" - <public blog URL>
+  Reply (copy, then edit into your own voice):
+  <the full reply text, exactly as in the task>
+  Before posting: <only if needed, e.g. "I could not check your comments in
+  r/<name> this week; skip if you posted there in the last 7 days">
+  When posted, put the comment link on the task: <task link>
+  ```
+
+  Send it only once the reply is ready for him (after the CMO's review for the
+  first two). One message per reply; never a Slack note for a skipped thread.
+  A failed Slack post: say so in the task, verbatim, and leave it `in_review`.
+  Set the task `in_review`.
 - A thread whose source is an article or postmortem by a named author: say so in
   the task. Contacting the author is the board's decision; never email or
   message them yourself from this routine.
@@ -116,7 +135,8 @@ blog live?
 
 - Log line in `replies.md`: `YYYY-MM-DD | blog slug | site | thread URL | lane |
   status (ready|posted|skipped:<reason>) | reply first line`.
-- When the board says it was posted (with the comment URL), mark it `posted`.
+- When Salil puts the comment link on the task, mark it `posted`. Slack replies
+  are not a record: only the task counts.
 - **Feedback:** on later runs, check each posted reply at about 24 hours and 7
   days (score, replies, removed?) with read tools, and record it.
 - **Stop rule:** a removed reply, or two replies at a score below 1 in the same
