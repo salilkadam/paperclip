@@ -7,8 +7,10 @@ description: "When a blog is live on reliora.ai, draft one genuinely useful repl
 
 One run drafts **at most one** reply. You never post on Reddit, Hacker News or
 Stack Exchange: the gateway blocks it, and the owner decided (2026-10-28) that a
-person posts every community reply from an established account. You deliver a
-**ready-to-paste reply** and the thread link; the board posts it.
+person posts every community reply. **The poster is the owner, Salil Kadam, from
+his own accounts, for every company** (Reliora Inc and Bionic AI Solutions;
+owner, 2026-10-29). You deliver a **ready-to-paste reply** and the thread link;
+he posts it.
 
 A reply is only worth writing if the thread's people would thank us for it.
 Promotion that is off-topic, repeated or vague gets removed and gets accounts
@@ -21,6 +23,8 @@ banned. When in doubt, skip and say why.
   **community-pain-blog**) and reply log `$AGENT_HOME/life/resources/blog-topics/replies.md`.
 - Product notes `$AGENT_HOME/life/resources/<product>/` (public, shipped facts only).
 - Limits: 1 reply per thread ever; 1 per subreddit (or site) per 7 days; 2 per blog.
+  The same person posts for every company, so the per-thread and 7-day limits
+  count **his** replies for any company, not only yours (see gate point 6).
 
 ## 1. Pick the blog
 
@@ -51,7 +55,11 @@ replies in the log).
 5. The community allows it: read the subreddit's or site's rules. If they forbid
    links or vendor replies, skip.
 6. Limits: not already replied to; the subreddit/site has had no reply from us
-   in 7 days; the blog has fewer than 2 replies.
+   in 7 days; the blog has fewer than 2 replies. "Us" is the poster, for any
+   company: also read the thread's comments and the poster's recent activity
+   there with read tools (a comment by him in that thread or subreddit in the
+   last 7 days fails this point). If you cannot check his activity, say so in the
+   task so he checks before posting.
 
 Any "no": skip the thread, record it in the log with the reason, try the next.
 No thread passes: comment "No thread passed the relevance gate" with the
@@ -68,9 +76,12 @@ candidates and reasons, and end.
   "this happened to us" or "we run this". No customers, numbers or quotes the
   product notes do not support as shipped + public. Never name an anonymous
   poster.
-- **Disclose once, plainly**, matching the thread's own style if someone already
-  disclosed: "Full disclosure: I'm with Reliora (we build Srenix, an AI SRE for
-  Kubernetes)."
+- **Disclose once, plainly**, in his voice, naming the company whose blog you
+  link, matching the thread's own style if someone already disclosed. Reliora:
+  "Full disclosure: I'm with Reliora (we build Srenix, an AI SRE for
+  Kubernetes)." Bionic AI Solutions: "Full disclosure: I run Bionic AI
+  Solutions" plus what it does, from your product notes. Never both companies in
+  one reply.
 - **One link, last**, to the live post: "I wrote this up in more detail here, if
   it's useful: https://reliora.ai/blog/<slug>". No hashtags, no sales words, no
   headings.
@@ -90,11 +101,10 @@ blog live?
   when the subtask is done with an approval; rework the draft if it asks for
   changes.
 - Post in the task, under **"Ready to post"**: the site and thread title + URL,
-  the exact reply in a code block, the account guidance ("post from an
-  established personal or Reliora account; not u/BionicAISolutions. The site's
-  self-promotion rules and the community's vendor rules bind the account that
-  posts. Edit the text into your own voice, and never post it as a first-person
-  experience you did not have"), and your relevance-gate answers. Notify the board per **board-approval-notify** (title,
+  the exact reply in a code block, the posting note ("For Salil to post from
+  his own account. The site's self-promotion rules and the community's vendor
+  rules bind that account. Edit it into your own voice, and never post it as a
+  first-person experience you did not have"), and your relevance-gate answers. Notify the board per **board-approval-notify** (title,
   thread link, first line of the reply). Write the task comment and the note by
   **board-plain-language**: the ask first ("Please post this reply on r/…"),
   where and why it helps, and what happens if nobody posts it (nothing). Set the task `in_review`.
