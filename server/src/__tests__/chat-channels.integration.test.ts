@@ -1,3 +1,4 @@
+import { cardToBlockKit } from "@chat-adapter/slack";
 import { idleWorkSnapshot } from "../services/task-admission.js";
 import { requestTaskRetry } from "../services/task-retry.js";
 import { stageReceiptReactionRemovals } from "../services/chat-receipt-reactions.js";
@@ -301,6 +302,8 @@ class FakeEndpointRuntime {
   }> = [];
   private nextPostId = 0;
   postError: Error | null = null;
+  /** Thrown only for messages that carry a native card. */
+  cardPostError: Error | null = null;
   editError: Error | null = null;
   postHook: (() => Promise<void>) | undefined;
   webhookHook: ((request: Request) => Promise<void>) | undefined;
@@ -503,6 +506,8 @@ class FakeEndpointRuntime {
         ) => {
           this.editAttempts.push({ threadId: editedThreadId, messageId });
           if (this.editError) throw this.editError;
+          if (this.cardPostError && editedMessage && typeof editedMessage === "object" && "card" in editedMessage)
+            throw this.cardPostError;
           if (this.postError) throw this.postError;
           const text =
             editedMessage &&
@@ -523,6 +528,8 @@ class FakeEndpointRuntime {
       post: async (message: unknown) => {
         await this.postHook?.();
         if (this.postError) throw this.postError;
+        if (this.cardPostError && message && typeof message === "object" && "card" in message)
+          throw this.cardPostError;
         let text: string;
         let attachments: unknown[] | undefined;
         let chunks: string[] | undefined;
@@ -43567,6 +43574,115 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       "COLOR-CONTINUATION-Red",
     );
     await service.shutdown();
+  });
+
+  async function slackConfirmationFixture(label: string, prompt: string) {
+    const fixture = await seedCompany();
+    const { callbacks, endpoint, runtime, service } = await configuredSlackEndpoint(fixture);
+    const channel = makeThread({
+      channelId: `C-CARD-${label}`,
+      id: `slack:C-CARD-${label}:${Date.now()}.1`,
+      name: `card-${label}`,
+    });
+    await deliverMessage({
+      callbacks,
+      endpointId: endpoint.id,
+      thread: channel.thread,
+      message: makeMessage({ id: `card-${label}-${randomUUID()}`, text: "@maya ask me before saving contacts", mentioned: true }),
+      trigger: "mention",
+    });
+    await qualifySetupRoundTrip(service, endpoint.id);
+    await service.test(endpoint.id, "owner-user");
+    const [conversation] = await readChatConversationsByEndpointId(endpoint.id);
+    if (!conversation) throw new Error("Expected Slack card conversation");
+    const sourceRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: sourceRunId,
+      companyId: fixture.companyId,
+      agentId: fixture.assignedAgentId,
+      status: "running",
+      contextSnapshot: { issueId: conversation.issueId, taskId: conversation.issueId, source: "chat:slack" },
+    });
+    const providerRuntime = runtime.endpoints.get(endpoint.id);
+    if (!providerRuntime) throw new Error("Expected Slack provider runtime");
+    const createConfirmation = () =>
+      issueThreadInteractionService(db).create(
+        { id: conversation.issueId, companyId: fixture.companyId },
+        {
+          kind: "request_confirmation",
+          continuationPolicy: "wake_assignee",
+          sourceRunId,
+          title: "Confirm contact scope",
+          payload: { version: 1, prompt },
+        },
+        { agentId: fixture.assignedAgentId, runId: sourceRunId },
+      );
+    return { endpoint, service, providerRuntime, createConfirmation };
+  }
+
+  // The 684-character confirmation prompt Slack rejected with invalid_blocks.
+  const LONG_SLACK_PROMPT =
+    "You asked us to record contact details of community post authors in the CRM. Our lawyer (CLO) is reviewing the rules in task REL-3212. Confirm the scope we should aim for while we wait for the ruling.\n\nChoice A — Public details only: we save only contact details a person published in public themselves (for example a public email on their own profile), each tagged with where and when we found it, plus any conditions the CLO sets. We never guess emails from usernames.\n\nChoice B — Username only: no contact details go into the CRM. We keep the public username, link and date only.\n\nYour choice tells us what to build. We still change nothing until the CLO ruling says it is allowed.";
+
+  it("sends a long Slack confirmation as a card within Block Kit limits, keeping the whole prompt", async () => {
+    const { endpoint, service, providerRuntime, createConfirmation } = await slackConfirmationFixture("FIT", LONG_SLACK_PROMPT);
+    try {
+      const interaction = await createConfirmation();
+      await service.processPendingPublications();
+      const [publication] = await readChatPublicationsByIdempotencyKey(`interaction:${interaction.id}:${endpoint.id}`);
+      expect(publication?.state).toBe("published");
+      // Capture exactly what reached the provider and render it with the real Slack converter.
+      const sent = [...providerRuntime.posts.map((p) => p.text), ...providerRuntime.edits.map((e) => e.text)]
+        .map((text) => { try { return JSON.parse(text) as { card?: Parameters<typeof cardToBlockKit>[0] }; } catch { return {}; } })
+        .find((message) => message.card);
+      if (!sent?.card) throw new Error("Expected a native card post");
+      const blocks = cardToBlockKit(sent.card) as Array<{ type: string; text?: { text: string } }>;
+      const header = blocks.find((block) => block.type === "header");
+      expect(header?.text?.text.length).toBeLessThanOrEqual(150);
+      const sections = blocks.filter((block) => block.type === "section").map((block) => block.text?.text ?? "");
+      expect(sections.every((text) => text.length <= 3000)).toBe(true);
+      expect(sections.join("\n")).toContain("We still change nothing until the CLO ruling says it is allowed.");
+    } finally {
+      await service.shutdown();
+    }
+  });
+
+  it("falls back to plain text when Slack rejects a card's layout, so the thread still gets the question", async () => {
+    const { endpoint, service, providerRuntime, createConfirmation } = await slackConfirmationFixture("REJECT", "Approve saving public contact details?");
+    try {
+      providerRuntime.cardPostError = Object.assign(new Error("An API error occurred: invalid_blocks"), {
+        code: "slack_webapi_platform_error",
+        data: { ok: false, error: "invalid_blocks" },
+      });
+      const interaction = await createConfirmation();
+      await service.processPendingPublications();
+      const [publication] = await readChatPublicationsByIdempotencyKey(`interaction:${interaction.id}:${endpoint.id}`);
+      expect(publication?.state).toBe("published");
+      const delivered = [...providerRuntime.posts.map((p) => p.text), ...providerRuntime.edits.map((e) => e.text)];
+      const plain = delivered.find((text) => text.includes("Approve saving public contact details?") && !text.includes("\"card\""));
+      // The fallback has no buttons, so it must point to where the answer is given.
+      expect(plain).toContain("Open the task in Paperclip to respond");
+    } finally {
+      await service.shutdown();
+    }
+  });
+
+  it("still fails a card publication on errors that are not a layout rejection", async () => {
+    const { endpoint, service, providerRuntime, createConfirmation } = await slackConfirmationFixture("OTHER", "Approve this?");
+    try {
+      providerRuntime.cardPostError = Object.assign(new Error("An API error occurred: channel_not_found"), {
+        code: "slack_webapi_platform_error",
+        data: { ok: false, error: "channel_not_found" },
+      });
+      const interaction = await createConfirmation();
+      await service.processPendingPublications();
+      const [publication] = await readChatPublicationsByIdempotencyKey(`interaction:${interaction.id}:${endpoint.id}`);
+      expect(publication?.state).not.toBe("published");
+      const delivered = [...providerRuntime.posts.map((p) => p.text), ...providerRuntime.edits.map((e) => e.text)];
+      expect(delivered.some((text) => text.includes("Approve this?"))).toBe(false);
+    } finally {
+      await service.shutdown();
+    }
   });
 
   it("replaces Telegram queued progress with its native confirmation and rejects late working progress", async () => {

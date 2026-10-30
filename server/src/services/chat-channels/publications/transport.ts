@@ -76,6 +76,8 @@ import type {
 import { Actions, Button, Card, CardText, LinkButton } from "chat";
 import type { EndpointRecord } from "../runtime-types.js";
 import { isExplicitOperatorPublication } from "./policy.js";
+import { cardAsPlainText, fitCardToProviderLimits, isDefiniteCardRejection } from "./card-limits.js";
+import { logger } from "../../../middleware/logger.js";
 type PublicationTransportOptions = {
   endpointRecord: (endpointId: string) => Promise<EndpointRecord | null>;
   fetchImpl: typeof globalThis.fetch;
@@ -123,9 +125,10 @@ function safeCardForPublication(
   provider: ChatProvider,
 ) {
   if (!payload.card) return null;
+  const fitted = fitCardToProviderLimits(payload.card, provider);
   const children = [];
-  if (payload.card.body) children.push(CardText(payload.card.body));
-  const actions = (payload.card.actions ?? []).map((action) =>
+  if (fitted.body) children.push(CardText(fitted.body));
+  const actions = (fitted.actions ?? []).map((action) =>
     action.type === "callback"
       ? Button({
           id: action.actionId,
@@ -144,7 +147,7 @@ function safeCardForPublication(
       : LinkButton({ label: action.label, url: action.url }),
   );
   if (actions.length) children.push(Actions(actions));
-  return Card({ title: payload.card.title, children });
+  return Card({ title: fitted.title, children });
 }
 
   async function recordExactOutboundPublicationLink(
@@ -312,32 +315,46 @@ function safeCardForPublication(
           : "Paperclip attached the complete response to preserve its Markdown formatting.";
     }
     if (card && CAPABILITIES[input.endpoint.provider].cards) {
-      return await attemptProviderPublication(async () =>
-        input.replaceProviderMessageId
-          ? await editOrPostProviderPublication(
-              () =>
-                thread.adapter.editMessage(
-                  thread.id,
-                  input.replaceProviderMessageId!,
-                  {
+      try {
+        return await attemptProviderPublication(async () =>
+          input.replaceProviderMessageId
+            ? await editOrPostProviderPublication(
+                () =>
+                  thread.adapter.editMessage(
+                    thread.id,
+                    input.replaceProviderMessageId!,
+                    {
+                      card,
+                      fallbackText: text,
+                      ...(files.length ? { files } : {}),
+                    },
+                  ),
+                () =>
+                  thread.post({
                     card,
                     fallbackText: text,
                     ...(files.length ? { files } : {}),
-                  },
-                ),
-              () =>
-                thread.post({
-                  card,
-                  fallbackText: text,
-                  ...(files.length ? { files } : {}),
-                }),
-            )
-          : await thread.post({
-              card,
-              fallbackText: text,
-              ...(files.length ? { files } : {}),
-            }),
-      );
+                  }),
+              )
+            : await thread.post({
+                card,
+                fallbackText: text,
+                ...(files.length ? { files } : {}),
+              }),
+        );
+      } catch (error) {
+        // The provider refused the card's layout, so nothing was posted. Send
+        // the same words as plain text (payload.text carries the task link)
+        // instead of leaving the conversation on its "working" message. With
+        // files attached the adapter may already have uploaded them, so that
+        // case keeps its normal failure handling, as does any other error.
+        if (!isDefiniteCardRejection(error, input.endpoint.provider) || !input.payload.card || files.length) throw error;
+        logger.warn(
+          { endpointId: input.endpoint.id, publicationId: input.publication.id, provider: input.endpoint.provider },
+          "chat card rejected by provider layout validation; sent as plain text without buttons",
+        );
+        text = cardAsPlainText(input.payload.card, text);
+      }
     }
     if (attachments.length) {
       const attachmentMessage: AdapterPostableMessage = {
