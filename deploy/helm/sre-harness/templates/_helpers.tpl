@@ -250,12 +250,27 @@ record_run() {
       r.end(body === undefined ? undefined : body);
     };
     const json = o => JSON.stringify(o);
-    const patch = runs => api("PATCH", "/" + cm,
-      json({ data: { runs: runs } }), "application/merge-patch+json", code => {
-        console.log("[run-record] patch http " + code);
-      });
     const line = json(rec);
-    api("GET", "/" + cm, undefined, undefined, (code, body) => {
+    // Optimistic concurrency. A blind merge-patch of a stale read lets two
+    // writers inside the same second overwrite each other: the normal-exit
+    // write of one component silently erases the trap write of another, and
+    // the deadline-killed run loses exactly the record written to survive it.
+    // Carrying the resourceVersion just read makes the API server reject a
+    // stale write with 409; re-read and re-append, bounded, so a contended
+    // loop can never eat the Slack grace window. Without a readable
+    // resourceVersion the patch stays blind -- the old best-effort behavior.
+    // One shared budget: each API call may take 10s, so a third attempt
+    // could outlast the 60s termination grace (plus the 10s Slack post).
+    // No retry starts after 15s, keeping the worst case near 35s.
+    const started = Date.now();
+    const append = (attempt) => {
+      if (attempt > 1 && Date.now() - started > 15000) {
+        console.log("[run-record] out of time after " + (attempt - 1) + " attempt(s), giving up");
+        return;
+      }
+      appendOnce(attempt);
+    };
+    const appendOnce = (attempt) => api("GET", "/" + cm, undefined, undefined, (code, body) => {
       if (code === 404) {
         const cmBody = json({
           apiVersion: "v1", kind: "ConfigMap",
@@ -270,18 +285,34 @@ record_run() {
           data: { runs: line + "\n" },
         });
         api("POST", "", cmBody, "application/json", c2 => {
-          if (c2 === 409) patch(line + "\n");
-          else console.log("[run-record] create http " + c2);
+          if (c2 === 409) {
+            if (attempt < 3) append(attempt + 1);
+            else console.log("[run-record] create lost every race, giving up");
+          } else console.log("[run-record] create http " + c2);
         });
       } else if (code === 200) {
         let prev = "";
-        try { prev = (JSON.parse(body).data || {}).runs || ""; } catch (e) {}
+        let rv = "";
+        try {
+          const obj = JSON.parse(body);
+          prev = (obj.data || {}).runs || "";
+          rv = (obj.metadata || {}).resourceVersion || "";
+        } catch (e) {}
         const runs = (prev + line + "\n").split("\n").filter(Boolean).slice(-20).join("\n") + "\n";
-        patch(runs);
+        const patchBody = { data: { runs: runs } };
+        if (rv) patchBody.metadata = { resourceVersion: rv };
+        api("PATCH", "/" + cm, json(patchBody), "application/merge-patch+json", code2 => {
+          console.log("[run-record] patch http " + code2);
+          if (code2 === 409 || code2 === 404) {
+            if (attempt < 3) append(attempt + 1);
+            else console.log("[run-record] patch lost every race, giving up");
+          }
+        });
       } else {
         console.log("[run-record] get http " + code + ", skipping");
       }
     });
+    append(1);
   ' 2>&1 | sed "s/^/[run-record] /" || true
 }
 

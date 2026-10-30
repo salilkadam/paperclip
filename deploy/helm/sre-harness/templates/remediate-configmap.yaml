@@ -33,7 +33,11 @@ data:
           console.log("[remediate] no webhook configured; report:\n" + text);
           process.exit(0);
         }
+        // A webhook that never answers must not eat the SIGTERM grace
+        // window: the deadline-kill trap posts here before it records the
+        // run, and an unbounded fetch outlives the pod with both.
         fetch(url, {
+          signal: AbortSignal.timeout(10000),
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ text }),
