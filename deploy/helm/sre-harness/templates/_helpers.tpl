@@ -170,7 +170,7 @@ DSH_RC=$?
 trap - TERM INT
 kill "$DSH_TAIL" 2>/dev/null
 wait "$DSH_TAIL" 2>/dev/null
-DSH_FINAL="$(node -e '
+DSH_FINAL="$(DSH_RC="$DSH_RC" node -e '
   const fs = require("fs");
   const raw = fs.readFileSync(process.argv[1], "utf8");
   let final = "";
@@ -186,9 +186,18 @@ DSH_FINAL="$(node -e '
     else if (e.type === "error") errs.push(e.message || "unknown");
     else if (e.type === "status" && e.phase === "turn_end") turn = JSON.stringify(e.reason || {});
   }
-  const out = final
-    || (errs.length ? "dsh error: " + errs.join("; ") : "")
-    || "dsh produced no final answer (" + tools + " tool calls, turn_end " + (turn || "never reached") + ")";
+  // On a failed run the cause leads: a model that wrote one opening line and
+  // then hit an error used to report only that line (2026-10-29 monitor:
+  // "I will run the read-only health sweep now."), hiding why it failed.
+  const facts = tools + " tool calls, turn_end " + (turn || "never reached");
+  const rc = Number(process.env.DSH_RC || 0);
+  const out = rc === 0
+    ? (final
+      || (errs.length ? "dsh error: " + errs.join("; ") : "")
+      || "dsh produced no final answer (" + facts + ")")
+    : [errs.length ? "dsh error: " + errs.join("; ") : "no dsh error event captured",
+        "(" + facts + ")",
+        final ? "last text: " + final : ""].filter(Boolean).join("\n");
   process.stdout.write(String(out).slice(0, 20000));
 ' "$DSH_LOG")"
 
