@@ -154,53 +154,6 @@ post_partial_evidence() {
   post_to_slack "RUN TERMINATED BEFORE COMPLETION ($DSH_PROFILE, SIGTERM): ${DSH_PARTIAL:-no session events captured}"
 }
 
-# TERM arrives on a deadline kill or an eviction; INT on a manual stop. Report
-# and leave with 143, which says the run was cut short, not that it failed.
-trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" 2>/dev/null; post_partial_evidence; record_run 1 "$DSH_PARTIAL"; exit 143' TERM INT
-
-dsh --profile "$DSH_PROFILE" --from-default-profile headless \
-    --patch /config/gpuai.patch.yml --json "$TASK" >"$DSH_LOG" 2>&1 &
-DSH_PID=$!
-tail -f -n +1 "$DSH_LOG" 2>/dev/null &
-DSH_TAIL=$!
-wait "$DSH_PID"
-DSH_RC=$?
-# Session ended on its own terms: disarm, so the caller's own Slack post is
-# never doubled by a late signal.
-trap - TERM INT
-kill "$DSH_TAIL" 2>/dev/null
-wait "$DSH_TAIL" 2>/dev/null
-DSH_FINAL="$(DSH_RC="$DSH_RC" node -e '
-  const fs = require("fs");
-  const raw = fs.readFileSync(process.argv[1], "utf8");
-  let final = "";
-  const errs = [];
-  let tools = 0;
-  let turn = "";
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let e;
-    try { e = JSON.parse(line); } catch { continue; }
-    if (e.type === "final") final = e.text || "";
-    else if (e.type === "tool_call") tools++;
-    else if (e.type === "error") errs.push(e.message || "unknown");
-    else if (e.type === "status" && e.phase === "turn_end") turn = JSON.stringify(e.reason || {});
-  }
-  // On a failed run the cause leads: a model that wrote one opening line and
-  // then hit an error used to report only that line (2026-10-29 monitor:
-  // "I will run the read-only health sweep now."), hiding why it failed.
-  const facts = tools + " tool calls, turn_end " + (turn || "never reached");
-  const rc = Number(process.env.DSH_RC || 0);
-  const out = rc === 0
-    ? (final
-      || (errs.length ? "dsh error: " + errs.join("; ") : "")
-      || "dsh produced no final answer (" + facts + ")")
-    : [errs.length ? "dsh error: " + errs.join("; ") : "no dsh error event captured",
-        "(" + facts + ")",
-        final ? "last text: " + final : ""].filter(Boolean).join("\n");
-  process.stdout.write(String(out).slice(0, 20000));
-' "$DSH_LOG")"
-
 # Durable run record. The Job controller deletes the pod on a deadline kill and
 # again at the backoff limit, so ttlSecondsAfterFinished preserves nothing and
 # post-incident forensics over cron logs dies with the pod. Append one compact
@@ -210,6 +163,15 @@ DSH_FINAL="$(DSH_RC="$DSH_RC" node -e '
 # on every upgrade, the same drift class this harness already bans elsewhere.
 # Best-effort by design -- a failed record must never fail or delay a run, and
 # a run whose API call hangs must still finish inside its Slack grace window.
+#
+# Keep this definition above the TERM trap, not merely above its normal call
+# site. A POSIX shell binds a function only once the definition statement has
+# executed, and the trap fires while the shell is still parked in
+# `wait "$DSH_PID"`, before anything below it has run. When this definition sat
+# below the wait, a deadline kill died with `record_run: not found` and left no
+# run-log entry: the record meant to survive the pod deletion was dropped by
+# the very handler written to make it survive (dash-reproduced 2026-10-30,
+# after the 00:40 remediate deadline kill left nothing to triage).
 record_run() {
   # $1: 1 when the run was cut short, 0 on a normal end. $2: excerpt already
   # deemed safe for the Slack report (this text is that same report's content).
@@ -324,6 +286,53 @@ record_run() {
     append(1);
   ' 2>&1 | sed "s/^/[run-record] /" || true
 }
+
+# TERM arrives on a deadline kill or an eviction; INT on a manual stop. Report
+# and leave with 143, which says the run was cut short, not that it failed.
+trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" 2>/dev/null; post_partial_evidence; record_run 1 "$DSH_PARTIAL"; exit 143' TERM INT
+
+dsh --profile "$DSH_PROFILE" --from-default-profile headless \
+    --patch /config/gpuai.patch.yml --json "$TASK" >"$DSH_LOG" 2>&1 &
+DSH_PID=$!
+tail -f -n +1 "$DSH_LOG" 2>/dev/null &
+DSH_TAIL=$!
+wait "$DSH_PID"
+DSH_RC=$?
+# Session ended on its own terms: disarm, so the caller's own Slack post is
+# never doubled by a late signal.
+trap - TERM INT
+kill "$DSH_TAIL" 2>/dev/null
+wait "$DSH_TAIL" 2>/dev/null
+DSH_FINAL="$(DSH_RC="$DSH_RC" node -e '
+  const fs = require("fs");
+  const raw = fs.readFileSync(process.argv[1], "utf8");
+  let final = "";
+  const errs = [];
+  let tools = 0;
+  let turn = "";
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    if (e.type === "final") final = e.text || "";
+    else if (e.type === "tool_call") tools++;
+    else if (e.type === "error") errs.push(e.message || "unknown");
+    else if (e.type === "status" && e.phase === "turn_end") turn = JSON.stringify(e.reason || {});
+  }
+  // On a failed run the cause leads: a model that wrote one opening line and
+  // then hit an error used to report only that line (2026-10-29 monitor:
+  // "I will run the read-only health sweep now."), hiding why it failed.
+  const facts = tools + " tool calls, turn_end " + (turn || "never reached");
+  const rc = Number(process.env.DSH_RC || 0);
+  const out = rc === 0
+    ? (final
+      || (errs.length ? "dsh error: " + errs.join("; ") : "")
+      || "dsh produced no final answer (" + facts + ")")
+    : [errs.length ? "dsh error: " + errs.join("; ") : "no dsh error event captured",
+        "(" + facts + ")",
+        final ? "last text: " + final : ""].filter(Boolean).join("\n");
+  process.stdout.write(String(out).slice(0, 20000));
+' "$DSH_LOG")"
 
 # Normal end of session: record before the caller spends the remaining grace on
 # its Slack post. rc distinguishes a clean pass from a handled failure.
