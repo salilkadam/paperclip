@@ -259,7 +259,18 @@ record_run() {
     // stale write with 409; re-read and re-append, bounded, so a contended
     // loop can never eat the Slack grace window. Without a readable
     // resourceVersion the patch stays blind -- the old best-effort behavior.
-    const append = (attempt) => api("GET", "/" + cm, undefined, undefined, (code, body) => {
+    // One shared budget: each API call may take 10s, so a third attempt
+    // could outlast the 60s termination grace (plus the 10s Slack post).
+    // No retry starts after 15s, keeping the worst case near 35s.
+    const started = Date.now();
+    const append = (attempt) => {
+      if (attempt > 1 && Date.now() - started > 15000) {
+        console.log("[run-record] out of time after " + (attempt - 1) + " attempt(s), giving up");
+        return;
+      }
+      appendOnce(attempt);
+    };
+    const appendOnce = (attempt) => api("GET", "/" + cm, undefined, undefined, (code, body) => {
       if (code === 404) {
         const cmBody = json({
           apiVersion: "v1", kind: "ConfigMap",
