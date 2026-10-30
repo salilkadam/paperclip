@@ -26,7 +26,10 @@ data:
     const tok = process.env.GIT_PAT;
 
     async function gh(path, opts) {
+      // Bounded: an unanswered GitHub call must fail fast and say so,
+      // not hold the run until its deadline.
       const r = await fetch(base + path, {
+        signal: AbortSignal.timeout(15000),
         method: (opts && opts.method) || "GET",
         headers: {
           authorization: "Bearer " + tok,
@@ -35,7 +38,7 @@ data:
           "x-github-api-version": "2022-11-28",
         },
         body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
-      });
+      }).catch((e) => { throw new Error(path + " -> " + e.message); });
       if (r.status === 404) return null;
       if (!r.ok) throw new Error(path + " -> HTTP " + r.status);
       return r.json();
@@ -154,7 +157,15 @@ data:
     }
 
     # Stage 1: zero-token scan. Quiet exit when nothing is decided.
-    DECISION="$(node /config/scan.js)"
+    # A failed scan (GitHub error or timeout) used to end the job under set -e
+    # with nothing posted or recorded (2026-10-29 approvals). Say why first.
+    SCAN_ERR="$(mktemp)"
+    if ! DECISION="$(node /config/scan.js 2>"$SCAN_ERR")"; then
+      cat "$SCAN_ERR" >&2
+      post_to_slack "APPROVALS SCAN FAILED (nothing was decided or deployed; the next run retries in 15 minutes): $(tail -c 600 "$SCAN_ERR")"
+      exit 1
+    fi
+    cat "$SCAN_ERR" >&2
     echo "decision: $DECISION"
     case "$DECISION" in
       *'"decision":null'*) exit 0 ;;

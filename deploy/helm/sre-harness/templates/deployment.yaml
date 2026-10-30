@@ -62,12 +62,8 @@ spec:
             - >-
               find {{ .Values.persistence.home }} -maxdepth 1 -name
               '.credentials*' -exec chmod 600 {} + 2>/dev/null; exit 0
-          {{- with .Values.image.pullSecrets }}
-          imagePullSecrets:
-            {{- range . }}
-            - name: {{ . }}
-            {{- end }}
-          {{- end }}
+          # Pull secrets are pod-level (spec.imagePullSecrets above); a
+          # container has no such field, and the API server ignored it here.
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
