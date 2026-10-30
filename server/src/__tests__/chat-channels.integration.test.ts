@@ -43576,7 +43576,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await service.shutdown();
   });
 
-  async function slackConfirmationFixture(label: string, prompt: string) {
+  async function slackConfirmationFixture(label: string, prompt: string, detailsMarkdown?: string) {
     const fixture = await seedCompany();
     const { callbacks, endpoint, runtime, service } = await configuredSlackEndpoint(fixture);
     const channel = makeThread({
@@ -43613,7 +43613,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           continuationPolicy: "wake_assignee",
           sourceRunId,
           title: "Confirm contact scope",
-          payload: { version: 1, prompt },
+          payload: { version: 1, prompt, ...(detailsMarkdown ? { detailsMarkdown } : {}) },
         },
         { agentId: fixture.assignedAgentId, runId: sourceRunId },
       );
@@ -43642,6 +43642,27 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       const sections = blocks.filter((block) => block.type === "section").map((block) => block.text?.text ?? "");
       expect(sections.every((text) => text.length <= 3000)).toBe(true);
       expect(sections.join("\n")).toContain("We still change nothing until the CLO ruling says it is allowed.");
+    } finally {
+      await service.shutdown();
+    }
+  });
+
+  it("shortens an over-long Slack card body with a note that points to the task", async () => {
+    const details = "Condition. ".repeat(600);
+    const { endpoint, service, providerRuntime, createConfirmation } = await slackConfirmationFixture("LONGBODY", "Approve the rule pack?", details);
+    try {
+      const interaction = await createConfirmation();
+      await service.processPendingPublications();
+      const [publication] = await readChatPublicationsByIdempotencyKey(`interaction:${interaction.id}:${endpoint.id}`);
+      expect(publication?.state).toBe("published");
+      const sent = [...providerRuntime.posts.map((p) => p.text), ...providerRuntime.edits.map((e) => e.text)]
+        .map((text) => { try { return JSON.parse(text) as { card?: Parameters<typeof cardToBlockKit>[0] }; } catch { return {}; } })
+        .find((message) => message.card);
+      if (!sent?.card) throw new Error("Expected a native card post");
+      const sections = (cardToBlockKit(sent.card) as Array<{ type: string; text?: { text: string } }>)
+        .filter((block) => block.type === "section").map((block) => block.text?.text ?? "");
+      expect(sections.every((text) => text.length <= 3000)).toBe(true);
+      expect(sections.join("\n")).toContain("Shortened to fit this chat.");
     } finally {
       await service.shutdown();
     }

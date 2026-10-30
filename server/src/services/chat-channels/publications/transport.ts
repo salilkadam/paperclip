@@ -123,9 +123,10 @@ async function editOrPostProviderPublication<T>(
 function safeCardForPublication(
   payload: SafeChatPublicationPayload,
   provider: ChatProvider,
+  fit: Parameters<typeof fitCardToProviderLimits>[2] = {},
 ) {
   if (!payload.card) return null;
-  const fitted = fitCardToProviderLimits(payload.card, provider);
+  const fitted = fitCardToProviderLimits(payload.card, provider, fit);
   const children = [];
   if (fitted.body) children.push(CardText(fitted.body));
   const actions = (fitted.actions ?? []).map((action) =>
@@ -214,7 +215,14 @@ function safeCardForPublication(
     }
     const endpointRuntime = await runtimeFor(input.endpoint);
     const thread = endpointRuntime.thread(input.conversation.externalThreadId);
-    const card = safeCardForPublication(input.payload, input.endpoint.provider);
+    const card = safeCardForPublication(input.payload, input.endpoint.provider, {
+      taskUrl: safeChatTaskUrl(getTaskBaseUrl(), input.publication.issueId),
+      onShortened: (parts) =>
+        logger.warn(
+          { endpointId: input.endpoint.id, publicationId: input.publication.id, provider: input.endpoint.provider, parts },
+          "chat card text exceeded the provider limit and was shortened; the card links to the task",
+        ),
+    });
     let attachments: Attachment[] = [];
     let files: FileUpload[] = [];
     let text = renderPublicationTransportText(input.payload);
