@@ -60,8 +60,7 @@ For a verified, self-contained external-chat request, the supplied task and wake
 context are the working context. Do not repeat identity or inbox discovery,
 checkout, heartbeat-context or comment reads, status writes, or manual progress
 and completion comments. Answer the current request directly and return one
-concise final response that starts with the answer itself, with no working notes
-or narration; a final response that opens with narration is not delivered. The harness persists that response and owns the turn's
+concise final response that starts with the answer itself, with no working notes or narration; a final response that opens with narration is not delivered. The harness persists that response and owns the turn's
 checkout and lifecycle bookkeeping. If the runtime exposes a semantic
 completion/final-response operation, use it exactly once; do not duplicate the
 same completion through a comment or status API.
