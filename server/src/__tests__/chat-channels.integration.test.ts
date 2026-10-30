@@ -43706,6 +43706,59 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     }
   });
 
+  it("creates Slack endpoints that follow their own threads without a fresh @mention", async () => {
+    const fixture = await seedCompany();
+    const context = createService(new FakeChatSdkRuntime(), fakeSlackFetch() as typeof globalThis.fetch, {});
+    try {
+      const endpoint = await context.service.create(
+        fixture.companyId,
+        { provider: "slack", assignedAgentId: fixture.assignedAgentId, name: "Thread follower" },
+        "owner-user",
+      );
+      expect(endpoint.requireAtMention).toBe(false);
+      expect((await context.service.get(endpoint.id)).requireAtMention).toBe(false);
+    } finally {
+      await context.service.shutdown();
+    }
+  });
+
+  it("with the default (no required mention) admits replies in the bot's thread and still ignores unaddressed channel messages", async () => {
+    const fixture = await seedCompany();
+    const { callbacks, endpoint, service } = await configuredSlackEndpoint(fixture);
+    try {
+      const thread = makeThread({ channelId: "C-FOLLOW", id: `slack:C-FOLLOW:${Date.now()}.1`, name: "follow" });
+      await deliverMessage({
+        callbacks, endpointId: endpoint.id, thread: thread.thread,
+        message: makeMessage({ id: `follow-root-${randomUUID()}`, text: "@maya did the scan run?", mentioned: true }),
+        trigger: "mention",
+      });
+      await qualifySetupRoundTrip(service, endpoint.id);
+      await service.test(endpoint.id, "owner-user");
+      const [conversation] = await readChatConversationsByEndpointId(endpoint.id);
+      if (!conversation) throw new Error("Expected the mentioned thread to start a conversation");
+      const replyText = `raise the queue limit ${randomUUID()}`;
+      await deliverMessage({
+        callbacks, endpointId: endpoint.id, thread: thread.thread,
+        message: makeMessage({ id: `follow-reply-${randomUUID()}`, text: replyText }),
+        trigger: "subscribed_message",
+      });
+      await expect(
+        db.select({ body: issueComments.body }).from(issueComments).where(eq(issueComments.issueId, conversation.issueId)),
+      ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ body: expect.stringContaining(replyText) })]));
+
+      const other = makeThread({ channelId: "C-FOLLOW", id: `slack:C-FOLLOW:${Date.now()}.9`, name: "chatter" });
+      const chatterId = `chatter-${randomUUID()}`;
+      await deliverMessage({
+        callbacks, endpointId: endpoint.id, thread: other.thread,
+        message: makeMessage({ id: chatterId, text: "lunch anyone?" }),
+        trigger: "unaddressed_message",
+      });
+      await expect(readChatConversationsByEndpointId(endpoint.id)).resolves.toHaveLength(1);
+    } finally {
+      await service.shutdown();
+    }
+  });
+
   it("replaces Telegram queued progress with its native confirmation and rejects late working progress", async () => {
     const fixture = await seedCompany();
     const { callbacks, endpoint, runtime, service } =

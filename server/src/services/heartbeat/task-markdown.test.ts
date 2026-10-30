@@ -8,6 +8,21 @@ const issue = {
 };
 
 describe("heartbeat task markdown rendering", () => {
+  it.each(["slack", "discord", "telegram", "microsoft-teams", "imessage-photon"])("tells %s chat runs to answer once, without narration, and keep waiting cards open", (provider) => {
+    const markdown = buildPaperclipTaskMarkdown({ issue, externalChatProvider: provider })!;
+    expect(markdown).toContain("Replying in this chat:");
+    expect(markdown).toContain("Make it only the answer");
+    expect(markdown).toContain("A response that opens with narration is not delivered.");
+    expect(markdown).toContain("Do not also post it as a task comment");
+    expect(markdown).toContain("Conditions belong in the card itself");
+    expect(markdown).toContain("While a card waits for an answer, leave the task in_review.");
+  });
+
+  it.each([null, "github", "speko"])("leaves reply guidance out for %s", (provider) => {
+    const markdown = buildPaperclipTaskMarkdown({ issue, externalChatProvider: provider }) ?? "";
+    expect(markdown).not.toContain("Replying in this chat:");
+  });
+
   it("returns null without a task or a nonempty wake comment", () => {
     expect(buildPaperclipTaskMarkdown({ issue: null })).toBeNull();
     expect(buildPaperclipTaskMarkdown({

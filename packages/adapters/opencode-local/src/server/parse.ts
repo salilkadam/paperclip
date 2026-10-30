@@ -26,7 +26,12 @@ export function parseOpenCodeJsonl(stdout: string) {
 /** Consume complete JSONL records once, retaining protocol accounting state. */
 export function createOpenCodeJsonlParser() {
   let sessionId: string | null = null;
-  const messages: string[] = [];
+  // Assistant text grouped by OpenCode message. A message whose text is
+  // followed by a tool call is working narration ("I need to check …"); the
+  // run's answer is the latest message whose text ends it.
+  const groups = new Map<string, { texts: string[]; partIds: string[]; toolAfterText: boolean; lastSeq: number }>();
+  const transcript: string[] = [];
+  let seq = 0;
   const errors: string[] = [];
   const toolErrors: string[] = [];
   const usage = {
@@ -55,7 +60,19 @@ export function createOpenCodeJsonlParser() {
       if (type === "text") {
         const part = parseObject(event.part);
         const text = asString(part.text, "").trim();
-        if (text) messages.push(text);
+        if (text) {
+          transcript.push(text);
+          const id = asString(part.messageID, "");
+          const group = groups.get(id) ?? { texts: [], partIds: [], toolAfterText: false, lastSeq: 0 };
+          // A re-sent part (same part id) replaces its earlier text.
+          const partId = asString(part.id, "");
+          const existing = partId ? group.partIds.indexOf(partId) : -1;
+          if (existing >= 0) group.texts[existing] = text;
+          else { group.texts.push(text); group.partIds.push(partId); }
+          group.toolAfterText = false;
+          group.lastSeq = ++seq;
+          groups.set(id, group);
+        }
         continue;
       }
 
@@ -78,6 +95,8 @@ export function createOpenCodeJsonlParser() {
 
       if (type === "tool_use") {
         const part = parseObject(event.part);
+        const group = groups.get(asString(part.messageID, ""));
+        if (group?.texts.length) group.toolAfterText = true;
         const state = parseObject(part.state);
         if (asString(state.status, "") === "error") {
           const text = asString(state.error, "").trim();
@@ -95,7 +114,9 @@ export function createOpenCodeJsonlParser() {
 
     return {
       sessionId,
-      summary: messages.join("\n\n").trim(),
+      // A run that ends on a tool call (timeout, abort, error) has no final
+      // answer; keep the whole transcript so the run still reports something.
+      summary: finalAnswer(groups) || transcript.join("\n\n").trim(),
       usage: { ...usage },
       usageReported,
       usageComplete: usageReported && !missingUsage,
@@ -104,6 +125,14 @@ export function createOpenCodeJsonlParser() {
       toolErrors,
     };
   };
+}
+
+function finalAnswer(groups: Map<string, { texts: string[]; partIds: string[]; toolAfterText: boolean; lastSeq: number }>): string {
+  let best: { texts: string[]; lastSeq: number } | null = null;
+  for (const group of groups.values()) {
+    if (!group.toolAfterText && (!best || group.lastSeq > best.lastSeq)) best = group;
+  }
+  return best ? best.texts.join("\n\n").trim() : "";
 }
 
 export function isOpenCodeUnknownSessionError(stdout: string, stderr: string): boolean {

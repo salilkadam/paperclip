@@ -1,6 +1,7 @@
 import { AGENT_CHAT_DIRECTIVE } from "../agent-conversations.js";
 import { publicChatTaskUrl } from "../chat-task-url.js";
 import { slackChatAgentGuidance } from "../connectors/slack/agent-guidance.js";
+import { chatReplyGuidance } from "../chat-reply-guidance.js";
 import type { ConversationConfirmationContext } from "../conversation-confirmation-context.js";
 import { TASK_QUESTION_GUIDANCE } from "../issue-question-context.js";
 
@@ -142,6 +143,10 @@ export function buildPaperclipTaskMarkdown(input: {
   }
   if (input.externalChatProvider === "slack") {
     lines.push(...slackChatAgentGuidance(input.nativeRunner === true, input.slackCommand));
+  }
+  // GitHub replies through task-scoped tools and voice has its own guidance.
+  if (input.externalChatProvider && input.externalChatProvider !== "github" && input.externalChatProvider !== "speko") {
+    lines.push(...chatReplyGuidance);
   }
   if (input.externalChatProvider && input.nativeRunner) {
     lines.push(

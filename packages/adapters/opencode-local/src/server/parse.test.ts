@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseOpenCodeJsonl, isOpenCodeUnknownSessionError } from "./parse.js";
 
@@ -67,6 +68,47 @@ describe("parseOpenCodeJsonl", () => {
     expect(parsed.summary).toBe("Recovered and completed the task");
     expect(parsed.errorMessage).toBeNull();
     expect(parsed.toolErrors).toEqual(["File not found: e2b-adapter-result.txt"]);
+  });
+
+  // Real OpenCode output from two chat runs whose answers never reached Slack:
+  // every step's narration was joined into the summary, so the response began
+  // "I need to check …" and Paperclip discarded it as narration.
+  it.each([
+    ["chat-answer-after-narration.jsonl", /^The scan ran this morning at 6:00 AM PT/],
+    ["chat-status-after-narration.jsonl", /^\*\*Status: researched and answered/],
+  ])("reports only the final answer message of %s", (fixture, start) => {
+    const stdout = readFileSync(new URL(`./__fixtures__/${fixture}`, import.meta.url), "utf8");
+    const parsed = parseOpenCodeJsonl(stdout);
+    expect(parsed.summary).toMatch(start);
+    expect(parsed.summary).not.toMatch(/^I need to/);
+    expect(parsed.summary).not.toContain("I need to check");
+  });
+
+  it("treats text followed by a tool call as narration, not the answer", () => {
+    const line = (type: string, part: Record<string, unknown>) => JSON.stringify({ type, sessionID: "s", part });
+    const stdout = [
+      line("text", { messageID: "m1", text: "Let me look." }),
+      line("tool_use", { messageID: "m1", state: { status: "completed" } }),
+      line("text", { messageID: "m2", text: "The answer." }),
+      line("step_finish", { messageID: "m2", reason: "stop" }),
+    ].join("\n");
+    expect(parseOpenCodeJsonl(stdout).summary).toBe("The answer.");
+    // Narration after the answer does not replace it.
+    expect(parseOpenCodeJsonl([stdout, line("text", { messageID: "m3", text: "Checking more." }), line("tool_use", { messageID: "m3", state: { status: "completed" } })].join("\n")).summary)
+      .toBe("The answer.");
+    // A run that ends on a tool call (timeout, abort) keeps its transcript, as before.
+    expect(parseOpenCodeJsonl([line("text", { messageID: "m1", text: "Let me look." }), line("tool_use", { messageID: "m1", state: { status: "completed" } })].join("\n")).summary)
+      .toBe("Let me look.");
+  });
+
+  it("replaces a re-sent text part instead of repeating it", () => {
+    const line = (type: string, part: Record<string, unknown>) => JSON.stringify({ type, sessionID: "s", part });
+    const stdout = [
+      line("text", { id: "p1", messageID: "m1", text: "The ans" }),
+      line("text", { id: "p1", messageID: "m1", text: "The answer." }),
+      line("step_finish", { messageID: "m1", reason: "stop" }),
+    ].join("\n");
+    expect(parseOpenCodeJsonl(stdout).summary).toBe("The answer.");
   });
 
   it("detects unknown session errors", () => {
