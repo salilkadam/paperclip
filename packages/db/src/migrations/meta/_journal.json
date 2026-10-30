@@ -2619,6 +2619,13 @@
       "when": 1792901080817,
       "tag": "0375_sad_captain_midlands",
       "breakpoints": true
+    },
+    {
+      "idx": 376,
+      "version": "7",
+      "when": 1793323571823,
+      "tag": "0376_activity_log_issue_probe_index",
+      "breakpoints": true
     }
   ]
 }

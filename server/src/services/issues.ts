@@ -2924,13 +2924,22 @@ function issueActivityLogExclusionCondition() {
   `;
 }
 
+// Both helpers read "the newest row matching a predicate" as a scalar
+// subquery. They must stay `ORDER BY created_at DESC LIMIT 1` and not
+// `MAX(created_at)`: an aggregate consumes every row of the group, so per
+// issue it reads the entire comment/activity history even though the newest
+// row is one index hop away, while the ordered `LIMIT 1` probe stops at the
+// first row that passes the filters. `created_at` is NOT NULL, so the two
+// shapes agree exactly, including the empty-group NULL.
 function issueLatestCommentAtExpr(companyId: string) {
   return sql<Date | null>`
     (
-      SELECT MAX(${issueComments.createdAt})
+      SELECT ${issueComments.createdAt}
       FROM ${issueComments}
       WHERE ${issueComments.issueId} = ${issues.id}
         AND ${issueComments.companyId} = ${companyId}
+      ORDER BY ${issueComments.createdAt} DESC
+      LIMIT 1
     )
   `;
 }
@@ -2938,12 +2947,14 @@ function issueLatestCommentAtExpr(companyId: string) {
 function issueLatestLogAtExpr(companyId: string) {
   return sql<Date | null>`
     (
-      SELECT MAX(${activityLog.createdAt})
+      SELECT ${activityLog.createdAt}
       FROM ${activityLog}
       WHERE ${activityLog.companyId} = ${companyId}
         AND ${activityLog.entityType} = 'issue'
         AND ${activityLog.entityId} = ${issues.id}::text
         AND (${issueActivityLogExclusionCondition()})
+      ORDER BY ${activityLog.createdAt} DESC
+      LIMIT 1
     )
   `;
 }

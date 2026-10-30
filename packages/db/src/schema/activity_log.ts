@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { pgTable, uuid, text, timestamp, jsonb, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
@@ -33,5 +34,15 @@ export const activityLog = pgTable(
     ),
     runIdIdx: index("activity_log_run_id_idx").on(table.runId),
     entityIdx: index("activity_log_entity_type_id_idx").on(table.entityType, table.entityId),
+    // Issue-list sort keys ask "newest activity row for this issue" as an
+    // ordered `ORDER BY created_at DESC LIMIT 1` probe per visible issue
+    // (see `issueLatestLogAtExpr` in the server). The generic
+    // (entity_type, entity_id) index cannot answer that without reading every
+    // row of the issue, so the probe degrades linearly with how much activity
+    // the issue has accumulated. This partial index lets the probe seek
+    // (company, entity) and stop at the first entry scanning newest-first.
+    entityIssueCreatedDescIdx: index("activity_log_entity_issue_created_idx")
+      .on(table.companyId, table.entityId, table.createdAt.desc())
+      .where(sql`${table.entityType} = 'issue'`),
   }),
 );
