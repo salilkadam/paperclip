@@ -20,6 +20,7 @@ import type {
 } from "@paperclipai/shared";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
 import { publicChatTaskUrl } from "./chat-task-url.js";
+import { cardTitleAndBody } from "./chat-channels/publications/card-limits.js";
 import {
   chatQuestionFormActionRecords,
   createChatQuestionFormDraft,
@@ -392,7 +393,7 @@ export async function enqueueIssueInteractionChatPublications(
               : interaction.kind === "request_confirmation"
                 ? "confirmation"
                 : "status",
-          title:
+          ...cardTitleAndBody(
             interaction.kind === "ask_user_questions"
               ? (question?.prompt ??
                 interaction.payload.title ??
@@ -401,7 +402,9 @@ export async function enqueueIssueInteractionChatPublications(
               : interaction.kind === "request_confirmation"
                 ? interaction.payload.prompt
                 : "Response needed in Paperclip",
-          body:
+            interaction.kind === "ask_user_questions"
+              ? (interaction.payload.title ?? interaction.title)
+              : interaction.title,
             interaction.kind === "ask_user_questions"
               ? [...new Set([
                   interaction.summary,
@@ -412,6 +415,7 @@ export async function enqueueIssueInteractionChatPublications(
               : interaction.kind === "request_confirmation"
                 ? (interaction.payload.detailsMarkdown ?? undefined)
                 : "Open the task in Paperclip to review and respond.",
+          ),
           actions,
         },
       },
