@@ -69,7 +69,7 @@ describe("fitCardToProviderLimits", () => {
       "slack",
     );
     expect(slackViolations(slackBlocks(fitted))).toEqual([]);
-    expect(fitted.body).toMatch(/full text is on the Paperclip task\)$/);
+    expect(fitted.body).toMatch(/The full text is on the Paperclip task\.$/);
     expect(fitted.actions?.[0]?.label.length).toBe(75);
   });
 
@@ -123,5 +123,34 @@ describe("cardTitleAndBody", () => {
     const out = cardTitleAndBody(REJECTED_PROMPT, null, undefined);
     expect(out.title).toBe("You asked us to record contact details of community post authors in the CRM.");
     expect(out.body).toBe(REJECTED_PROMPT);
+  });
+});
+
+describe("shortening backstop", () => {
+  const URL_ = "https://org.example/REL/issues/REL-3210";
+  it("links the task in the note and still fits Slack's section limit", () => {
+    const fitted = fitCardToProviderLimits(card({ title: "Approve?", body: "word ".repeat(1000) }), "slack", { taskUrl: URL_ });
+    expect(fitted.body?.endsWith(`Read the full text on the task: ${URL_}`)).toBe(true);
+    expect(slackViolations(slackBlocks(fitted))).toEqual([]);
+  });
+  it("reports what was shortened, and reports nothing when the card fits", () => {
+    const seen: string[][] = [];
+    fitCardToProviderLimits(
+      card({ title: "Approve?", body: "word ".repeat(1000), actions: [{ type: "callback", actionId: "a", label: "x".repeat(90) }] }),
+      "slack",
+      { onShortened: (parts) => seen.push(parts) },
+    );
+    fitCardToProviderLimits(card({ title: "Approve?", body: "short" }), "slack", { onShortened: (parts) => seen.push(parts) });
+    fitCardToProviderLimits(card(), "slack", { onShortened: (parts) => seen.push(parts) });
+    expect(seen).toEqual([["body", "label"]]);
+  });
+});
+
+describe("note size guard", () => {
+  it("drops the link when it would take more than half the limit", () => {
+    const longUrl = "https://org.example/" + "a".repeat(1600);
+    const fitted = fitCardToProviderLimits(card({ title: "Approve?", body: "word ".repeat(1000) }), "slack", { taskUrl: longUrl });
+    expect(fitted.body).toMatch(/The full text is on the Paperclip task\.$/);
+    expect(fitted.body?.length).toBeLessThanOrEqual(3000);
   });
 });

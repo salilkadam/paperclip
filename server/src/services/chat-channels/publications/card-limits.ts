@@ -20,7 +20,14 @@ const CARD_LIMITS: Partial<Record<ChatProvider, CardLimits>> = {
 };
 
 const ELLIPSIS = "…";
-const BODY_TRUNCATION_NOTE = "\n\n… (shortened; the full text is on the Paperclip task)";
+function bodyTruncationNote(taskUrl: string | null | undefined): string {
+  return taskUrl
+    ? `\n\n… Shortened to fit this chat. Read the full text on the task: ${taskUrl}`
+    : "\n\n… Shortened to fit this chat. The full text is on the Paperclip task.";
+}
+
+/** What had to be shortened to fit a provider; empty when nothing was lost. */
+export type CardShortening = Array<"body" | "label">;
 
 /** Shorten to at most `max` code units, preferring a word boundary. */
 export function shortenText(value: string, max: number): string {
@@ -67,6 +74,7 @@ export function cardTitleAndBody(
 export function fitCardToProviderLimits(
   card: SafeExternalChatCard,
   provider: ChatProvider,
+  options: { taskUrl?: string | null; onShortened?: (parts: CardShortening) => void } = {},
 ): SafeExternalChatCard {
   const limits = CARD_LIMITS[provider];
   if (!limits) return card;
@@ -76,14 +84,21 @@ export function fitCardToProviderLimits(
     body = body ? `${card.title}\n\n${body}` : card.title;
     title = headingFrom(card.title, limits.title);
   }
+  const shortened: CardShortening = [];
   if (body && body.length > limits.body) {
-    body = shortenText(body, limits.body - BODY_TRUNCATION_NOTE.length) + BODY_TRUNCATION_NOTE;
+    // Keep most of the limit for the text itself; a provider with a small
+    // limit gets the short note rather than a link that crowds out the text.
+    const linked = bodyTruncationNote(options.taskUrl);
+    const note = limits.body - linked.length >= limits.body / 2 ? linked : bodyTruncationNote(null);
+    body = shortenText(body, limits.body - note.length) + note;
+    shortened.push("body");
   }
-  const actions = card.actions?.map((action) =>
-    action.label.length > limits.label
-      ? { ...action, label: shortenText(action.label, limits.label) }
-      : action,
-  );
+  const actions = card.actions?.map((action) => {
+    if (action.label.length <= limits.label) return action;
+    if (!shortened.includes("label")) shortened.push("label"); // once, however many labels
+    return { ...action, label: shortenText(action.label, limits.label) };
+  });
+  if (shortened.length) options.onShortened?.(shortened);
   return {
     ...card,
     title,
