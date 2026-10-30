@@ -132,6 +132,76 @@ Consequences:
 
 > **Re-seeding Board managed secrets:** after a Case-C rebuild, read the needed values from `bionic-org-api-keys` (`kubectl -n bionicorg get secret bionic-org-api-keys -o go-template=...`) and enter them once in the Board UI — the UI encrypts them into the DB under the master key; the env wiring covers CLI-level fallback.
 
+## Chat channels (Slack and others): how answers reach the person
+
+Built into the platform since 2026-10-30, so every company and every new agent
+gets it with no per-agent setup. Learned from Reliora's CMO, whose Slack
+answers were lost (REL-3145, REL-3210).
+
+**How delivery works**
+
+- A chat message creates or wakes a task. The bot posts a placeholder
+  ("<Agent> is working…").
+- Paperclip delivers the run's **final response** to the thread. That
+  response is the adapter's summary. A summary that opens with narration
+  ("I need to …", "Let me …", see `NARRATION_OPENERS` in
+  `server/src/services/heartbeat-run-summary.ts`) is dropped, and the thread
+  then shows "no final response to show yet".
+- `opencode_local` reports only the final answer message as the summary
+  (`packages/adapters/opencode-local/src/server/parse.ts`). Before the fix it
+  joined every step's narration, so the answer was dropped.
+- When a run creates a question or confirmation card, **the card is that
+  run's chat-visible result**, and the run's own comments stay internal.
+  Setting the task `done` in the same run expires the card, and the person
+  sees nothing.
+
+**What agents are told.** These rules are injected on every chat turn by
+`server/src/services/chat-reply-guidance.ts`. They apply to every chat
+provider except GitHub (which replies through task tools) and voice:
+
+- Answer once, in the final response, with no working notes.
+- Don't repeat the answer as a comment.
+- Board cards: summary first, every condition in the card itself, about
+  1,200 characters, full detail in a named task document.
+- Keep a waiting task `in_review`.
+
+The `paperclip` and `board-plain-language` skills carry the same board rules
+for non-chat approvals.
+
+**Cards and provider limits.**
+`server/src/services/chat-channels/publications/card-limits.ts`:
+
+- A prompt longer than 160 characters moves into the card body, so no words
+  are lost.
+- At send time, cards are fitted to each provider's limits. Slack allows a
+  150-character header, 3,000-character sections and 75-character buttons;
+  Discord allows 256, 4,096 and 80.
+- A body that is still too long is shortened with a link to the task, and
+  `logger.warn` records it.
+- A Slack `invalid_blocks` rejection falls back to plain text with the task
+  link.
+
+**Slack mentions.** New Slack endpoints default to `requireAtMention: false`.
+The bot then answers replies in threads it has joined without a fresh
+@-mention. Top-level channel messages that don't address it are still
+ignored. An operator can still require mentions per endpoint.
+
+**Diagnosing a "silent" bot**
+
+```bash
+# was the message admitted or filtered? did a publication fail?
+GET /api/chat-endpoints/<endpointId>/activity        # delivery filtered / publication failed + Slack error
+GET /api/issues/<issueId>/chat-binding               # publicationState: published | failed
+GET /api/issues/<issueId>/runs                       # run status; resultJson.presentationDecision.reasonCodes
+#   external_chat_final_response_unavailable → the adapter gave no usable final answer
+POST /api/chat-endpoints/<endpointId>/publications/<id>/replay   # resend a failed publication
+#   409 chat_terminal_interaction_publication_not_replayable → its card was already answered or expired
+```
+
+`deploy/scripts/agents-retire-chat-reply-block.mjs` removes the per-agent
+stopgap block that predated this fix (`--check` confirms it's gone in every
+company). A fresh instance never has that block.
+
 ## Kubernetes Resources Created
 
 | Resource | Name | Purpose |

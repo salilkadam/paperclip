@@ -43,11 +43,23 @@ board.
 - No hype, no filler ("I hope this helps", "As an AI"), no walls of bullets.
   Under about 120 words for a card or note; put detail in the task, not the card.
 
+## Summary first, conditions always
+
+- The card is a summary; a task document is the record. Put rule packs,
+  research and drafts in a task document and name it in the card.
+- Every condition, limit or risk the board accepts by saying yes goes in the
+  card itself. When space is short, cut the explanation, never a condition.
+- Chat shows at most about 3,000 characters of a card and then shortens it
+  with a link to the task. Aim well under that (about 1,200).
+- While a card waits for an answer, keep the task `in_review`. Closing it
+  expires the card and the board never sees the question.
+
 ## Check before you send
 
 - Can someone answer it with yes or no without opening anything else?
 - Is the first sentence the question?
 - Did you say what happens on yes **and** on no?
+- Is every condition in the card, not only in a document?
 - Is every id, tool name and internal URL either gone or on the last line?
 
 If any answer is no, rewrite it before you send.

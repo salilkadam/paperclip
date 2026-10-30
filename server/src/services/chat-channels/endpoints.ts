@@ -347,7 +347,11 @@ function providerSetupState(
         // destination toggle. Keep it closed until the operator explicitly
         // enables that surface, even when this process is running against a
         // database created before the column default was hardened.
-        requireAtMention: input.provider === "slack",
+        // A Slack bot answers replies in threads it already joined without a
+        // fresh @mention, like a person in the thread. Unaddressed top-level
+        // channel messages are still ignored (activation needs an address or
+        // an existing conversation). Operators can still require mentions.
+        requireAtMention: false,
         allowGroupChats: !["microsoft-teams", "speko"].includes(input.provider),
         allowUnlinkedPeople: !["slack", "imessage-photon", "speko"].includes(input.provider),
         capabilities: CAPABILITIES[input.provider],
