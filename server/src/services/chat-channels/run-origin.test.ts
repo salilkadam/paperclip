@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agents, chatActions, chatConversations, chatDeliveries, chatEndpoints, chatMessageLinks, companies, createDb, heartbeatRuns, issueComments, issues, runIdentityContexts, toolApplications, toolConnections } from "@paperclipai/db";
+import { agents, chatActions, chatConversations, chatDeliveries, chatEndpointResources, chatEndpoints, chatExternalPrincipals, chatIdentityLinks, chatMessageLinks, companies, companyMemberships, createDb, heartbeatRuns, issueComments, issues, runIdentityContexts, toolApplications, toolConnections } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
 import { boundRunIssueId, boundRunIssueIdSql } from "../run-task-binding.js";
 import { chatRunSourceMessageId } from "./run-origin.js";
@@ -301,6 +301,78 @@ const support = await getEmbeddedPostgresTestSupport();
     await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({
       status: 403, message: "Private Slack research in an originating task cannot be delivered from a derived task",
     });
+  });
+
+  // Board-channel trust: an inbound Slack comment from the run's responsible user
+  // passes only while, read at check time, its delivery's principal is linked to
+  // that user, who is an active owner/admin, in a board-trusted, enabled channel
+  // on an active endpoint (doc/plans/2026-10-31-board-channel-trust.md).
+  async function boardTrustedInbound(f: Awaited<ReturnType<typeof derivedFixture>>, options: { provider?: "slack" | "github"; role?: string } = {}) {
+    const provider = options.provider ?? "slack";
+    const [application] = await db.insert(toolApplications).values({ companyId: f.company.id, name: `${provider}-${randomUUID()}`, type: "chat" }).returning();
+    const [connection] = await db.insert(toolConnections).values({ companyId: f.company.id, applicationId: application.id, uid: randomUUID(), name: provider, transport: "chat_sdk", connectionPurpose: "channel", enabled: true, status: "active" }).returning();
+    const [endpoint] = await db.insert(chatEndpoints).values({ companyId: f.company.id, connectionId: connection.id, provider, publicId: randomUUID(), assignedAgentId: f.creator.id, status: "active", providerAccountId: `T-${randomUUID()}`, botExternalId: `B-${randomUUID()}` }).returning();
+    const channelId = `C${randomUUID().slice(0, 8).toUpperCase()}`;
+    const [resource] = await db.insert(chatEndpointResources).values({ companyId: f.company.id, endpointId: endpoint.id, type: provider === "slack" ? "channel" : "repository", providerResourceId: channelId, label: "#board", enabled: true, boardTrusted: true }).returning();
+    const [conversation] = await db.insert(chatConversations).values({ companyId: f.company.id, endpointId: endpoint.id, resourceId: resource.id, issueId: f.originTask.id, externalConversationId: `${provider}:${channelId}`, externalThreadId: `${provider}:${channelId}:1.1`, externalLabel: "#board", boardTrusted: true }).returning();
+    const [principal] = await db.insert(chatExternalPrincipals).values({ companyId: f.company.id, provider, providerAccountId: endpoint.providerAccountId!, externalId: `U${randomUUID().slice(0, 8).toUpperCase()}` }).returning();
+    const [link] = await db.insert(chatIdentityLinks).values({ companyId: f.company.id, endpointId: endpoint.id, principalId: principal.id, paperclipUserId: "requester", status: "linked", confirmedAt: new Date() }).returning();
+    const [membership] = await db.insert(companyMemberships).values({ companyId: f.company.id, principalType: "user", principalId: "requester", status: "active", membershipRole: options.role ?? "admin" }).returning();
+    const [comment] = await db.insert(issueComments).values({ companyId: f.company.id, issueId: f.originTask.id, authorType: "user", authorUserId: "requester", body: "Board instruction" }).returning();
+    const [delivery] = await db.insert(chatDeliveries).values({
+      companyId: f.company.id, endpointId: endpoint.id, conversationId: conversation.id, principalId: principal.id, providerEventId: randomUUID(), deduplicationKey: randomUUID(),
+      eventKind: "message", state: "processed", normalizedEvent: {},
+    }).returning();
+    const [messageLink] = await db.insert(chatMessageLinks).values({ companyId: f.company.id, endpointId: endpoint.id, conversationId: conversation.id, deliveryId: delivery.id, commentId: comment.id, providerMessageId: randomUUID(), direction: "inbound" }).returning();
+    return { endpoint, resource, conversation, principal, link, membership, comment, delivery, messageLink };
+  }
+
+  it.each(["message", "wake"])("lets a board-trusted Slack comment by the responsible owner/admin carry into a derived task (%s)", async where => {
+    const f = await derivedFixture();
+    const t = await boardTrustedInbound(f);
+    if (where === "message") await db.update(runIdentityContexts).set({ messageId: t.comment.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+    else await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentIds: [t.comment.id] } }).where(eq(heartbeatRuns.id, f.originRun.id));
+    expect(await chatRunSourceMessageId(db, f.run, slackOnly)).toBeNull();
+    // The GitHub guest check shares isDirectBoardComment and passes the same chain.
+    await expect(githubGuestBotConnectionForSession(db, { companyId: f.company.id, agentId: f.assignee.id, runId: f.run.id, issueId: f.derivedTask.id })).resolves.toBeNull();
+  });
+
+  it.each([
+    "trust-off", "role-member", "role-viewer", "role-operator", "membership-suspended", "other-user-link", "link-revoked",
+    "channel-disabled", "endpoint-inactive", "comment-deleted", "no-delivery", "delivery-principal-missing", "github-resource",
+  ] as const)("refuses a board-trusted chain when %s, read at check time (message and wake)", async fault => {
+    for (const where of ["message", "wake"] as const) {
+      const f = await derivedFixture();
+      const t = await boardTrustedInbound(f, fault === "github-resource" ? { provider: "github" } : {});
+      if (where === "message") await db.update(runIdentityContexts).set({ messageId: t.comment.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+      else await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentId: t.comment.id } }).where(eq(heartbeatRuns.id, f.originRun.id));
+      if (fault !== "github-resource") expect(await chatRunSourceMessageId(db, f.run, slackOnly)).toBeNull();
+      if (fault === "trust-off") await db.update(chatEndpointResources).set({ boardTrusted: false }).where(eq(chatEndpointResources.id, t.resource.id));
+      if (fault === "role-member") await db.update(companyMemberships).set({ membershipRole: "member" }).where(eq(companyMemberships.id, t.membership.id));
+      if (fault === "role-viewer") await db.update(companyMemberships).set({ membershipRole: "viewer" }).where(eq(companyMemberships.id, t.membership.id));
+      if (fault === "role-operator") await db.update(companyMemberships).set({ membershipRole: "operator" }).where(eq(companyMemberships.id, t.membership.id));
+      if (fault === "membership-suspended") await db.update(companyMemberships).set({ status: "suspended" }).where(eq(companyMemberships.id, t.membership.id));
+      if (fault === "other-user-link") await db.update(chatIdentityLinks).set({ paperclipUserId: "someone-else" }).where(eq(chatIdentityLinks.id, t.link.id));
+      if (fault === "link-revoked") await db.update(chatIdentityLinks).set({ status: "revoked", revokedAt: new Date() }).where(eq(chatIdentityLinks.id, t.link.id));
+      if (fault === "channel-disabled") await db.update(chatEndpointResources).set({ enabled: false }).where(eq(chatEndpointResources.id, t.resource.id));
+      if (fault === "endpoint-inactive") await db.update(chatEndpoints).set({ status: "paused" }).where(eq(chatEndpoints.id, t.endpoint.id));
+      if (fault === "comment-deleted") await db.update(issueComments).set({ deletedAt: new Date() }).where(eq(issueComments.id, t.comment.id));
+      if (fault === "no-delivery") await db.update(chatMessageLinks).set({ deliveryId: null }).where(eq(chatMessageLinks.id, t.messageLink.id));
+      if (fault === "delivery-principal-missing") await db.update(chatDeliveries).set({ principalId: null }).where(eq(chatDeliveries.id, t.delivery.id));
+      await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({
+        status: 403, details: { code: where === "message" ? "chat_provenance_foreign_message" : "chat_provenance_foreign_wake" },
+      });
+    }
+  });
+
+  it("keeps refusing a GitHub guest comment even when its resource row is marked board-trusted", async () => {
+    const f = await derivedFixture();
+    const { comment, endpoint } = await inboundComment(f, { issueId: f.originTask.id, provider: "github", guest: true, agentId: f.creator.id });
+    const [resource] = await db.insert(chatEndpointResources).values({ companyId: f.company.id, endpointId: endpoint.id, type: "repository", providerResourceId: `repo-${randomUUID()}`, label: "repo", enabled: true, boardTrusted: true }).returning();
+    await db.update(chatConversations).set({ resourceId: resource.id, boardTrusted: true }).where(eq(chatConversations.endpointId, endpoint.id));
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentId: comment.id } }).where(eq(heartbeatRuns.id, f.originRun.id));
+    await expect(githubGuestBotConnectionForSession(db, { companyId: f.company.id, agentId: f.assignee.id, runId: f.run.id, issueId: f.derivedTask.id }))
+      .rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
   });
 
   it.each(["message", "cycle", "requester", "pending", "missing", "foreign-run", "unbound"])(
