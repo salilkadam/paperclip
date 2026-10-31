@@ -96,7 +96,7 @@ companies="$(jq '[.[] | select((.status // "active") != "archived")]' <<<"$compa
 # All live Slack endpoints across visible companies, once.
 endpoints='[]'
 for cid in $(jq -r '.[].id' <<<"$companies"); do
-  page="$(api GET "/companies/$cid/chat-endpoints" | jq '(.endpoints // .)')"
+  page="$(api GET "/companies/$cid/chat-endpoints" | jq 'if type=="array" then . else .endpoints end')"
   endpoints="$(jq -s '.[0] + [.[1][] | select(.provider=="slack" and (.status|IN("archived","revoked")|not))]' <<<"$endpoints $page")"
 done
 
