@@ -103,6 +103,11 @@ export const updateChatEndpointSchema = z
     requireAtMention: z.boolean().optional(),
     allowGroupChats: z.boolean().optional(),
     allowUnlinkedPeople: z.boolean().optional(),
+    externalExecutionPolicy: z.enum(["restricted", "agent"]).optional(),
+    boardChannelTrust: z
+      .object({ resourceId: z.string().uuid(), trusted: z.boolean() })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {

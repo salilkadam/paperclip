@@ -24,6 +24,7 @@ import type { Db } from "@paperclipai/db";
 
 import {
   agents,
+  chatEndpointResources,
   chatEndpoints,
   toolApplications,
   toolConnections,
@@ -59,6 +60,8 @@ type ChatEndpointsOptions = {
   getPublicBaseUrl: () => string | null;
   getWebhookPublicBaseUrl: () => string | null;
   slackRegistration: Pick<ReturnType<typeof slackChatRegistrationService>, "cleanup" | "managerGrants">;
+  /** Live Slack conversations.info for the board-trust allowlist; null when the bot cannot see it. */
+  inspectSlackBoardChannel: (endpoint: EndpointRow, channelId: string) => Promise<Record<string, unknown> | null>;
 };
 export function createChatEndpoints(db: Db, options: ChatEndpointsOptions) {
   const { endpointRecord, CAPABILITIES, PROVIDER_LABELS, withCredentialMutationLease, getPublicBaseUrl, getWebhookPublicBaseUrl } = options;
@@ -387,7 +390,13 @@ function providerSetupState(
   ) {
     const initial = await endpointRecord(endpointId);
     if (!initial) throw notFound("Chat endpoint not found");
-    if (initial.endpoint.provider === "agentmail" && Object.keys(input).some((key) => key !== "executionDefaults")) throw badRequest("Use the email inbox API for AgentMail");
+    // The database forces AgentMail endpoints to the agent policy; restricted is
+    // rejected here because the shared validator cannot see the provider.
+    if (initial.endpoint.provider === "agentmail" && input.externalExecutionPolicy === "restricted")
+      throw unprocessable("AgentMail inboxes always use the agent execution policy");
+    if (initial.endpoint.provider === "agentmail" && Object.keys(input).some((key) => key !== "executionDefaults" && key !== "externalExecutionPolicy")) throw badRequest("Use the email inbox API for AgentMail");
+    if (input.boardChannelTrust && initial.endpoint.provider !== "slack")
+      throw unprocessable("Board-trusted channels are only supported for Slack connections");
     await withCredentialMutationLease(
       initial.endpoint,
       async (credentialLease) => {
@@ -446,8 +455,51 @@ function providerSetupState(
           values.allowGroupChats = input.allowGroupChats;
         if (input.allowUnlinkedPeople !== undefined)
           values.allowUnlinkedPeople = input.allowUnlinkedPeople;
+        if (input.externalExecutionPolicy !== undefined)
+          values.externalExecutionPolicy = input.externalExecutionPolicy;
+        const trust = input.boardChannelTrust;
+        let trustChannelId: string | null = null;
+        if (trust) {
+          const [resource] = await db.select().from(chatEndpointResources).where(and(
+            eq(chatEndpointResources.companyId, existing.endpoint.companyId),
+            eq(chatEndpointResources.endpointId, endpointId),
+            eq(chatEndpointResources.id, trust.resourceId),
+          ));
+          if (!resource) throw notFound("Channel not found on this connection");
+          trustChannelId = resource.providerResourceId;
+          if (trust.trusted) {
+            if (resource.type !== "channel") throw unprocessable("Only Slack channels can be board-trusted");
+            // Slack's own answer, read now: private, not Slack Connect, not a DM.
+            const channel = await options.inspectSlackBoardChannel(existing.endpoint, resource.providerResourceId);
+            if (!channel) throw unprocessable("The bot cannot see this channel; invite it first");
+            if (channel.directConversation === true) throw unprocessable("Direct and group messages cannot be board-trusted");
+            if (channel.private !== true) throw unprocessable("Only private channels can be board-trusted");
+            if (channel.extShared === true || channel.pendingExtShared === true)
+              throw unprocessable("Slack Connect (shared) channels cannot be board-trusted");
+          }
+        }
         await db.transaction(async (tx) => {
           await credentialLease.assertOwned(tx);
+          if (trust && trustChannelId !== null) {
+            if (trust.trusted) {
+              // One trusted bot per channel per company; the partial unique
+              // index enforces the same rule under concurrency.
+              const [other] = await tx.select({ id: chatEndpointResources.id }).from(chatEndpointResources).where(and(
+                eq(chatEndpointResources.companyId, existing.endpoint.companyId),
+                eq(chatEndpointResources.providerResourceId, trustChannelId),
+                eq(chatEndpointResources.boardTrusted, true),
+                ne(chatEndpointResources.id, trust.resourceId),
+              )).limit(1);
+              if (other) throw conflict("Another connection is already the board-trusted bot for this channel", { code: "chat_board_trust_taken" });
+            }
+            await tx.update(chatEndpointResources)
+              .set({ boardTrusted: trust.trusted, updatedAt: new Date() })
+              .where(and(
+                eq(chatEndpointResources.companyId, existing.endpoint.companyId),
+                eq(chatEndpointResources.endpointId, endpointId),
+                eq(chatEndpointResources.id, trust.resourceId),
+              ));
+          }
           if (input.executionDefaults !== undefined) {
             await assertChatExecutionDefaultsAccess(db, {
               companyId: existing.endpoint.companyId,
@@ -468,13 +520,30 @@ function providerSetupState(
             action: "chat_endpoint.updated",
             entityType: "tool_connection",
             entityId: existing.endpoint.connectionId,
-            details: { endpointId, fields: Object.keys(input) },
+            details: {
+              endpointId,
+              fields: Object.keys(input),
+              ...(input.externalExecutionPolicy !== undefined ? { externalExecutionPolicy: input.externalExecutionPolicy } : {}),
+              ...(trust ? { boardChannelTrust: { resourceId: trust.resourceId, trusted: trust.trusted } } : {}),
+            },
           });
           await credentialLease.assertOwned(tx);
+        }).catch((error: unknown) => {
+          if (isBoardTrustUniqueViolation(error))
+            throw conflict("Another connection is already the board-trusted bot for this channel", { code: "chat_board_trust_taken" });
+          throw error;
         });
       },
     );
     return get(endpointId);
+  }
+  function isBoardTrustUniqueViolation(error: unknown): boolean {
+    for (let current = error, depth = 0; current && typeof current === "object" && depth < 4; depth += 1) {
+      const record = current as { code?: unknown; constraint?: unknown; constraint_name?: unknown; cause?: unknown };
+      if (record.code === "23505" && [record.constraint, record.constraint_name].includes("chat_endpoint_resources_board_trusted_uq")) return true;
+      current = record.cause;
+    }
+    return false;
   }
   return { list, get, create, update };
 }

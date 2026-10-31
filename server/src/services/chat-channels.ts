@@ -68,6 +68,7 @@ import { createTelegramCommands, telegramInboundControls, telegramGuidanceRespon
 import { createTeamsFileDelivery } from "./chat-channels/microsoft-teams/file-delivery.js";
 import { createGitHubSetupSecret } from "./chat-channels/github/setup-secret.js";
 import { createSlackInventory } from "./chat-channels/slack/inventory.js";
+import { getSlackBotChannel } from "./chat-provider-inventory.js";
 import { BOARD_NOTICE_NOT_LINKED, BOARD_NOTICE_NOT_PICKED_UP, boardTrustedChannel, isBoardTrustedMessage, userHoldsBoardTrustRole } from "./chat-channels/board-trust.js";
 import { slackPlainHumanPost, slackPlainHumanTopLevelPost } from "./chat-channels/slack/messages.js";
 
@@ -836,6 +837,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     endpointRecord, CAPABILITIES, PROVIDER_LABELS, withCredentialMutationLease,
     getPublicBaseUrl, getWebhookPublicBaseUrl,
     get slackRegistration() { return slackRegistration; },
+    inspectSlackBoardChannel: async (endpoint, channelId) => {
+      const credentials = await resolveCredentials(endpoint);
+      const channel = await getSlackBotChannel({ botToken: credentials.botToken, channelId: channelId.replace(/^slack:/, ""), fetch: fetchImpl });
+      return channel?.metadata ?? null;
+    },
   });
   const { generateSetupSecret } = createGitHubSetupSecret(db, {
     endpointRecord, withCredentialMutationLease, resolveCredentials, persistCredentials,
