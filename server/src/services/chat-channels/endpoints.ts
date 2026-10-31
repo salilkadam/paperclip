@@ -395,6 +395,11 @@ function providerSetupState(
     if (initial.endpoint.provider === "agentmail" && input.externalExecutionPolicy === "restricted")
       throw unprocessable("AgentMail inboxes always use the agent execution policy");
     if (initial.endpoint.provider === "agentmail" && Object.keys(input).some((key) => key !== "executionDefaults" && key !== "externalExecutionPolicy")) throw badRequest("Use the email inbox API for AgentMail");
+    // `agent` lifts the external execution restriction only for board-trusted
+    // Slack conversations and AgentMail; on any other provider it would be a
+    // setting that silently does nothing.
+    if (input.externalExecutionPolicy === "agent" && initial.endpoint.provider !== "slack" && initial.endpoint.provider !== "agentmail")
+      throw unprocessable("The agent execution policy only applies to Slack connections (board-trusted channels) and AgentMail inboxes");
     if (input.boardChannelTrust && initial.endpoint.provider !== "slack")
       throw unprocessable("Board-trusted channels are only supported for Slack connections");
     await withCredentialMutationLease(
