@@ -43647,6 +43647,36 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     }
   });
 
+  // 151-160 characters: under the stored-title limit (160), so the card builder
+  // keeps it as the title and only the send-time fit protects Slack's 150 header.
+  const NEAR_LIMIT_SLACK_PROMPT =
+    "Approve: Schedule social post on “Reliora Inc” (linkedin-page) for Fri 15 Jan 2027, 09:00 (PST) with the launch image, the tagged link and both hashtags?";
+
+  it("fits a Slack confirmation title between 151 and 160 characters at send time, keeping the whole prompt", async () => {
+    expect(NEAR_LIMIT_SLACK_PROMPT.length).toBeGreaterThan(150);
+    expect(NEAR_LIMIT_SLACK_PROMPT.length).toBeLessThanOrEqual(160);
+    const { endpoint, service, providerRuntime, createConfirmation } = await slackConfirmationFixture("NEAR", NEAR_LIMIT_SLACK_PROMPT);
+    try {
+      const interaction = await createConfirmation();
+      await service.processPendingPublications();
+      const [publication] = await readChatPublicationsByIdempotencyKey(`interaction:${interaction.id}:${endpoint.id}`);
+      expect(publication?.state).toBe("published");
+      // The stored card still carries the full prompt as its title; the fit happens in transport.
+      expect(publication?.payload.card?.title).toBe(NEAR_LIMIT_SLACK_PROMPT);
+      const sent = [...providerRuntime.posts.map((p) => p.text), ...providerRuntime.edits.map((e) => e.text)]
+        .map((text) => { try { return JSON.parse(text) as { card?: Parameters<typeof cardToBlockKit>[0] }; } catch { return {}; } })
+        .find((message) => message.card);
+      if (!sent?.card) throw new Error("Expected a native card post");
+      const blocks = cardToBlockKit(sent.card) as Array<{ type: string; text?: { text: string } }>;
+      const header = blocks.find((block) => block.type === "header");
+      expect(header?.text?.text.length).toBeLessThanOrEqual(150);
+      const sections = blocks.filter((block) => block.type === "section").map((block) => block.text?.text ?? "");
+      expect(sections.join("\n")).toContain(NEAR_LIMIT_SLACK_PROMPT);
+    } finally {
+      await service.shutdown();
+    }
+  });
+
   it("shortens an over-long Slack card body with a note that points to the task", async () => {
     const details = "Condition. ".repeat(600);
     const { endpoint, service, providerRuntime, createConfirmation } = await slackConfirmationFixture("LONGBODY", "Approve the rule pack?", details);
