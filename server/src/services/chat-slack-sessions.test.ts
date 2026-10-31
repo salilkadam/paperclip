@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  parseSlackSessionThreadId,
   parseSlackSessionStop,
   setSlackSessionStatus,
   slackSessionStatusForPublication,
@@ -178,5 +179,38 @@ describe("Slack agent sessions", () => {
       }),
     ).rejects.toThrow("Invalid Slack session");
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a base-stream destination without a thread timestamp before network access", async () => {
+    // Slack direct-message and slash-command lanes legitimately bind to
+    // `slack:<channel>:` with an empty thread ts; no agent session exists
+    // there, so the destination must be refused without a provider call.
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    for (const threadId of ["slack:D123456:", "slack:C123456:"]) {
+      await expect(
+        setSlackSessionStatus({
+          botToken: "synthetic-canary",
+          threadId,
+          status: "active",
+          fetch,
+        }),
+      ).rejects.toThrow("Invalid Slack session");
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("parses only an exact threaded session destination", () => {
+    expect(parseSlackSessionThreadId("slack:C123456:1788790000.123456")).toEqual({
+      channelId: "C123456",
+      threadTs: "1788790000.123456",
+    });
+    for (const threadId of [
+      "slack:D123456:",
+      "slack:C123456:1788790000.123456:extra",
+      "slack:C123456",
+      "telegram:123:456",
+    ]) {
+      expect(parseSlackSessionThreadId(threadId)).toBeNull();
+    }
   });
 });

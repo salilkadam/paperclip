@@ -73,6 +73,30 @@ export function slackSessionStatusForPublication(
   return "active";
 }
 
+/**
+ * A Slack agent session always lives in a real thread. Parse a Paperclip
+ * Slack thread id into the exact session destination it addresses, or return
+ * null when the id cannot host one. Base-stream bindings (`slack:<channel>:`,
+ * the shape DM and slash-command conversations use when no task thread was
+ * opened) have no thread_ts and therefore no session to address.
+ */
+export function parseSlackSessionThreadId(
+  threadId: string,
+): { channelId: string; threadTs: string } | null {
+  const [, channelId, threadTs, extra] = threadId.split(":");
+  if (
+    !threadId.startsWith("slack:") ||
+    !channelId ||
+    !SLACK_CHANNEL_ID.test(channelId) ||
+    !threadTs ||
+    !SLACK_TIMESTAMP.test(threadTs) ||
+    extra !== undefined
+  ) {
+    return null;
+  }
+  return { channelId, threadTs };
+}
+
 const SAFE_SLACK_SESSION_ERRORS = new Set([
   "feature_disabled",
   "unknown_method",
@@ -102,14 +126,9 @@ export async function setSlackSessionStatus(input: {
   status: SlackSessionStatus;
   fetch?: typeof globalThis.fetch;
 }): Promise<"updated" | "unavailable"> {
-  const [, channelId, threadTs, extra] = input.threadId.split(":");
+  const destination = parseSlackSessionThreadId(input.threadId);
   if (
-    !input.threadId.startsWith("slack:") ||
-    !channelId ||
-    !SLACK_CHANNEL_ID.test(channelId) ||
-    !threadTs ||
-    !SLACK_TIMESTAMP.test(threadTs) ||
-    extra !== undefined ||
+    !destination ||
     !["processing", "active", "suspended", "closed"].includes(input.status)
   ) {
     throw Object.assign(
@@ -130,8 +149,8 @@ export async function setSlackSessionStatus(input: {
           "content-type": "application/json; charset=utf-8",
         },
         body: JSON.stringify({
-          channel_id: channelId,
-          thread_ts: threadTs,
+          channel_id: destination.channelId,
+          thread_ts: destination.threadTs,
           status: input.status,
         }),
         redirect: "error",

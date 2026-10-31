@@ -35,6 +35,7 @@ import {
 import { logger } from "../../../middleware/logger.js";
 
 import {
+  parseSlackSessionThreadId,
   setSlackSessionStatus,
   slackSessionStatusForPublication,
 } from "../../chat-slack-sessions.js";
@@ -213,6 +214,24 @@ export function createSlackSessionStatus(db: Db, options: SlackSessionStatusOpti
                 .set({
                   status: "cancelled",
                   result: { code: "slack_session_destination_changed" },
+                  updatedAt: new Date(),
+                })
+                .where(selectedSnapshotWhere);
+              return null;
+            }
+            // A lane bound to the channel or DM base stream (slash-command or
+            // direct-message intake with no task thread) has no thread_ts, so
+            // no agent session exists to address. Settle the sync like the
+            // other terminal destination conditions; failing it instead would
+            // log a warning on every publication of that lane while its
+            // message delivery stays unaffected.
+            if (!parseSlackSessionThreadId(conversation.externalThreadId)) {
+              await notifyChatActionWork(tx, "slack_session_sync");
+              await tx
+                .update(chatActions)
+                .set({
+                  status: "cancelled",
+                  result: { code: "slack_session_destination_not_threaded" },
                   updatedAt: new Date(),
                 })
                 .where(selectedSnapshotWhere);

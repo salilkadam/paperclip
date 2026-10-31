@@ -33696,6 +33696,111 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await resumed.service.shutdown();
   });
 
+  it("settles Slack session sync for base-thread lanes without provider status calls", async () => {
+    const fixture = await seedCompany();
+    const ordinaryFetch = fakeSlackFetch();
+    const statusCalls: string[] = [];
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      if (String(input) !== "https://slack.com/api/agents.sessions.setStatus")
+        return ordinaryFetch(input);
+      statusCalls.push(
+        (JSON.parse(String(init?.body)) as { status: string }).status,
+      );
+      return Response.json({ ok: true });
+    };
+    const { callbacks, endpoint, runtime, service } =
+      await configuredSlackEndpoint(fixture, { fetch });
+    await service.update(
+      endpoint.id,
+      { allowDirectMessages: true },
+      "owner-user",
+    );
+    // Direct-message intake binds the lane to the channel base stream:
+    // `slack:<channel>:` with an empty thread ts. No agent session can ever
+    // be addressed there, so the sync must settle instead of failing and
+    // warning on every publication of that lane.
+    const dm = makeThread({
+      channelId: "DSESSBASE",
+      id: "slack:DSESSBASE:",
+      isDM: true,
+      name: "direct message",
+    });
+    await deliverMessage({
+      callbacks,
+      endpointId: endpoint.id,
+      thread: dm.thread,
+      message: makeMessage({
+        id: "4400.1",
+        text: "Summarize the launch status",
+      }),
+      trigger: "direct_message",
+    });
+    const conversation = await readChatConversationsByEndpointId(endpoint.id)
+      .then((rows) =>
+        rows.find((row) => row.externalThreadId === "slack:DSESSBASE:")!,
+      );
+    const [reply] = await db
+      .insert(chatPublications)
+      .values({
+        companyId: fixture.companyId,
+        endpointId: endpoint.id,
+        conversationId: conversation.id,
+        issueId: conversation.issueId,
+        idempotencyKey: `dm-base-thread:${endpoint.id}`,
+        payload: { text: "Launch status is green" },
+        state: "pending",
+      })
+      .returning();
+    await service.processPendingPublications();
+    await expect(
+      db
+        .select({ state: chatPublications.state })
+        .from(chatPublications)
+        .where(eq(chatPublications.id, reply.id)),
+    ).resolves.toEqual([{ state: "published" }]);
+    // Message delivery is unaffected: the reply reached the base thread.
+    expect(
+      runtime.endpoints.get(endpoint.id)!.posts,
+    ).toContainEqual({
+      threadId: "slack:DSESSBASE:",
+      text: "Launch status is green",
+    });
+    const action = await db
+      .select()
+      .from(chatActions)
+      .where(
+        and(
+          eq(chatActions.endpointId, endpoint.id),
+          eq(chatActions.kind, "slack_session_sync"),
+        ),
+      )
+      .then((rows) => rows[0]!);
+    expect(action.status).toBe("received");
+    await service.processPendingSlackSessionSyncs(25, action.id);
+    // The destination cannot host a session: settle without a provider call.
+    expect(statusCalls).toEqual([]);
+    const settled = await db
+      .select({ status: chatActions.status, result: chatActions.result })
+      .from(chatActions)
+      .where(eq(chatActions.id, action.id))
+      .then((rows) => rows[0]!);
+    expect(settled.status).toBe("cancelled");
+    expect(settled.result?.code).toBe("slack_session_destination_not_threaded");
+    // Re-staging after new activity settles the same way instead of warning.
+    await db
+      .update(chatActions)
+      .set({ status: "received", result: null, updatedAt: new Date() })
+      .where(eq(chatActions.id, action.id));
+    await service.processPendingSlackSessionSyncs(25, action.id);
+    expect(statusCalls).toEqual([]);
+    await expect(
+      db
+        .select({ status: chatActions.status })
+        .from(chatActions)
+        .where(eq(chatActions.id, action.id)),
+    ).resolves.toEqual([{ status: "cancelled" }]);
+  });
+
   it("returns two answered Slack turns to Idle in the same thread", async () => {
     const fixture = await seedCompany();
     const { callbacks, endpoint, service } = await configuredSlackEndpoint(fixture);
