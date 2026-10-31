@@ -1,3 +1,4 @@
+import { chatConversationExecutionRestricted } from "./chat-channels/board-trust.js";
 import { createDeliveryWorkCoordinator } from "./delivery-work-coordinator.js";
 import { DELIVERY_QUEUES, notifyDeliveryWork } from "./delivery-work-notifications.js";
 import { fastResponseService, enqueueFastResponse, fastResponseSourceCurrent, fastResponseTurnQueued } from "./fast-responses.js";
@@ -574,7 +575,7 @@ export function emailChannelService(db: Db, options: EmailChannelOptions) {
           and(
             eq(chatConversations.companyId, endpoint.companyId),
             eq(chatConversations.issueId, task.id),
-            eq(chatEndpoints.externalExecutionPolicy, "restricted"),
+            chatConversationExecutionRestricted(),
           ),
         )
         .limit(1);

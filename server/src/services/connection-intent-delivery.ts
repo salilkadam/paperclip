@@ -1,3 +1,4 @@
+import { chatConversationExecutionRestricted } from "./chat-channels/board-trust.js";
 import { connectionIntentService } from "./connection-intents.js";
 import { connectionContinuationPendingResponse, findSatisfiedToolConnection, satisfiedConnectionIntentService } from "./satisfied-connection-intents.js";
 import { isAiConnectionConfigurationFailure } from "./ai-auth-failure.js";
@@ -94,7 +95,7 @@ export function connectionIntentDeliveryService(db: Db, heartbeat: Pick<Heartbea
       const [restrictedChat] = await tx.select({ id: chatConversations.id }).from(chatConversations)
         .innerJoin(chatEndpoints, eq(chatEndpoints.id, chatConversations.endpointId))
         .where(and(eq(chatConversations.companyId, issue.companyId), eq(chatConversations.issueId, issue.id),
-          eq(chatEndpoints.externalExecutionPolicy, "restricted"))).limit(1);
+          chatConversationExecutionRestricted())).limit(1);
       if (restrictedChat) return null;
       const recoveries = issueRecoveryActionService(db);
       const recovery = await recoveries.getActiveForIssue(issue.companyId, issue.id, tx);
