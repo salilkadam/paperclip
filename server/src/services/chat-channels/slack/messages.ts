@@ -131,10 +131,12 @@ type SlackTrustMessage = Pick<Message, "id" | "raw"> & {
 
 /**
  * Board-trust rule 4: a plain human post. Fails closed: the raw Slack event must
- * carry `ts` equal to the message id and carry no `bot_id`/`app_id`/
- * `bot_profile`/`subtype` (user-token integrations post as the linked user but
- * carry `app_id` or `bot_id`; edits, joins and file shares carry a `subtype`),
- * and must not come from the bot itself.
+ * carry `ts` equal to the message id, a non-empty `client_msg_id` (set by Slack
+ * clients for typed messages; API posts carry one only when the caller supplies
+ * it, so this excludes integrations that do not, not every integration), and no
+ * `bot_id`/`app_id`/`bot_profile`/`subtype` (user-token integrations post as the
+ * linked user; edits, joins and file shares carry a `subtype`), and must not
+ * come from the bot itself.
  */
 export function slackPlainHumanPost(
   message: SlackTrustMessage,
@@ -144,6 +146,7 @@ export function slackPlainHumanPost(
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
   const event = raw as Record<string, unknown>;
   if (typeof event.ts !== "string" || event.ts !== message.id) return false;
+  if (typeof event.client_msg_id !== "string" || event.client_msg_id.trim() === "") return false;
   for (const key of ["bot_id", "app_id", "bot_profile", "subtype"]) {
     if (event[key] !== undefined && event[key] !== null) return false;
   }

@@ -86,6 +86,25 @@ type ConversationDeliveryQueueOptions = {
   conversationLeaseRenewalIntervalMs?: number;
   renewConversationDeliveryLease?: (input: { endpointId: string; leaseKey: string; token: string; expiresAt: Date }) => Promise<boolean>;
 };
+/**
+ * A recovered Slack delivery has no raw event. Rebuild just enough of one that
+ * the board-trust predicates reproduce the verdicts stored at ingress and
+ * nothing more: `slackPlainHuman` true restores a plain post (with a sentinel
+ * `client_msg_id`), and only a stored `slackPlainHumanTopLevel` true leaves it
+ * top-level; otherwise a sentinel `thread_ts` keeps it a reply.
+ */
+export function recoveredSlackTrustRaw(
+  providerMessageId: string,
+  message: { slackPlainHuman?: unknown; slackPlainHumanTopLevel?: unknown } | undefined,
+): Record<string, unknown> {
+  if (message?.slackPlainHuman !== true) return {};
+  return {
+    ts: providerMessageId,
+    client_msg_id: "recovered",
+    ...(message.slackPlainHumanTopLevel === true ? {} : { thread_ts: "recovered" }),
+  };
+}
+
 export function createChatConversationDeliveryQueue(db: Db, options: ConversationDeliveryQueueOptions) {
   const { DELIVERY_DRAIN_LIMIT, DELIVERY_LEASE_TTL_MS, discordRootThreadPending, reconcileDiscordRootThread, durableExternalThreadIdentity, liveInboundMessages, processInboundWakeup, processLifecycleDelivery, processMessage, redactError, runtimeContexts, runtimeFor, settleRejectedInboundWakeups, sanitizeFilename, githubManualMessages, githubAutomaticMessages, githubIssueMessages, conversationDrainKey } = options;
   const { restoreGitHubMessageProvenance } = createGitHubMessageProvenance({ githubManualMessages, githubAutomaticMessages, githubIssueMessages });
@@ -228,6 +247,7 @@ export function createChatConversationDeliveryQueue(db: Db, options: Conversatio
         }>;
         attachmentLimitOmissions?: unknown;
         photonReply?: { guid?: unknown; part?: unknown };
+        slackPlainHuman?: unknown;
         slackPlainHumanTopLevel?: unknown;
       };
       conversation?: { providerUrl?: unknown };
@@ -325,10 +345,12 @@ export function createChatConversationDeliveryQueue(db: Db, options: Conversatio
             }
           : endpointRuntime.provider === "github" && typeof normalized.message?.sourceProviderMessageId === "string"
             ? { githubSourceMessageId: normalized.message.sourceProviderMessageId }
-            // Restore only the persisted board-trust verdict: a plain top-level
-            // post recomputes as one; anything else (or a legacy row) as not.
-            : endpointRuntime.provider === "slack" && normalized.message?.slackPlainHumanTopLevel === true
-              ? { ts: providerMessageId } : {},
+            // Restore only the persisted board-trust verdicts: a plain human
+            // post recomputes as one (and as top-level only when that verdict
+            // was stored too); anything else, or a legacy row, as neither.
+            : endpointRuntime.provider === "slack"
+              ? recoveredSlackTrustRaw(providerMessageId, normalized.message)
+              : {},
       author: {
         userId: externalId,
         userName:

@@ -321,7 +321,8 @@ const support = await getEmbeddedPostgresTestSupport();
     const [comment] = await db.insert(issueComments).values({ companyId: f.company.id, issueId: f.originTask.id, authorType: "user", authorUserId: "requester", body: "Board instruction" }).returning();
     const [delivery] = await db.insert(chatDeliveries).values({
       companyId: f.company.id, endpointId: endpoint.id, conversationId: conversation.id, principalId: principal.id, providerEventId: randomUUID(), deduplicationKey: randomUUID(),
-      eventKind: "message", state: "processed", normalizedEvent: {},
+      // The rule-4 verdict ingress stores for a plain human post (envelope.ts).
+      eventKind: "message", state: "processed", normalizedEvent: { message: { slackPlainHuman: true, slackPlainHumanTopLevel: true } },
     }).returning();
     const [messageLink] = await db.insert(chatMessageLinks).values({ companyId: f.company.id, endpointId: endpoint.id, conversationId: conversation.id, deliveryId: delivery.id, commentId: comment.id, providerMessageId: randomUUID(), direction: "inbound" }).returning();
     return { endpoint, resource, conversation, principal, link, membership, comment, delivery, messageLink };
@@ -340,6 +341,7 @@ const support = await getEmbeddedPostgresTestSupport();
   it.each([
     "trust-off", "role-member", "role-viewer", "role-operator", "membership-suspended", "other-user-link", "link-revoked",
     "channel-disabled", "endpoint-inactive", "comment-deleted", "no-delivery", "delivery-principal-missing", "github-resource",
+    "verdict-not-plain-human", "verdict-absent", "verdict-string", "direct-message-conversation",
   ] as const)("refuses a board-trusted chain when %s, read at check time (message and wake)", async fault => {
     for (const where of ["message", "wake"] as const) {
       const f = await derivedFixture();
@@ -359,6 +361,12 @@ const support = await getEmbeddedPostgresTestSupport();
       if (fault === "comment-deleted") await db.update(issueComments).set({ deletedAt: new Date() }).where(eq(issueComments.id, t.comment.id));
       if (fault === "no-delivery") await db.update(chatMessageLinks).set({ deliveryId: null }).where(eq(chatMessageLinks.id, t.messageLink.id));
       if (fault === "delivery-principal-missing") await db.update(chatDeliveries).set({ principalId: null }).where(eq(chatDeliveries.id, t.delivery.id));
+      // Rule 4 at ingress said not a plain human post (user-token app/bot post).
+      if (fault === "verdict-not-plain-human") await db.update(chatDeliveries).set({ normalizedEvent: { message: { slackPlainHuman: false, slackPlainHumanTopLevel: false } } }).where(eq(chatDeliveries.id, t.delivery.id));
+      // A legacy delivery stored before the verdict existed fails closed.
+      if (fault === "verdict-absent") await db.update(chatDeliveries).set({ normalizedEvent: { message: { slackPlainHumanTopLevel: true } } }).where(eq(chatDeliveries.id, t.delivery.id));
+      if (fault === "verdict-string") await db.update(chatDeliveries).set({ normalizedEvent: { message: { slackPlainHuman: "true", slackPlainHumanTopLevel: true } } }).where(eq(chatDeliveries.id, t.delivery.id));
+      if (fault === "direct-message-conversation") await db.update(chatConversations).set({ isDirectMessage: true }).where(eq(chatConversations.id, t.conversation.id));
       await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({
         status: 403, details: { code: where === "message" ? "chat_provenance_foreign_message" : "chat_provenance_foreign_wake" },
       });

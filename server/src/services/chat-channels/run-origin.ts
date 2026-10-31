@@ -52,7 +52,8 @@ async function isDirectBoardComment(db: Db, run: Run, commentId: string, issueId
   // read now (never from a stored snapshot), every link resolves through its
   // delivery's principal to a current identity link to the run's responsible
   // user, who is currently an active owner/admin, in a still board-trusted,
-  // enabled channel on an active endpoint. A missing delivery fails closed.
+  // enabled channel on an active endpoint, and the delivery's stored rule-4
+  // verdict says a plain human typed it. A missing delivery fails closed.
   for (const link of inbound) {
     if (!(await isBoardTrustedInboundLink(db, run.companyId, run.responsibleUserId, link))) return false;
   }
@@ -94,6 +95,13 @@ async function isBoardTrustedInboundLink(
     .where(and(
       eq(chatDeliveries.id, link.deliveryId), eq(chatDeliveries.companyId, companyId),
       isNotNull(chatDeliveries.principalId),
+      // Rule 4, judged on the raw event at ingress: a plain human post (no
+      // bot_id/app_id/bot_profile/subtype, carries client_msg_id). A user-token
+      // post as the owner that @mentions the bot or replies in a trusted thread
+      // is admitted as a normal comment but never becomes the board's words.
+      // Absent (legacy delivery) fails closed.
+      // A JSON boolean only: the string "true" is not a verdict.
+      sql`${chatDeliveries.normalizedEvent}->'message'->'slackPlainHuman' = 'true'::jsonb`,
     ))
     .limit(1);
   return Boolean(row);
