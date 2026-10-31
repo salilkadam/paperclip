@@ -222,6 +222,10 @@ export const chatEndpointResources = pgTable(
       .notNull()
       .default("available"),
     enabled: boolean("enabled").notNull().default(false),
+    // Board-trust allowlist: a top-level human message from a linked owner/admin
+    // in this (private, non-shared Slack) channel is treated as a board
+    // instruction. Separate from `enabled`, which only grants reach.
+    boardTrusted: boolean("board_trusted").notNull().default(false),
     executionDefaults: jsonb("execution_defaults").$type<ChatExecutionDefaults>(),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
@@ -248,6 +252,10 @@ export const chatEndpointResources = pgTable(
       table.type,
       table.providerResourceId,
     ),
+    // One trusted bot per board channel per company.
+    uniqueIndex("chat_endpoint_resources_board_trusted_uq")
+      .on(table.companyId, table.providerResourceId)
+      .where(sql`${table.boardTrusted}`),
     unique("chat_endpoint_resources_company_id_uq").on(
       table.companyId,
       table.id,
@@ -383,6 +391,9 @@ export const chatConversations = pgTable(
     externalLabel: text("external_label").notNull(),
     providerUrl: text("provider_url"),
     isDirectMessage: boolean("is_direct_message").notNull().default(false),
+    // Stamped at admission when the message that created the conversation was
+    // board-trusted. Read by the external execution-policy sites.
+    boardTrusted: boolean("board_trusted").notNull().default(false),
     // Immutable initial task context, never refreshed from endpoint settings.
     communicationGuidance: text("communication_guidance"),
     state: text("state").notNull().default("active"),
@@ -803,6 +814,39 @@ export const chatSdkState = pgTable(
       columns: [table.companyId, table.endpointId],
       foreignColumns: [chatEndpoints.companyId, chatEndpoints.id],
       name: "chat_sdk_state_company_endpoint_fk",
+    }).onDelete("cascade"),
+  ],
+);
+
+/**
+ * Rate limit for the board-channel "not picked up" ephemeral notice: at most
+ * one per (endpoint, sender) in any rolling 24 hours. The row is claimed with
+ * a conditional upsert, so concurrent deliveries cannot both send one.
+ */
+export const chatBoardTrustNotices = pgTable(
+  "chat_board_trust_notices",
+  {
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    endpointId: uuid("endpoint_id").notNull(),
+    principalId: uuid("principal_id").notNull(),
+    lastNoticeAt: timestamp("last_notice_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("chat_board_trust_notices_endpoint_principal_uq").on(
+      table.endpointId,
+      table.principalId,
+    ),
+    foreignKey({
+      columns: [table.companyId, table.endpointId],
+      foreignColumns: [chatEndpoints.companyId, chatEndpoints.id],
+      name: "chat_board_trust_notices_company_endpoint_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.companyId, table.principalId],
+      foreignColumns: [chatExternalPrincipals.companyId, chatExternalPrincipals.id],
+      name: "chat_board_trust_notices_company_principal_fk",
     }).onDelete("cascade"),
   ],
 );
