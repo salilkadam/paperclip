@@ -45,9 +45,16 @@ Definition — a Slack message is **board-trusted** when all hold:
 2. `ensurePrincipal` resolves the sender to a linked user with `linkedDenied = false`;
 3. that user's company membership is `active` with role `owner` or `admin` (an extra role query: `ensurePrincipal`
    only excludes viewers);
-4. the raw Slack event is a plain human message: no `bot_id`, no `app_id`, no `subtype`, not the bot itself
-   (`author.isBot` alone is not enough — user-token integrations such as the claude.ai Slack connector or an agent's
-   Slack tool post as the linked user);
+4. the raw Slack event is a plain human message: it carries a non-empty `client_msg_id` (set by Slack clients for
+   typed messages), and no `bot_id`, `app_id`, `bot_profile` or `subtype`, and is not the bot itself (`author.isBot`
+   alone is not enough — user-token integrations such as the claude.ai Slack connector, Composio or an agent's Slack
+   tool post as the linked user). Fails closed when any field is missing. Caveat (code review round 1): Slack's docs do
+   not say that user-token posts carry `app_id`/`bot_id`, and `chat.postMessage` accepts a caller-supplied
+   `client_msg_id` (Paperclip's own `slack_post_message` sets one, `connectors/slack-writes.ts`, and reconciles by it),
+   so `client_msg_id` excludes integrations that do not set it, not every integration. The post-deploy probe below
+   checks the real integrations. The verdict is computed once at ingress and stored as
+   `normalizedEvent.message.slackPlainHuman` for **every** Slack message delivery (with `slackPlainHumanTopLevel` for
+   rules 4+5); recovery restores only the stored verdicts;
 5. it is a **top-level** channel message (`thread_ts` absent or equal to `ts`); thread replies keep today's rule
    (existing conversation), so the orphan-grace path and human-only threads are untouched;
 6. `requireAtMention` is off on the endpoint (trust never overrides a mention requirement; the setup script asserts
@@ -64,26 +71,46 @@ Effects:
 - **Provenance** (`run-origin.ts` `isDirectBoardComment`): an inbound-linked comment passes when, read **at check
   time** (never from a stored snapshot): `chat_message_links.deliveryId → chat_deliveries.principalId` on the
   conversation's own endpoint resolves to an identity link with status `linked` to `run.responsibleUserId`; that
-  user is currently an active owner/admin; the conversation's resource is `board_trusted`; the endpoint is active.
-  `deliveryId` null ⇒ fail closed. Everything else stays (`authorType = user`, `authorUserId = run.responsibleUserId`,
+  user is currently an active owner/admin; the conversation is not a DM and its resource is `board_trusted`, enabled
+  and available; the endpoint is active; **and the delivery's stored rule-4 verdict
+  `normalized_event->'message'->'slackPlainHuman'` is the JSON boolean `true`** (the one input that cannot be re-read
+  later, because the raw event is not kept). Without the last condition a user-token post made as the owner that
+  @mentions the bot, or replies inside a trusted conversation, is admitted through the normal `addressed` /
+  existing-conversation paths, becomes the owner's `user` comment, and would pass (code review round 1 blocker).
+  `deliveryId` null, or a delivery stored before the verdict existed ⇒ fail closed. Everything else stays (`authorType = user`, `authorUserId = run.responsibleUserId`,
   same task, not deleted); guest comments (`authorType = system`) never pass. Applies to `wakeCommentId(s)` too.
   Note: `isDirectBoardComment` is shared with the GitHub guest check (`chat-github-tools.ts`); the change widens
   nothing there because GitHub resources are never `board_trusted` — test it.
-- **Private-source exemption** (decision, see below): Slack reads/writes whose channel is `board_trusted` do not
-  record a `slack_private_source` boundary. The board's own channel is the board's instructions, not research.
+- **Private-source exemption** (decision, see below): Slack reads/writes whose channel is `board_trusted` (and
+  enabled and available, as in the provenance join) do not record a `slack_private_source` boundary. The board's own channel is the board's instructions, not research.
   Any other private channel keeps the boundary.
 - **Execution policy sites** (`task-retry.ts`, `heartbeat/queue.ts` `retry_failed_run`, `connection-intent-delivery.ts`,
   `email-channels.ts`): with `externalExecutionPolicy = agent`, lift the restriction only when
   `chat_conversations.board_trusted` is true for the task's conversation; other conversations on the endpoint stay
-  restricted. (Linked non-admin members and guests therefore gain nothing from the policy flip.)
+  restricted. (Linked non-admin members and guests therefore gain nothing from the policy flip.) `agent` is refused
+  (422) on any provider other than Slack and AgentMail, where it would lift nothing.
+- **Observability**: a Slack delivery filtered as not addressed or not linked carries the two verdicts in its
+  activity detail, static words only: "… (plain human post: yes|no; top-level: yes|no)". The read-only
+  `POST /chat-endpoints/:id/board-trust/evaluate` accepts `{ resourceId, slackUserId, event }` (hypothetical event)
+  or `{ deliveryId }` (a received delivery: stored verdicts plus current channel, link, role and mention state) and
+  returns per-rule booleans (`channelTrusted`, `senderLinked`, `senderOwnerOrAdmin`, `plainHuman`,
+  `plainHumanTopLevel`, `mentionNotRequired`).
 - **No change** to `allowUnlinkedPeople` (stays false; setup script asserts it), viewer handling, or any
   non-trusted channel.
 
 Rollout: deploy; then `deploy/scripts/setup-board-channel-trust.sh` sets and **asserts**, per company: the board
 channel's `board_trusted` on exactly one endpoint (default: the CEO bot — `ceoreliora` in #reliora-board,
 `ceobionic` in #bionic-board; the CMO bots stay @mention-only there), `externalExecutionPolicy = agent` on that
-endpoint, `requireAtMention = false`, `allowUnlinkedPeople = false`; and probes a refusal (a bot-authored message
-must not be trusted) the way the governance scripts probe policies.
+endpoint, `requireAtMention = false`, `allowUnlinkedPeople = false`; and probes refusals the way the governance
+scripts probe policies: `bot_id`, `app_id`, no `client_msg_id` and a thread reply must each return `trusted=false`
+with `rules.plainHumanTopLevel=false`, and a plain post by the owner's real Slack user id (`--owner-slack-user`,
+required) must return `trusted=true`.
+**Real-world probe (before trust is switched on):** deploy with trust off; the owner posts once in the board channel
+through each user-token integration in use (claude.ai Slack connector, Composio, an agent's Slack tool); the
+operator reads each delivery id and the "plain human post: …" detail from the activity feed and runs the script with
+`--probe-delivery <id>` per post. Each must return `trusted=false` and `rules.plainHuman=false`; the script checks this
+before any write and changes nothing otherwise. Also post once by hand (typed in Slack) and confirm the detail says
+"plain human post: yes" — if real typed posts lack `client_msg_id`, genuine board messages would fail closed.
 
 ### Decisions recorded from the safety review (owner to confirm; implementation proceeds on the recommendation)
 - **Private-source exemption for board-trusted channels** — recommended yes; without it parity is not reached.
@@ -102,7 +129,7 @@ must not be trusted) the way the governance scripts probe policies.
 - Mutants to plant before merge: drop rule 3 (any linked member passes); trust applied in a non-allowlisted
   channel; a post carrying `bot_id`/`app_id` trusted; a revoked link or demotion to member after admission still
   passing provenance; two endpoints trusted on one channel creating two tasks; a thread reply trusted; notice
-  staged for a bot or more than once a day; `agent` policy lifting restriction on a non-trusted conversation.
+  staged for a bot or more than once a day; `agent` policy lifting restriction on a non-trusted conversation. Round 1 adds: provenance without the `slackPlainHuman` condition (an owner's `app_id` mention or `bot_id` thread reply passes); rule 4 without `client_msg_id`; the private-source exemption without enabled/available.
 
 ## Change 2 (separate small PR): heading cap
 Find the publication path whose first Slack block carries an uncapped heading (the two failures were
@@ -127,4 +154,8 @@ Out of scope: binding arbitrary UI tasks to channels; mirroring every task threa
   delivery's principal; notices narrowed and rate-limited; policy scoped to trusted conversations, queue.ts added,
   agentmail validated; `requireAtMention` interplay stated; private-source row added and decided; mutants added).
   Confirmed sound: no confused deputy (`responsibleUserId` is the linked sender; the author check stays).
-- Code review round 1 (different model from the implementer): pending.
+- Code review round 1 (different model from the implementer): seven required changes — rule 4 stored at ingress and
+  required by provenance (blocker); `client_msg_id` as a positive signal; filtered-delivery verdict detail and
+  evaluate-by-delivery with `--probe-delivery`; private-source exemption requires enabled/available; setup probes
+  assert the refusing rule and a mandatory positive control; `agent` policy refused where it lifts nothing; tests
+  for lock re-derivation on trust-off/link-revoked, the write-path exemption and DM provenance. All folded in above.
