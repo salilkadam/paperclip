@@ -18,14 +18,25 @@
 # trusting that channel id. Other bots in the channel stay @mention-only.
 #
 # Then it PROVES refusals with the server's read-only board-trust dry run
-# (POST /chat-endpoints/:id/board-trust/evaluate; nothing is posted or stored):
-#   - a top-level post carrying bot_id   -> must NOT be trusted;
-#   - a top-level post carrying app_id   -> must NOT be trusted (user-token apps);
-#   - a thread reply (thread_ts != ts)   -> must NOT be trusted;
-#   - with --owner-slack-user U…, a plain post by that linked owner/admin must
-#     BE trusted (positive control);
+# (POST /chat-endpoints/:id/board-trust/evaluate; nothing is posted or stored),
+# each asserting trusted=false AND the specific rule that refuses it:
+#   - a top-level post carrying bot_id      -> plainHumanTopLevel=false;
+#   - a top-level post carrying app_id      -> plainHumanTopLevel=false (user-token apps);
+#   - a top-level post without client_msg_id -> plainHumanTopLevel=false (API posts);
+#   - a thread reply (thread_ts != ts)      -> plainHumanTopLevel=false;
+#   - a plain post (with client_msg_id) by the owner's real Slack user id must
+#     BE trusted (mandatory positive control: --owner-slack-user is required);
 # and, when another live Slack connection of the company also sees the channel,
 # that trying to trust it there is refused with HTTP 409.
+#
+# --probe-delivery [BOT=]<deliveryId> (repeatable): a delivery the operator
+# produced by posting in the channel through a user-token integration (the
+# claude.ai Slack connector, Composio, an agent's Slack tool). It is evaluated
+# from the verdicts stored at ingress BEFORE any write, also in --dry-run, and
+# must come back trusted=false AND rules.plainHuman=false; otherwise nothing is
+# changed. Run it once after deploy with trust still off. The delivery id is in
+# the connection's activity feed, whose detail also shows the two verdicts
+# ("plain human post: yes|no; top-level: yes|no").
 # Any other outcome is fatal.
 #
 # Requires: curl jq; PAPERCLIP_BOARD_KEY_FILE — a 0600 file holding a board API
@@ -34,18 +45,22 @@
 # never appears on a command line. PAPERCLIP_API_BASE overrides the API origin.
 #
 # Usage: deploy/scripts/setup-board-channel-trust.sh [--assign BOT=CHANNEL]...
-#          [--owner-slack-user U…] [--dry-run]
+#          --owner-slack-user [BOT=]U… [--owner-slack-user BOT=U…]...
+#          [--probe-delivery [BOT=]<deliveryId>]... [--dry-run]
 #   BOARD_TRUST_ASSIGNMENTS="bot=#chan other=C123" is read when no --assign is given.
+#   A bare U… (or bare deliveryId) applies to every assignment; BOT=… to one bot
+#   (each Slack workspace has its own user ids). Every assignment needs an owner.
 set -euo pipefail
 
 API="${PAPERCLIP_API_BASE:-https://org.baisoln.com}"
-ASSIGN=(); OWNER_SLACK_USER=""; DRY=0
+ASSIGN=(); OWNERS=(); PROBES=(); DRY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --assign) ASSIGN+=("${2:?--assign needs BOT=CHANNEL}"); shift 2 ;;
-    --owner-slack-user) OWNER_SLACK_USER="${2:?--owner-slack-user needs a Slack user id}"; shift 2 ;;
+    --owner-slack-user) OWNERS+=("${2:?--owner-slack-user needs a Slack user id}"); shift 2 ;;
+    --probe-delivery) PROBES+=("${2:?--probe-delivery needs a delivery id}"); shift 2 ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -58,8 +73,29 @@ log() { echo "[board-channel-trust] $*"; }
 for b in curl jq; do command -v "$b" >/dev/null || die "$b is required"; done
 [[ -r "${PAPERCLIP_BOARD_KEY_FILE:-}" ]] || die "PAPERCLIP_BOARD_KEY_FILE must point to a readable file"
 [[ "$(stat -c %a "$PAPERCLIP_BOARD_KEY_FILE")" == 600 ]] || die "$PAPERCLIP_BOARD_KEY_FILE must be mode 0600"
-[[ -z "$OWNER_SLACK_USER" || "$OWNER_SLACK_USER" =~ ^[UW][A-Z0-9]+$ ]] || die "--owner-slack-user must be a Slack user id"
+[[ ${#OWNERS[@]} -gt 0 ]] || die "--owner-slack-user is required (the positive-control probe is mandatory)"
+for o in "${OWNERS[@]}"; do [[ "$o" =~ ^([A-Za-z0-9._-]+=)?[UW][A-Z0-9]+$ ]] || die "bad --owner-slack-user '$o' (want U… or BOT=U…)"; done
+UUID_RE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+# ${arr[@]+"${arr[@]}"} expands an empty array safely under set -u on bash < 4.4.
+for p in ${PROBES[@]+"${PROBES[@]}"}; do [[ "$p" =~ ^([A-Za-z0-9._-]+=)?$UUID_RE$ ]] || die "bad --probe-delivery '$p' (want <uuid> or BOT=<uuid>)"; done
 for a in "${ASSIGN[@]}"; do [[ "$a" =~ ^[A-Za-z0-9._-]+=(#[a-z0-9._-]+|[CG][A-Z0-9]+)$ ]] || die "bad assignment '$a' (want BOT=#channel or BOT=C…)"; done
+# owner_for BOT -> the Slack user id for BOT (BOT=U… wins over a bare U…); empty if none.
+owner_for() {
+  local o bare=""
+  for o in "${OWNERS[@]}"; do
+    if [[ "$o" == "$1="* ]]; then echo "${o#*=}"; return; fi
+    [[ "$o" == *=* ]] || bare="$o"
+  done
+  echo "$bare"
+}
+# probes_for BOT -> delivery ids to probe on BOT's connection, one per line.
+probes_for() {
+  local p
+  for p in ${PROBES[@]+"${PROBES[@]}"}; do
+    if [[ "$p" == "$1="* ]]; then echo "${p#*=}"; elif [[ "$p" != *=* ]]; then echo "$p"; fi
+  done
+}
+for a in "${ASSIGN[@]}"; do [[ -n "$(owner_for "${a%%=*}")" ]] || die "no --owner-slack-user for ${a%%=*}"; done
 
 WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf "$WORK"' EXIT
 printf 'Authorization: Bearer %s\n' "$(tr -d '\r\n' < "$PAPERCLIP_BOARD_KEY_FILE")" > "$WORK/auth"
@@ -78,14 +114,26 @@ api() {
 }
 patch_endpoint() { printf '%s' "$2" > "$WORK/patch.json"; api PATCH "/chat-endpoints/$1" "$WORK/patch.json" >/dev/null; }
 
-# evaluate EP RESOURCE USER EVENT_JSON WANT(true|false) LABEL
+# evaluate EP RESOURCE USER EVENT_JSON WANT(true|false) LABEL [RULE]
+# Asserts .trusted == WANT and, when RULE is given, .rules[RULE] == false.
 evaluate() {
   jq -n --arg r "$2" --arg u "$3" --argjson e "$4" '{resourceId:$r, slackUserId:$u, event:$e}' > "$WORK/eval.json"
-  local resp got
+  local resp
   resp="$(api POST "/chat-endpoints/$1/board-trust/evaluate" "$WORK/eval.json")"
-  got="$(jq -r '.trusted' <<<"$resp")"
-  [[ "$got" == "$5" ]] || die "probe '$6' on endpoint $1: expected trusted=$5, got $got: $(head -c 300 <<<"$resp")"
-  log "  probe ok: $6 -> trusted=$got"
+  jq -e --argjson want "$5" --arg rule "${7:-}" \
+    '.trusted == $want and ($rule == "" or .rules[$rule] == false) and ($want == false or (.rules | to_entries | all(.value == true)))' \
+    <<<"$resp" >/dev/null \
+    || die "probe '$6' on endpoint $1: expected trusted=$5${7:+ and $7=false}, got: $(head -c 300 <<<"$resp")"
+  log "  probe ok: $6 -> trusted=$5${7:+, $7=false}"
+}
+# probe_delivery EP DELIVERY_ID -> trusted=false AND rules.plainHuman=false.
+probe_delivery() {
+  jq -n --arg d "$2" '{deliveryId:$d}' > "$WORK/eval.json"
+  local resp
+  resp="$(api POST "/chat-endpoints/$1/board-trust/evaluate" "$WORK/eval.json")"
+  jq -e '.trusted == false and .rules.plainHuman == false' <<<"$resp" >/dev/null \
+    || die "probe-delivery $2 on endpoint $1: expected trusted=false and plainHuman=false (a user-token post must not be a plain human post), got: $(head -c 300 <<<"$resp"); nothing was changed"
+  log "  probe ok: delivery $2 -> trusted=false, plainHuman=false"
 }
 
 companies="$(api GET /companies)"
@@ -113,6 +161,12 @@ for a in "${ASSIGN[@]}"; do
   rid="$(jq -r '.[0].id' <<<"$res")"; chan_id="$(jq -r '.[0].providerResourceId' <<<"$res")"
   log "$bot ($ep, company $cid): board channel $channel = $chan_id"
   [[ "$(jq -r '.[0].enabled' <<<"$res")" == true ]] || die "$bot: $channel is not enabled on the connection; enable it in Settings first"
+  owner="$(owner_for "$bot")"
+
+  # Real user-token deliveries first: a failure here leaves everything unchanged.
+  while IFS= read -r delivery; do
+    if [[ -n "$delivery" ]]; then probe_delivery "$ep" "$delivery"; fi
+  done < <(probes_for "$bot")
 
   ep_now="$(api GET "/chat-endpoints/$ep")"
   want='{"requireAtMention":false,"allowUnlinkedPeople":false,"externalExecutionPolicy":"agent"}'
@@ -134,7 +188,7 @@ for a in "${ASSIGN[@]}"; do
   ep_now="$(api GET "/chat-endpoints/$ep")"
   jq -e --argjson w "$want" '.requireAtMention==$w.requireAtMention and .allowUnlinkedPeople==$w.allowUnlinkedPeople and .externalExecutionPolicy==$w.externalExecutionPolicy and .status=="active"' <<<"$ep_now" >/dev/null \
     || die "$bot: endpoint settings did not stick: $(jq -c '{status,requireAtMention,allowUnlinkedPeople,externalExecutionPolicy}' <<<"$ep_now")"
-  trusted_count=0; others=()
+  trusted_count=0; others=()  # expanded below with ${others[@]+...} for set -u on bash < 4.4
   for other in $(jq -r --arg c "$cid" '.[] | select(.companyId==$c) | .id' <<<"$endpoints"); do
     o_res="$(api GET "/chat-endpoints/$other/resources" | jq -c --arg id "$chan_id" '[.[] | select(.providerResourceId==$id)]')"
     n="$(jq '[.[] | select(.boardTrusted==true)] | length' <<<"$o_res")"
@@ -148,15 +202,16 @@ for a in "${ASSIGN[@]}"; do
   [[ "$trusted_count" -eq 1 ]] || die "$bot: $trusted_count resources trust $chan_id in company $cid (want exactly 1)"
   log "  assert ok: one trusted bot for $channel, agent policy, no mention requirement, linked people only"
 
-  # Prove refusals with the dry run (nothing is posted or stored).
-  ts="1700000000.000100"; probe_user="${OWNER_SLACK_USER:-U00000000}"
-  evaluate "$ep" "$rid" "$probe_user" "{\"type\":\"message\",\"ts\":\"$ts\",\"user\":\"$probe_user\",\"text\":\"probe\",\"bot_id\":\"B00000000\"}" false "bot-authored post"
-  evaluate "$ep" "$rid" "$probe_user" "{\"type\":\"message\",\"ts\":\"$ts\",\"user\":\"$probe_user\",\"text\":\"probe\",\"app_id\":\"A00000000\"}" false "app-authored post"
-  evaluate "$ep" "$rid" "$probe_user" "{\"type\":\"message\",\"ts\":\"$ts\",\"thread_ts\":\"1700000000.000001\",\"user\":\"$probe_user\",\"text\":\"probe\"}" false "thread reply"
-  if [[ -n "$OWNER_SLACK_USER" ]]; then
-    evaluate "$ep" "$rid" "$OWNER_SLACK_USER" "{\"type\":\"message\",\"ts\":\"$ts\",\"user\":\"$OWNER_SLACK_USER\",\"text\":\"probe\"}" true "linked owner plain post"
-  fi
-  for pair in "${others[@]}"; do
+  # Prove refusals with the dry run (nothing is posted or stored). Each refusal
+  # differs from the positive control by exactly one field, from the owner.
+  ts="1700000000.000100"
+  plain="$(jq -nc --arg ts "$ts" --arg u "$owner" '{type:"message", ts:$ts, user:$u, client_msg_id:"00000000-0000-4000-8000-000000000000", text:"probe"}')"
+  evaluate "$ep" "$rid" "$owner" "$(jq -c '. + {bot_id:"B00000000"}' <<<"$plain")" false "bot-authored post" plainHumanTopLevel
+  evaluate "$ep" "$rid" "$owner" "$(jq -c '. + {app_id:"A00000000"}' <<<"$plain")" false "app-authored post" plainHumanTopLevel
+  evaluate "$ep" "$rid" "$owner" "$(jq -c 'del(.client_msg_id)' <<<"$plain")" false "post without client_msg_id" plainHumanTopLevel
+  evaluate "$ep" "$rid" "$owner" "$(jq -c '. + {thread_ts:"1700000000.000001"}' <<<"$plain")" false "thread reply" plainHumanTopLevel
+  evaluate "$ep" "$rid" "$owner" "$plain" true "linked owner plain post (positive control)"
+  for pair in ${others[@]+"${others[@]}"}; do
     o_ep="${pair%%:*}"; o_rid="${pair#*:}"
     jq -nc --arg r "$o_rid" '{boardChannelTrust:{resourceId:$r, trusted:true}}' > "$WORK/second.json"
     call PATCH "/chat-endpoints/$o_ep" "$WORK/second.json"
