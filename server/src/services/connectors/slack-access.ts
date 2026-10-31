@@ -221,6 +221,10 @@ export async function slackChannelIsBoardTrusted(
         eq(chatEndpointResources.type, "channel"),
         eq(chatEndpointResources.providerResourceId, channelId.replace(/^slack:/, "")),
         eq(chatEndpointResources.boardTrusted, true),
+        // Same as the provenance join: a disabled or unavailable channel is
+        // private research again.
+        eq(chatEndpointResources.enabled, true),
+        eq(chatEndpointResources.availability, "available"),
       ),
     )
     .limit(1);
