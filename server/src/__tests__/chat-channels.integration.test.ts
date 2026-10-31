@@ -9338,7 +9338,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         return base(input, init);
       };
     }
-    async function boardFixture(options: { role?: string; trusted?: boolean; requireAtMention?: boolean; botId?: string; channels?: Record<string, { is_private?: boolean; is_ext_shared?: boolean }> } = {}) {
+    async function boardFixture(options: { role?: string; trusted?: boolean; requireAtMention?: boolean; botId?: string; channels?: Record<string, { is_private?: boolean; is_ext_shared?: boolean }>; deferred?: boolean } = {}) {
       const fixture = await seedCompany();
       await db.update(companyMemberships).set({ membershipRole: options.role ?? "admin" })
         .where(and(eq(companyMemberships.companyId, fixture.companyId), eq(companyMemberships.principalId, "owner-user")));
@@ -9346,6 +9346,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       const context = await configuredSlackEndpoint(fixture, {
         linkedBoardUser: true, allowUnlinkedPeople: false, requireAtMention: options.requireAtMention ?? false,
         fetch: boardSlackFetch(botId, options.channels) as typeof globalThis.fetch,
+        ...(options.deferred ? { deferWebhookProcessing: true, scheduleDeferredWork: () => undefined } : {}),
       });
       // Board trust requires an active (not merely verifying) connection.
       await db.update(chatEndpoints).set({ status: "active", activatedAt: new Date() }).where(eq(chatEndpoints.id, context.endpoint.id));
@@ -9594,6 +9595,30 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       await db.update(chatEndpointResources).set({ boardTrusted: false }).where(eq(chatEndpointResources.id, f.resource.id));
       await recordSlackReadBoundary(db, authority, { id: BOARD_CHANNEL, is_private: true });
       expect((await boundaries()).sort()).toEqual([BOARD_CHANNEL, "C0SECRET1"].sort());
+    });
+
+    it("keeps only the persisted raw-event verdict when another process recovers the delivery", async () => {
+      // Recovery rebuilds the message from the ledger without the raw Slack event,
+      // so rules 4 and 5 must come from the verdict stored at ingress.
+      const f = await boardFixture({ deferred: true });
+      await sendTopLevel(f, "8115.1");
+      await sendTopLevel(f, "8115.2", { raw: plainRaw("8115.2", "UBOARD", { app_id: "A0CLAUDE" }) });
+      const plain = await deliveryFor(f.endpoint.id, "8115.1");
+      const app = await deliveryFor(f.endpoint.id, "8115.2");
+      expect(plain?.normalizedEvent).toMatchObject({ message: { slackPlainHumanTopLevel: true } });
+      expect(app?.normalizedEvent).toMatchObject({ message: { slackPlainHumanTopLevel: false } });
+      expect(f.wakeup).not.toHaveBeenCalled();
+      const restarted = createService(new FakeChatSdkRuntime(), boardSlackFetch(f.botId) as typeof globalThis.fetch);
+      try {
+        await db.update(chatDeliveries).set({ nextAttemptAt: new Date(0) }).where(inArray(chatDeliveries.id, [plain!.id, app!.id]));
+        await restarted.service.processPendingDeliveries(25, plain!.id);
+        await restarted.service.processPendingDeliveries(25, app!.id);
+        expect(restarted.wakeup).toHaveBeenCalledTimes(1);
+        expect(await readChatConversationsByEndpointId(f.endpoint.id)).toEqual([expect.objectContaining({ boardTrusted: true, externalThreadId: `slack:${BOARD_CHANNEL}:8115.1` })]);
+        expect(await deliveryFor(f.endpoint.id, "8115.2")).toMatchObject({ state: "filtered" });
+      } finally {
+        await restarted.service.shutdown();
+      }
     });
 
     it("applies the execution restriction per conversation: agent policy lifts it only for board-trusted ones", async () => {
