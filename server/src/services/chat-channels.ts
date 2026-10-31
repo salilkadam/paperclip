@@ -69,7 +69,7 @@ import { createTeamsFileDelivery } from "./chat-channels/microsoft-teams/file-de
 import { createGitHubSetupSecret } from "./chat-channels/github/setup-secret.js";
 import { createSlackInventory } from "./chat-channels/slack/inventory.js";
 import { getSlackBotChannel } from "./chat-provider-inventory.js";
-import { BOARD_NOTICE_NOT_LINKED, BOARD_NOTICE_NOT_PICKED_UP, boardTrustedChannel, isBoardTrustedMessage, userHoldsBoardTrustRole } from "./chat-channels/board-trust.js";
+import { BOARD_NOTICE_NOT_LINKED, BOARD_NOTICE_NOT_PICKED_UP, boardTrustedChannel, isBoardTrustedMessage, slackFilterVerdictSuffix, userHoldsBoardTrustRole } from "./chat-channels/board-trust.js";
 import { slackPlainHumanPost, slackPlainHumanTopLevelPost } from "./chat-channels/slack/messages.js";
 
 import { REQUIRED_GITHUB_EVENTS, UNAVOIDABLE_GITHUB_EVENTS } from "./chat-channels/github/credentials.js";
@@ -161,6 +161,7 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 
 import {
@@ -1907,8 +1908,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               : !principalAllowed
                 ? endpoint.allowUnlinkedPeople
                   ? "Endpoint sponsor can no longer authorize external guests"
-                  : "External identity must be linked to a Paperclip account"
-                : "Message did not address the agent or an active task thread";
+                  : `External identity must be linked to a Paperclip account${slackFilterVerdictSuffix(endpoint, thread, message)}`
+                : `Message did not address the agent or an active task thread${slackFilterVerdictSuffix(endpoint, thread, message)}`;
         await db.transaction(async (tx) => {
           await notifyChatDeliveryWork(tx);
           return tx
@@ -2553,14 +2554,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               redactedError: !mentionStillAllowed
                 ? "Message did not @mention the bot"
                 : endpointStillAllowed && destinationStillAllowed && currentPrincipalAuthorization.allowed && !activationStillAllowed
-                ? "Message did not address the agent or an active task thread"
+                ? `Message did not address the agent or an active task thread${slackFilterVerdictSuffix(currentEndpoint, thread, message)}`
                 : endpointStillAllowed
                   ? destinationStillAllowed
                     ? currentPrincipalAuthorization.linkedDenied
                       ? "Linked Paperclip account is not currently permitted"
                       : currentEndpoint.allowUnlinkedPeople
                         ? "Endpoint sponsor can no longer authorize external guests"
-                        : "External identity must be linked to a Paperclip account"
+                        : `External identity must be linked to a Paperclip account${slackFilterVerdictSuffix(currentEndpoint, thread, message)}`
                     : "Destination is not enabled in Paperclip"
                   : "Connection is not active",
               updatedAt: filteredAt,
@@ -3493,24 +3494,87 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   }
 
   /**
-   * Read-only dry run of the board-trust definition for a hypothetical Slack
-   * event in one of this endpoint's channels, using the same rules admission
-   * uses. Creates no principal, delivery or task. Used by the setup script to
-   * prove refusals (for example a bot-authored post) without posting to Slack.
+   * Read-only dry run of the board-trust definition, using the same rules
+   * admission uses. Creates no principal, delivery or task.
+   *
+   * - `{ resourceId, slackUserId, event }`: a hypothetical Slack event in one of
+   *   this endpoint's channels. Used by the setup script to prove refusals (for
+   *   example a bot-authored post) without posting to Slack.
+   * - `{ deliveryId }`: a delivery this endpoint already received. Rules 4 and 5
+   *   come from the verdicts stored at ingress (the raw event is not kept); the
+   *   channel, sender link, role and mention rules are read now. A delivery
+   *   without a principal (filtered deliveries drop it) has no linked sender.
+   *   Used after deploy to prove a post made through a user-token integration
+   *   is not a plain human post.
    */
   async function evaluateBoardTrust(
     endpointId: string,
-    input: { resourceId: string; slackUserId: string; event: Record<string, unknown> },
+    input:
+      | { resourceId: string; slackUserId: string; event: Record<string, unknown> }
+      | { deliveryId: string },
   ) {
     const record = await endpointRecord(endpointId);
     if (!record) throw notFound("Chat endpoint not found");
     const endpoint = record.endpoint;
     if (endpoint.provider !== "slack") throw unprocessable("Board trust is only supported for Slack connections");
-    const [resource] = await db.select().from(chatEndpointResources).where(and(
-      eq(chatEndpointResources.companyId, endpoint.companyId),
-      eq(chatEndpointResources.endpointId, endpoint.id),
-      eq(chatEndpointResources.id, input.resourceId),
-    ));
+    const linkedUser = async (principalCondition: SQL) => {
+      const [link] = await db.select({ userId: chatIdentityLinks.paperclipUserId }).from(chatIdentityLinks)
+        .innerJoin(chatExternalPrincipals, and(
+          eq(chatExternalPrincipals.id, chatIdentityLinks.principalId),
+          eq(chatExternalPrincipals.companyId, endpoint.companyId),
+          eq(chatExternalPrincipals.provider, "slack"),
+          eq(chatExternalPrincipals.providerAccountId, endpoint.providerAccountId ?? "unknown"),
+          principalCondition,
+        ))
+        .where(and(
+          eq(chatIdentityLinks.companyId, endpoint.companyId),
+          eq(chatIdentityLinks.endpointId, endpoint.id),
+          eq(chatIdentityLinks.status, "linked"),
+        ))
+        .limit(1);
+      return link?.userId ?? null;
+    };
+    const channelResource = async (condition: SQL) => {
+      const [resource] = await db.select().from(chatEndpointResources).where(and(
+        eq(chatEndpointResources.companyId, endpoint.companyId),
+        eq(chatEndpointResources.endpointId, endpoint.id),
+        condition,
+      ));
+      return resource;
+    };
+    if ("deliveryId" in input) {
+      const [delivery] = await db.select({ principalId: chatDeliveries.principalId, normalizedEvent: chatDeliveries.normalizedEvent })
+        .from(chatDeliveries)
+        .where(and(
+          eq(chatDeliveries.id, input.deliveryId),
+          eq(chatDeliveries.companyId, endpoint.companyId),
+          eq(chatDeliveries.endpointId, endpoint.id),
+        ))
+        .limit(1);
+      if (!delivery) throw notFound("Delivery not found on this connection");
+      const event = (delivery.normalizedEvent ?? {}) as {
+        resource?: { type?: unknown; providerResourceId?: unknown };
+        conversation?: { isDirectMessage?: unknown };
+        message?: { slackPlainHuman?: unknown; slackPlainHumanTopLevel?: unknown };
+      };
+      const resourceId = typeof event.resource?.providerResourceId === "string" ? event.resource.providerResourceId : null;
+      // Only a channel resource can be trusted; anything else fails closed.
+      const resource = resourceId && event.resource?.type === "channel"
+        ? await channelResource(and(eq(chatEndpointResources.type, "channel"), eq(chatEndpointResources.providerResourceId, resourceId))!)
+        : undefined;
+      const userId = delivery.principalId ? await linkedUser(eq(chatExternalPrincipals.id, delivery.principalId)) : null;
+      const boardRole = await userHoldsBoardTrustRole(db, endpoint.companyId, userId);
+      const rules = {
+        channelTrusted: boardTrustedChannel({ endpoint, resource, thread: { id: "", isDM: event.conversation?.isDirectMessage === true } }),
+        senderLinked: userId !== null,
+        senderOwnerOrAdmin: boardRole,
+        plainHuman: event.message?.slackPlainHuman === true,
+        plainHumanTopLevel: event.message?.slackPlainHuman === true && event.message?.slackPlainHumanTopLevel === true,
+        mentionNotRequired: !endpoint.requireAtMention,
+      };
+      return { trusted: Object.values(rules).every(Boolean), rules };
+    }
+    const resource = await channelResource(eq(chatEndpointResources.id, input.resourceId));
     if (!resource) throw notFound("Channel not found on this connection");
     const ts = typeof input.event.ts === "string" ? input.event.ts : "";
     const thread = { id: `slack:${resource.providerResourceId}:${ts}`, isDM: false };
@@ -3519,26 +3583,13 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       raw: input.event,
       author: { userId: input.slackUserId, isBot: false, isMe: false, isSystem: false },
     };
-    const [link] = await db.select({ userId: chatIdentityLinks.paperclipUserId }).from(chatIdentityLinks)
-      .innerJoin(chatExternalPrincipals, and(
-        eq(chatExternalPrincipals.id, chatIdentityLinks.principalId),
-        eq(chatExternalPrincipals.companyId, endpoint.companyId),
-        eq(chatExternalPrincipals.provider, "slack"),
-        eq(chatExternalPrincipals.providerAccountId, endpoint.providerAccountId ?? "unknown"),
-        eq(chatExternalPrincipals.externalId, input.slackUserId),
-      ))
-      .where(and(
-        eq(chatIdentityLinks.companyId, endpoint.companyId),
-        eq(chatIdentityLinks.endpointId, endpoint.id),
-        eq(chatIdentityLinks.status, "linked"),
-      ))
-      .limit(1);
-    const userId = link?.userId ?? null;
+    const userId = await linkedUser(eq(chatExternalPrincipals.externalId, input.slackUserId));
     const boardRole = await userHoldsBoardTrustRole(db, endpoint.companyId, userId);
     const rules = {
       channelTrusted: boardTrustedChannel({ endpoint, resource, thread }),
       senderLinked: userId !== null,
       senderOwnerOrAdmin: boardRole,
+      plainHuman: slackPlainHumanPost(message, endpoint.botExternalId),
       plainHumanTopLevel: slackPlainHumanTopLevelPost(thread, message, endpoint.botExternalId),
       mentionNotRequired: !endpoint.requireAtMention,
     };

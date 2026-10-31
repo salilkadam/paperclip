@@ -170,13 +170,17 @@ export const replaceChatEndpointResourcesSchema = z
   .strict();
 
 /** Dry-run the board-trust rules for one hypothetical Slack event; nothing is stored. */
-export const evaluateChatBoardTrustSchema = z
-  .object({
-    resourceId: z.string().uuid(),
-    slackUserId: z.string().regex(/^[UW][A-Z0-9]+$/),
-    event: z.record(z.string(), z.unknown()),
-  })
-  .strict();
+/** Either a hypothetical event in a channel, or a delivery already received. */
+export const evaluateChatBoardTrustSchema = z.union([
+  z
+    .object({
+      resourceId: z.string().uuid(),
+      slackUserId: z.string().regex(/^[UW][A-Z0-9]+$/),
+      event: z.record(z.string(), z.unknown()),
+    })
+    .strict(),
+  z.object({ deliveryId: z.string().uuid() }).strict(),
+]);
 
 export const gitHubRepositoryPageQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),

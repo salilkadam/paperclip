@@ -2739,13 +2739,13 @@ registry.registerPath({
 });
 registry.registerPath({
   method: "post", path: "/api/chat-endpoints/{endpointId}/board-trust/evaluate", tags: ["chat-channels"],
-  summary: "Dry-run the board-trust rules for a hypothetical Slack event",
-  description: "Read-only. Evaluates the same rules admission uses (trusted channel on an active endpoint, linked owner/admin sender, plain human top-level post, no mention requirement) for one event in one of this connection's channels. Stores nothing and posts nothing.",
+  summary: "Dry-run the board-trust rules for a hypothetical Slack event or a received delivery",
+  description: "Read-only. Evaluates the same rules admission uses (trusted channel on an active endpoint, linked owner/admin sender, plain human post, top-level, no mention requirement). Body is either `{ resourceId, slackUserId, event }` (a hypothetical event in one of this connection's channels) or `{ deliveryId }` (a delivery this connection received: the plain-human and top-level rules come from the verdicts stored at ingress, the rest is read now; a filtered delivery has no linked sender). Stores nothing and posts nothing.",
   request: { params: z.object({ endpointId: z.string().uuid() }), body: jsonBody(evaluateChatBoardTrustSchema) },
   responses: {
     200: r.ok(z.object({
       trusted: z.boolean(),
-      rules: z.object({ channelTrusted: z.boolean(), senderLinked: z.boolean(), senderOwnerOrAdmin: z.boolean(), plainHumanTopLevel: z.boolean(), mentionNotRequired: z.boolean() }).strict(),
+      rules: z.object({ channelTrusted: z.boolean(), senderLinked: z.boolean(), senderOwnerOrAdmin: z.boolean(), plainHuman: z.boolean(), plainHumanTopLevel: z.boolean(), mentionNotRequired: z.boolean() }).strict(),
     }).strict()),
     401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 422: r.unprocessable,
   },

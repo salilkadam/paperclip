@@ -2,7 +2,7 @@ import type { Message, Thread } from "chat";
 import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { chatConversations, chatEndpoints, companyMemberships } from "@paperclipai/db";
 import type { DbOrTransaction, EndpointRow } from "./runtime-types.js";
-import { slackPlainHumanTopLevelPost } from "./slack/messages.js";
+import { slackPlainHumanPost, slackPlainHumanTopLevelPost } from "./slack/messages.js";
 
 /**
  * Board-channel trust (doc/plans/2026-10-31-board-channel-trust.md, Change 1).
@@ -12,7 +12,9 @@ import { slackPlainHumanTopLevelPost } from "./slack/messages.js";
  *   2. the sender resolves to a linked Paperclip user that is not denied;
  *   3. that user is an active company owner or admin (`ensurePrincipal`
  *      only excludes viewers, so this is a separate role check);
- *   4. the raw event is a plain human post (no bot_id/app_id/subtype, not the bot);
+ *   4. the raw event is a plain human post (carries client_msg_id; no
+ *      bot_id/app_id/bot_profile/subtype; not the bot). Persisted at ingress as
+ *      `slackPlainHuman` and required again by derived-task provenance;
  *   5. it is a top-level channel message (thread replies keep today's rule);
  *   6. the endpoint does not require an @mention.
  */
@@ -85,6 +87,21 @@ export function chatConversationExecutionRestricted(): SQL {
     eq(chatEndpoints.externalExecutionPolicy, "restricted"),
     and(sql`${chatEndpoints.provider} <> 'agentmail'`, eq(chatConversations.boardTrusted, false)),
   )!;
+}
+
+/**
+ * Suffix for the filtered-delivery reason of a Slack message, so an operator can
+ * see from the activity feed whether a post would pass rules 4 and 5. Static
+ * words only, never message content; empty for other providers.
+ */
+export function slackFilterVerdictSuffix(
+  endpoint: Pick<EndpointRow, "provider" | "botExternalId">,
+  thread: Pick<Thread, "id" | "isDM">,
+  message: Pick<Message, "id" | "raw"> & { author?: Pick<Message["author"], "userId" | "isBot" | "isMe" | "isSystem"> },
+): string {
+  if (endpoint.provider !== "slack") return "";
+  const yes = (value: boolean) => (value ? "yes" : "no");
+  return ` (plain human post: ${yes(slackPlainHumanPost(message, endpoint.botExternalId))}; top-level: ${yes(slackPlainHumanTopLevelPost(thread, message, endpoint.botExternalId))})`;
 }
 
 /** Static notice texts; never echo message content. */
