@@ -405,6 +405,37 @@ describe("GET /health", () => {
     });
   });
 
+  it("serves kubelet-probe backup health from the cache without rescanning the backup directory", async () => {
+    const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-health-cached-backups-"));
+    const backupFile = path.join(backupDir, "paperclip-20260706-031702.sql.gz");
+    fs.writeFileSync(backupFile, "backup");
+    const now = new Date();
+    fs.utimesSync(backupFile, now, now);
+    // No `now` injected: this is the kubelet probe path, which must be served
+    // from the TTL cache so a slow (network-mounted) backup directory can
+    // never add latency to a liveness/readiness probe.
+    const app = createApp(createHealthyDb(), testServerInfo, {
+      enabled: true,
+      backupDir,
+      maxAgeHours: 26,
+    });
+
+    const first = await request(app).get("/health");
+    expect(first.status).toBe(200);
+    expect(first.body.databaseBackup.latestBackup.name).toBe("paperclip-20260706-031702.sql.gz");
+
+    // A backup completing right now (the hourly window) must not be rescanned
+    // until the cache TTL expires.
+    const newerFile = path.join(backupDir, "paperclip-20260706-040000.sql.gz");
+    fs.writeFileSync(newerFile, "backup");
+    const newerMtime = new Date(now.getTime() + 60_000);
+    fs.utimesSync(newerFile, newerMtime, newerMtime);
+
+    const second = await request(app).get("/health");
+    expect(second.status).toBe(200);
+    expect(second.body.databaseBackup.latestBackup.name).toBe("paperclip-20260706-031702.sql.gz");
+  });
+
   it("redacts detailed metadata for anonymous requests in authenticated mode", async () => {
     const devServerStatus = await import("../dev-server-status.js");
     vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(undefined);

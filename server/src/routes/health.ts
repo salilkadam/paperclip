@@ -21,7 +21,7 @@ import {
 import { getCloudRuntimeIdentity } from "../services/cloud-runtime-identity.js";
 import { getHiddenSettings } from "../services/settings-visibility.js";
 import {
-  inspectDatabaseBackupHealth,
+  getCachedDatabaseBackupHealth,
   type DatabaseBackupHealthStatus,
   type DatabaseBackupHealthWarning,
   type InspectDatabaseBackupHealthOptions,
@@ -393,7 +393,7 @@ export function healthRoutes(
       : null;
 
     const databaseBackup = opts.databaseBackupHealth
-      ? inspectDatabaseBackupHealth(opts.databaseBackupHealth)
+      ? await getCachedDatabaseBackupHealth(opts.databaseBackupHealth)
       : undefined;
     const warnings = databaseBackup?.warnings.length ? databaseBackup.warnings : undefined;
     const nativeRecovery = exposeFullDetails
