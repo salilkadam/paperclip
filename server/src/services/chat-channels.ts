@@ -3492,6 +3492,62 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     return deadlines.length ? Math.min(...deadlines) : null;
   }
 
+  /**
+   * Read-only dry run of the board-trust definition for a hypothetical Slack
+   * event in one of this endpoint's channels, using the same rules admission
+   * uses. Creates no principal, delivery or task. Used by the setup script to
+   * prove refusals (for example a bot-authored post) without posting to Slack.
+   */
+  async function evaluateBoardTrust(
+    endpointId: string,
+    input: { resourceId: string; slackUserId: string; event: Record<string, unknown> },
+  ) {
+    const record = await endpointRecord(endpointId);
+    if (!record) throw notFound("Chat endpoint not found");
+    const endpoint = record.endpoint;
+    if (endpoint.provider !== "slack") throw unprocessable("Board trust is only supported for Slack connections");
+    const [resource] = await db.select().from(chatEndpointResources).where(and(
+      eq(chatEndpointResources.companyId, endpoint.companyId),
+      eq(chatEndpointResources.endpointId, endpoint.id),
+      eq(chatEndpointResources.id, input.resourceId),
+    ));
+    if (!resource) throw notFound("Channel not found on this connection");
+    const ts = typeof input.event.ts === "string" ? input.event.ts : "";
+    const thread = { id: `slack:${resource.providerResourceId}:${ts}`, isDM: false };
+    const message = {
+      id: ts,
+      raw: input.event,
+      author: { userId: input.slackUserId, isBot: false, isMe: false, isSystem: false },
+    };
+    const [link] = await db.select({ userId: chatIdentityLinks.paperclipUserId }).from(chatIdentityLinks)
+      .innerJoin(chatExternalPrincipals, and(
+        eq(chatExternalPrincipals.id, chatIdentityLinks.principalId),
+        eq(chatExternalPrincipals.companyId, endpoint.companyId),
+        eq(chatExternalPrincipals.provider, "slack"),
+        eq(chatExternalPrincipals.providerAccountId, endpoint.providerAccountId ?? "unknown"),
+        eq(chatExternalPrincipals.externalId, input.slackUserId),
+      ))
+      .where(and(
+        eq(chatIdentityLinks.companyId, endpoint.companyId),
+        eq(chatIdentityLinks.endpointId, endpoint.id),
+        eq(chatIdentityLinks.status, "linked"),
+      ))
+      .limit(1);
+    const userId = link?.userId ?? null;
+    const boardRole = await userHoldsBoardTrustRole(db, endpoint.companyId, userId);
+    const rules = {
+      channelTrusted: boardTrustedChannel({ endpoint, resource, thread }),
+      senderLinked: userId !== null,
+      senderOwnerOrAdmin: boardRole,
+      plainHumanTopLevel: slackPlainHumanTopLevelPost(thread, message, endpoint.botExternalId),
+      mentionNotRequired: !endpoint.requireAtMention,
+    };
+    return {
+      trusted: isBoardTrustedMessage({ endpoint, resource, thread, message, principal: { userId, linkedDenied: false }, boardRole }),
+      rules,
+    };
+  }
+
   async function getIssueBinding(
     issueId: string,
   ): Promise<ExternalChannelBindingSummary | null> {
@@ -3637,6 +3693,7 @@ return {
     listGitHubRepositories,
     toggleAllGitHubRepositories,
     replaceResources,
+    evaluateBoardTrust,
     listPrincipals,
     createLinkIntent,
     previewIdentityLink,

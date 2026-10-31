@@ -337,6 +337,7 @@ import {
   resolveChatActionSchema,
   resolveChatPublicationSchema,
   replaceChatEndpointResourcesSchema,
+  evaluateChatBoardTrustSchema,
   updateChatEndpointSchema,
 } from "@paperclipai/shared";
 import { aggregatorAppsSyncSchema, aggregatorAppsRefreshSchema, arcadeDiscoverySetupSchema } from "@paperclipai/shared/aggregator-apps";
@@ -1645,6 +1646,7 @@ const BOARD_ONLY_OPERATIONS = new Set([
   "POST /api/chat-endpoints/{endpointId}/photon/inspect",
   "GET /api/chat-endpoints/{endpointId}/resources",
   "PUT /api/chat-endpoints/{endpointId}/resources",
+  "POST /api/chat-endpoints/{endpointId}/board-trust/evaluate",
   "GET /api/chat-endpoints/{endpointId}/principals",
   "POST /api/chat-endpoints/{endpointId}/principals/{principalId}/link-intent",
   "DELETE /api/chat-endpoints/{endpointId}/principals/{principalId}/link",
@@ -2734,6 +2736,19 @@ registry.registerPath({
   description: "Requires verified provider delivery and an authorized identity linked to the current user. GitHub also checks the assigned agent’s current bot capabilities. Records that a full conversation test was not required.",
   request: { params: z.object({ endpointId: z.string().uuid() }) },
   responses: { 200: r.ok(chatEndpointResponseSchema), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict },
+});
+registry.registerPath({
+  method: "post", path: "/api/chat-endpoints/{endpointId}/board-trust/evaluate", tags: ["chat-channels"],
+  summary: "Dry-run the board-trust rules for a hypothetical Slack event",
+  description: "Read-only. Evaluates the same rules admission uses (trusted channel on an active endpoint, linked owner/admin sender, plain human top-level post, no mention requirement) for one event in one of this connection's channels. Stores nothing and posts nothing.",
+  request: { params: z.object({ endpointId: z.string().uuid() }), body: jsonBody(evaluateChatBoardTrustSchema) },
+  responses: {
+    200: r.ok(z.object({
+      trusted: z.boolean(),
+      rules: z.object({ channelTrusted: z.boolean(), senderLinked: z.boolean(), senderOwnerOrAdmin: z.boolean(), plainHumanTopLevel: z.boolean(), mentionNotRequired: z.boolean() }).strict(),
+    }).strict()),
+    401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 422: r.unprocessable,
+  },
 });
 registry.registerPath({
   method: "get", path: "/api/chat-endpoints/{endpointId}/test-status", tags: ["chat-channels"],
