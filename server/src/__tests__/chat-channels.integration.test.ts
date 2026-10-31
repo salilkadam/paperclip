@@ -9360,8 +9360,11 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       return { ...context, fixture, resource, botId };
     }
     const rootThread = (ts: string, channel = BOARD_CHANNEL) => makeThread({ channelId: channel, id: `slack:${channel}:${ts}`, name: "#reliora-board" });
+    // A message typed in a Slack client: carries client_msg_id (rule 4).
     const plainRaw = (ts: string, user = "UBOARD", extra: Record<string, unknown> = {}) =>
-      ({ type: "message", channel: BOARD_CHANNEL, ts, user, text: "Draft the weekly board update", ...extra });
+      ({ type: "message", channel: BOARD_CHANNEL, ts, user, client_msg_id: `cmid-${ts}`, text: "Draft the weekly board update", ...extra });
+    const notAddressed = (plain: boolean, topLevel: boolean) =>
+      `Message did not address the agent or an active task thread (plain human post: ${plain ? "yes" : "no"}; top-level: ${topLevel ? "yes" : "no"})`;
     async function sendTopLevel(f: Awaited<ReturnType<typeof boardFixture>>, ts: string, options: { user?: string; raw?: Record<string, unknown>; thread?: ReturnType<typeof makeThread>; mentioned?: boolean } = {}) {
       const thread = options.thread ?? rootThread(ts);
       const user = options.user ?? "UBOARD";
@@ -9394,7 +9397,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       const f = await boardFixture({ trusted: false });
       await sendTopLevel(f, "8101.1");
       expect(f.wakeup).not.toHaveBeenCalled();
-      expect(await deliveryFor(f.endpoint.id, "8101.1")).toMatchObject({ state: "filtered", redactedError: "Message did not address the agent or an active task thread" });
+      expect(await deliveryFor(f.endpoint.id, "8101.1")).toMatchObject({ state: "filtered", redactedError: notAddressed(true, true) });
       expect(await readChatConversationsByEndpointId(f.endpoint.id)).toEqual([]);
       expect(await notices(f.endpoint.id)).toEqual([]);
     });
@@ -9404,7 +9407,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       await sendTopLevel(f, "8102.1");
       await sendTopLevel(f, "8102.2");
       expect(f.wakeup).not.toHaveBeenCalled();
-      expect(await deliveryFor(f.endpoint.id, "8102.1")).toMatchObject({ state: "filtered", redactedError: "Message did not address the agent or an active task thread" });
+      expect(await deliveryFor(f.endpoint.id, "8102.1")).toMatchObject({ state: "filtered", redactedError: notAddressed(true, true) });
       expect(await notices(f.endpoint.id)).toEqual([{ id: expect.stringContaining(":not_picked_up:"), text: expect.stringContaining("not picked up"), userId: "UBOARD" }]);
       // A rolling 24 hours, not a calendar day.
       await db.execute(sql`update chat_board_trust_notices set last_notice_at = now() - interval '23 hours' where endpoint_id = ${f.endpoint.id}`);
@@ -9432,11 +9435,16 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       ["bot_profile", { bot_profile: { id: "B0INTEGR" } }],
       ["subtype", { subtype: "file_share" }],
       ["missing ts", { ts: undefined }],
+      // API posts carry client_msg_id only when the caller sets one.
+      ["no client_msg_id", { client_msg_id: undefined }],
+      ["an empty client_msg_id", { client_msg_id: " " }],
     ] as const)("does not trust a linked admin's top-level post carrying %s", async (_label, extra) => {
       const f = await boardFixture();
       await sendTopLevel(f, "8104.1", { raw: plainRaw("8104.1", "UBOARD", extra) });
       expect(f.wakeup).not.toHaveBeenCalled();
-      expect(await deliveryFor(f.endpoint.id, "8104.1")).toMatchObject({ state: "filtered" });
+      // The activity detail says why, in static words (top-level needs plain human).
+      expect(await deliveryFor(f.endpoint.id, "8104.1")).toMatchObject({ state: "filtered", redactedError: notAddressed(false, false),
+        normalizedEvent: { message: { slackPlainHuman: false, slackPlainHumanTopLevel: false }, filtering: { contentRetained: false } } });
       expect(await readChatConversationsByEndpointId(f.endpoint.id)).toEqual([]);
     });
 
@@ -9460,11 +9468,11 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     it("filters an unlinked sender, staging the link notice only for an addressed message", async () => {
       const f = await boardFixture();
       await sendTopLevel(f, "8107.1", { user: "U0STRANGER" });
-      expect(await deliveryFor(f.endpoint.id, "8107.1")).toMatchObject({ state: "filtered", redactedError: "External identity must be linked to a Paperclip account" });
+      expect(await deliveryFor(f.endpoint.id, "8107.1")).toMatchObject({ state: "filtered", redactedError: "External identity must be linked to a Paperclip account (plain human post: yes; top-level: yes)" });
       expect(await notices(f.endpoint.id)).toEqual([]);
       await sendTopLevel(f, "8107.2", { user: "U0STRANGER", mentioned: true });
       expect(f.wakeup).not.toHaveBeenCalled();
-      expect(await deliveryFor(f.endpoint.id, "8107.2")).toMatchObject({ state: "filtered", redactedError: "External identity must be linked to a Paperclip account" });
+      expect(await deliveryFor(f.endpoint.id, "8107.2")).toMatchObject({ state: "filtered", redactedError: "External identity must be linked to a Paperclip account (plain human post: yes; top-level: yes)" });
       expect(await notices(f.endpoint.id)).toEqual([{ id: expect.stringContaining(":not_linked:"), text: expect.stringContaining("not linked"), userId: "U0STRANGER" }]);
     });
 
@@ -9516,7 +9524,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       await context.service.update(context.endpoint.id, { boardChannelTrust: { resourceId: resource.id, trusted: true } }, "owner-user");
       await sendTopLevel({ ...context, fixture, resource, botId: "U0BOTLOCK1" }, "8111.1");
       expect(context.wakeup).not.toHaveBeenCalled();
-      expect(await deliveryFor(context.endpoint.id, "8111.1")).toMatchObject({ state: "filtered", redactedError: "Message did not address the agent or an active task thread" });
+      expect(await deliveryFor(context.endpoint.id, "8111.1")).toMatchObject({ state: "filtered", redactedError: notAddressed(true, true) });
       expect(await readChatConversationsByEndpointId(context.endpoint.id)).toEqual([]);
     });
 
@@ -9570,7 +9578,8 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       const f = await boardFixture();
       const before = await readChatDeliveriesByEndpointId(f.endpoint.id);
       const evaluate = (event: Record<string, unknown>, slackUserId = "UBOARD") => f.service.evaluateBoardTrust(f.endpoint.id, { resourceId: f.resource.id, slackUserId, event });
-      expect(await evaluate(plainRaw("1.000001"))).toEqual({ trusted: true, rules: { channelTrusted: true, senderLinked: true, senderOwnerOrAdmin: true, plainHumanTopLevel: true, mentionNotRequired: true } });
+      expect(await evaluate(plainRaw("1.000001"))).toEqual({ trusted: true, rules: { channelTrusted: true, senderLinked: true, senderOwnerOrAdmin: true, plainHuman: true, plainHumanTopLevel: true, mentionNotRequired: true } });
+      expect(await evaluate(plainRaw("1.000001", "UBOARD", { client_msg_id: undefined }))).toMatchObject({ trusted: false, rules: { plainHuman: false, plainHumanTopLevel: false } });
       expect((await evaluate(plainRaw("1.000001", "UBOARD", { bot_id: "B1" }))).trusted).toBe(false);
       expect((await evaluate(plainRaw("1.000001", "UBOARD", { app_id: "A1" }))).trusted).toBe(false);
       expect((await evaluate(plainRaw("1.000002", "UBOARD", { thread_ts: "1.000001" }))).trusted).toBe(false);
@@ -9605,8 +9614,8 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       await sendTopLevel(f, "8115.2", { raw: plainRaw("8115.2", "UBOARD", { app_id: "A0CLAUDE" }) });
       const plain = await deliveryFor(f.endpoint.id, "8115.1");
       const app = await deliveryFor(f.endpoint.id, "8115.2");
-      expect(plain?.normalizedEvent).toMatchObject({ message: { slackPlainHumanTopLevel: true } });
-      expect(app?.normalizedEvent).toMatchObject({ message: { slackPlainHumanTopLevel: false } });
+      expect(plain?.normalizedEvent).toMatchObject({ message: { slackPlainHuman: true, slackPlainHumanTopLevel: true } });
+      expect(app?.normalizedEvent).toMatchObject({ message: { slackPlainHuman: false, slackPlainHumanTopLevel: false } });
       expect(f.wakeup).not.toHaveBeenCalled();
       const restarted = createService(new FakeChatSdkRuntime(), boardSlackFetch(f.botId) as typeof globalThis.fetch);
       try {
@@ -9619,6 +9628,217 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       } finally {
         await restarted.service.shutdown();
       }
+    });
+
+    it("rebuilds a recovered raw event that reproduces exactly the stored verdicts", async () => {
+      const { recoveredSlackTrustRaw } = await import("../services/chat-channels/inbound/conversation-queue.js");
+      const { slackPlainHumanPost, slackPlainHumanTopLevelPost } = await import("../services/chat-channels/slack/messages.js");
+      const thread = { id: `slack:${BOARD_CHANNEL}:9.1`, isDM: false };
+      const cases = [
+        [undefined, [false, false]],
+        [{ slackPlainHumanTopLevel: true }, [false, false]],
+        [{ slackPlainHuman: false, slackPlainHumanTopLevel: true }, [false, false]],
+        [{ slackPlainHuman: "true", slackPlainHumanTopLevel: true }, [false, false]],
+        [{ slackPlainHuman: true, slackPlainHumanTopLevel: false }, [true, false]],
+        [{ slackPlainHuman: true }, [true, false]],
+        [{ slackPlainHuman: true, slackPlainHumanTopLevel: true }, [true, true]],
+      ] as const;
+      for (const [stored, want] of cases) {
+        const message = { id: "9.1", raw: recoveredSlackTrustRaw("9.1", stored as never), author: { userId: "UBOARD", isBot: false, isMe: false, isSystem: false } };
+        expect([slackPlainHumanPost(message, "U0BOT"), slackPlainHumanTopLevelPost(thread, message, "U0BOT")]).toEqual(want);
+      }
+    });
+
+    // Rule 4 in provenance (code review round 1 blocker): a user-token post made
+    // as the owner is admitted through the normal mention / existing-thread paths
+    // and becomes the owner's comment, but must never carry connection tools into
+    // a derived task. Driven through the real ingress, then the real check.
+    async function derivedProvenance(f: Awaited<ReturnType<typeof boardFixture>>, commentId: string, issueId: string, where: "message" | "wake") {
+      const { chatRunSourceMessageId } = await import("../services/chat-channels/run-origin.js");
+      const { runIdentityContexts } = await import("@paperclipai/db");
+      const companyId = f.fixture.companyId;
+      const [assignee] = await db.insert(agents).values({ companyId, name: `Derived ${randomUUID().slice(0, 6)}`, role: "general", adapterType: "codex_local" }).returning();
+      const [derivedTask] = await db.insert(issues).values({ companyId, title: "Derived from the board channel", assigneeAgentId: assignee.id }).returning();
+      const [originRun, derivedRun] = await db.insert(heartbeatRuns).values([
+        { companyId, agentId: f.fixture.assignedAgentId, status: "succeeded", nativeIssueId: issueId, responsibleUserId: "owner-user",
+          contextSnapshot: where === "wake" ? { issueId, wakeCommentId: commentId } : { issueId } },
+        { companyId, agentId: assignee.id, status: "running", nativeIssueId: derivedTask.id, responsibleUserId: "owner-user" },
+      ]).returning();
+      const [originContext] = await db.insert(runIdentityContexts).values({ companyId, runId: originRun.id, revision: 1, responsibleUserId: "owner-user",
+        cause: "issue_assigned", correlationId: "dispatch", ...(where === "message" ? { messageId: commentId } : {}) }).returning();
+      const [derivedContext] = await db.insert(runIdentityContexts).values({ companyId, runId: derivedRun.id, revision: 1, responsibleUserId: "owner-user",
+        parentContextId: originContext.id, cause: "issue_assigned", correlationId: "dispatch" }).returning();
+      const [run] = await db.update(heartbeatRuns).set({ activeIdentityContextId: derivedContext.id }).where(eq(heartbeatRuns.id, derivedRun.id)).returning();
+      return chatRunSourceMessageId(db, run, { allowForeignOriginWithoutChatSource: true });
+    }
+    const ownerComments = async (endpointId: string) => {
+      const conversations = await readChatConversationsByEndpointId(endpointId);
+      const out: Array<{ commentId: string; issueId: string; conversationId: string }> = [];
+      for (const conversation of conversations) {
+        for (const comment of await readIssueCommentsByIssueId(conversation.issueId)) {
+          if (comment.authorType === "user" && comment.authorUserId === "owner-user") out.push({ commentId: comment.id, issueId: conversation.issueId, conversationId: conversation.id });
+        }
+      }
+      return out;
+    };
+
+    it("refuses provenance for an owner's user-token post that @mentions the bot (app_id), and passes a plain human mention", async () => {
+      const f = await boardFixture();
+      await sendTopLevel(f, "8120.1", { mentioned: true, raw: plainRaw("8120.1", "UBOARD", { app_id: "A0CLAUDE", client_msg_id: undefined }) });
+      expect(f.wakeup).toHaveBeenCalledTimes(1);
+      expect((await deliveryFor(f.endpoint.id, "8120.1"))?.normalizedEvent).toMatchObject({ message: { slackPlainHuman: false, slackPlainHumanTopLevel: false } });
+      const [app] = await ownerComments(f.endpoint.id);
+      expect(app).toBeDefined();
+      for (const where of ["message", "wake"] as const) {
+        await expect(derivedProvenance(f, app.commentId, app.issueId, where)).rejects.toMatchObject({
+          status: 403, details: { code: where === "message" ? "chat_provenance_foreign_message" : "chat_provenance_foreign_wake" },
+        });
+      }
+      // The same owner typing the mention in Slack is the board.
+      await sendTopLevel(f, "8120.2", { mentioned: true });
+      expect((await deliveryFor(f.endpoint.id, "8120.2"))?.normalizedEvent).toMatchObject({ message: { slackPlainHuman: true, slackPlainHumanTopLevel: true } });
+      const plain = (await ownerComments(f.endpoint.id)).find((c) => c.commentId !== app.commentId)!;
+      for (const where of ["message", "wake"] as const) {
+        expect(await derivedProvenance(f, plain.commentId, plain.issueId, where)).toBeNull();
+      }
+    });
+
+    it("refuses provenance for an owner's bot_id reply inside a trusted conversation", async () => {
+      const f = await boardFixture();
+      const thread = await sendTopLevel(f, "8121.1");
+      const [root] = await ownerComments(f.endpoint.id);
+      expect(await derivedProvenance(f, root.commentId, root.issueId, "message")).toBeNull();
+      await sendTopLevel(f, "8121.2", { thread, raw: plainRaw("8121.2", "UBOARD", { thread_ts: "8121.1", bot_id: "B0INTEGR" }) });
+      expect(f.wakeup).toHaveBeenCalledTimes(2);
+      expect((await deliveryFor(f.endpoint.id, "8121.2"))?.normalizedEvent).toMatchObject({ message: { slackPlainHuman: false, slackPlainHumanTopLevel: false } });
+      const reply = (await ownerComments(f.endpoint.id)).find((c) => c.commentId !== root.commentId)!;
+      expect(reply.conversationId).toBe(root.conversationId);
+      for (const where of ["message", "wake"] as const) {
+        await expect(derivedProvenance(f, reply.commentId, reply.issueId, where)).rejects.toMatchObject({
+          status: 403, details: { code: where === "message" ? "chat_provenance_foreign_message" : "chat_provenance_foreign_wake" },
+        });
+      }
+    });
+
+    it("never passes provenance from a DM conversation, even a plain post by the owner", async () => {
+      const f = await boardFixture();
+      const dm = makeThread({ channelId: "D0BOARD", id: "slack:D0BOARD:", isDM: true });
+      await deliverMessage({ callbacks: f.callbacks, endpointId: f.endpoint.id, thread: dm.thread,
+        message: makeMessage({ id: "8122.1", text: "Hello", userId: "UBOARD", raw: { type: "message", channel: "D0BOARD", ts: "8122.1", user: "UBOARD", client_msg_id: "cmid-dm", text: "Hello" } }), trigger: "direct_message" });
+      expect((await deliveryFor(f.endpoint.id, "8122.1"))?.normalizedEvent).toMatchObject({ message: { slackPlainHuman: true, slackPlainHumanTopLevel: false } });
+      const [comment] = await ownerComments(f.endpoint.id);
+      for (const where of ["message", "wake"] as const) {
+        await expect(derivedProvenance(f, comment.commentId, comment.issueId, where)).rejects.toMatchObject({ status: 403 });
+      }
+    });
+
+    it.each(["trust-off", "link-revoked"] as const)("re-derives trust under lock: %s between admission and task mutation filters the message", async (change) => {
+      let fire = true;
+      const fixture = await seedCompany();
+      await db.update(companyMemberships).set({ membershipRole: "admin" }).where(and(eq(companyMemberships.companyId, fixture.companyId), eq(companyMemberships.principalId, "owner-user")));
+      let resourceId = "";
+      const botId = change === "trust-off" ? "U0BOTLOCK2" : "U0BOTLOCK3";
+      const context = await configuredSlackEndpoint(fixture, {
+        linkedBoardUser: true, allowUnlinkedPeople: false, fetch: boardSlackFetch(botId) as typeof globalThis.fetch,
+        reachAuthorizationBarrier: async () => {
+          if (!fire) return;
+          fire = false;
+          if (change === "trust-off") await db.update(chatEndpointResources).set({ boardTrusted: false }).where(eq(chatEndpointResources.id, resourceId));
+          else await db.update(chatIdentityLinks).set({ status: "revoked", revokedAt: new Date() }).where(eq(chatIdentityLinks.endpointId, context.endpoint.id));
+        },
+      });
+      await db.update(chatEndpoints).set({ status: "active", activatedAt: new Date() }).where(eq(chatEndpoints.id, context.endpoint.id));
+      const [resource] = await db.insert(chatEndpointResources).values({ companyId: fixture.companyId, endpointId: context.endpoint.id, type: "channel", providerResourceId: BOARD_CHANNEL, label: "#reliora-board", enabled: true }).returning();
+      resourceId = resource.id;
+      await context.service.update(context.endpoint.id, { boardChannelTrust: { resourceId: resource.id, trusted: true } }, "owner-user");
+      await sendTopLevel({ ...context, fixture, resource, botId }, "8123.1");
+      expect(context.wakeup).not.toHaveBeenCalled();
+      expect(await deliveryFor(context.endpoint.id, "8123.1")).toMatchObject({ state: "filtered",
+        redactedError: change === "trust-off" ? notAddressed(true, true) : "External identity must be linked to a Paperclip account (plain human post: yes; top-level: yes)" });
+      expect(await readChatConversationsByEndpointId(context.endpoint.id)).toEqual([]);
+    });
+
+    it("evaluates a received delivery from its stored verdicts and current state", async () => {
+      const f = await boardFixture();
+      const { evaluateChatBoardTrustSchema } = await import("@paperclipai/shared");
+      expect(evaluateChatBoardTrustSchema.safeParse({ deliveryId: randomUUID() }).success).toBe(true);
+      expect(evaluateChatBoardTrustSchema.safeParse({ deliveryId: "nope" }).success).toBe(false);
+      expect(evaluateChatBoardTrustSchema.safeParse({ deliveryId: randomUUID(), resourceId: randomUUID() }).success).toBe(false);
+      expect(evaluateChatBoardTrustSchema.safeParse({ resourceId: randomUUID(), slackUserId: "UBOARD", event: {} }).success).toBe(true);
+      // Admitted plain top-level post: every rule holds.
+      await sendTopLevel(f, "8124.1");
+      // Admitted user-token mention: linked owner, trusted channel, not a plain human post.
+      await sendTopLevel(f, "8124.2", { mentioned: true, raw: plainRaw("8124.2", "UBOARD", { app_id: "A0CLAUDE", client_msg_id: undefined }) });
+      // Filtered user-token post (the post-deploy probe with trust on or off): no principal kept.
+      await sendTopLevel(f, "8124.3", { raw: plainRaw("8124.3", "UBOARD", { app_id: "A0CLAUDE", client_msg_id: undefined }) });
+      const before = await readChatDeliveriesByEndpointId(f.endpoint.id);
+      const evaluate = async (ts: string) => f.service.evaluateBoardTrust(f.endpoint.id, { deliveryId: (await deliveryFor(f.endpoint.id, ts))!.id });
+      expect(await evaluate("8124.1")).toEqual({ trusted: true, rules: { channelTrusted: true, senderLinked: true, senderOwnerOrAdmin: true, plainHuman: true, plainHumanTopLevel: true, mentionNotRequired: true } });
+      expect(await evaluate("8124.2")).toEqual({ trusted: false, rules: { channelTrusted: true, senderLinked: true, senderOwnerOrAdmin: true, plainHuman: false, plainHumanTopLevel: false, mentionNotRequired: true } });
+      expect(await evaluate("8124.3")).toEqual({ trusted: false, rules: { channelTrusted: true, senderLinked: false, senderOwnerOrAdmin: false, plainHuman: false, plainHumanTopLevel: false, mentionNotRequired: true } });
+      // Current state, not a snapshot: trust withdrawn turns the plain post untrusted.
+      await db.update(chatEndpointResources).set({ boardTrusted: false }).where(eq(chatEndpointResources.id, f.resource.id));
+      expect(await evaluate("8124.1")).toMatchObject({ trusted: false, rules: { channelTrusted: false, plainHuman: true } });
+      await expect(f.service.evaluateBoardTrust(f.endpoint.id, { deliveryId: randomUUID() })).rejects.toMatchObject({ status: 404 });
+      const other = await configuredSlackEndpoint(f.fixture, { linkedBoardUser: false, allowUnlinkedPeople: false, fetch: boardSlackFetch("U0BOTOTHR1") as typeof globalThis.fetch });
+      await expect(other.service.evaluateBoardTrust(other.endpoint.id, { deliveryId: (await deliveryFor(f.endpoint.id, "8124.1"))!.id })).rejects.toMatchObject({ status: 404 });
+      expect(await readChatDeliveriesByEndpointId(f.endpoint.id)).toEqual(before);
+    });
+
+    it("keeps the private-source boundary for a trusted channel that is disabled or unavailable", async () => {
+      const f = await boardFixture();
+      const { recordSlackReadBoundary } = await import("../services/connectors/slack-access.js");
+      const [principal] = await db.select().from(chatExternalPrincipals).where(and(eq(chatExternalPrincipals.companyId, f.fixture.companyId), eq(chatExternalPrincipals.externalId, "UBOARD")));
+      const endpointRow = (await db.select().from(chatEndpoints).where(eq(chatEndpoints.id, f.endpoint.id)))[0];
+      const authorityFor = (issueId: string) => ({ endpoint: endpointRow, conversation: null, issueId, slackUserId: "UBOARD", principalId: principal.id, userId: "owner-user" }) as unknown as Parameters<typeof recordSlackReadBoundary>[1];
+      const boundaries = async () => (await db.select().from(chatActions).where(and(eq(chatActions.endpointId, f.endpoint.id), eq(chatActions.kind, "slack_private_source"))))
+        .map((row) => row.payload.issueId);
+      const trusted = randomUUID();
+      await recordSlackReadBoundary(db, authorityFor(trusted), { id: BOARD_CHANNEL, is_private: true });
+      expect(await boundaries()).toEqual([]);
+      await db.update(chatEndpointResources).set({ enabled: false }).where(eq(chatEndpointResources.id, f.resource.id));
+      const disabled = randomUUID();
+      await recordSlackReadBoundary(db, authorityFor(disabled), { id: BOARD_CHANNEL, is_private: true });
+      expect(await boundaries()).toEqual([disabled]);
+      await db.update(chatEndpointResources).set({ enabled: true, availability: "unavailable" }).where(eq(chatEndpointResources.id, f.resource.id));
+      const unavailable = randomUUID();
+      await recordSlackReadBoundary(db, authorityFor(unavailable), { id: BOARD_CHANNEL, is_private: true });
+      expect((await boundaries()).sort()).toEqual([disabled, unavailable].sort());
+    });
+
+    it("skips the write-path origin boundary for the trusted channel and records it once the channel is disabled", async () => {
+      const f = await boardFixture();
+      // A real board-trusted conversation in the channel (the boundary row references it).
+      await sendTopLevel(f, "8125.1");
+      const [conversation] = await readChatConversationsByEndpointId(f.endpoint.id);
+      const { recordSlackOriginBoundary } = await import("../services/connectors/slack-access.js");
+      const [principal] = await db.select().from(chatExternalPrincipals).where(and(eq(chatExternalPrincipals.companyId, f.fixture.companyId), eq(chatExternalPrincipals.externalId, "UBOARD")));
+      const endpointRow = (await db.select().from(chatEndpoints).where(eq(chatEndpoints.id, f.endpoint.id)))[0];
+      const api = (async (method: string) => {
+        if (method === "conversations.info") return { ok: true, channel: { id: BOARD_CHANNEL, is_member: true, is_private: true } };
+        if (method === "users.info") return { ok: true, user: { id: "UBOARD", team_id: endpointRow.providerAccountId } };
+        if (method === "conversations.members") return { ok: true, members: ["UBOARD"], response_metadata: { next_cursor: "" } };
+        throw new Error(`unexpected Slack call ${method}`);
+      }) as unknown as Parameters<typeof recordSlackOriginBoundary>[2];
+      const authorityFor = (issueId: string) => ({ endpoint: endpointRow, issueId, slackUserId: "UBOARD", principalId: principal.id, userId: "owner-user",
+        conversation }) as unknown as Parameters<typeof recordSlackOriginBoundary>[1];
+      const boundaries = async () => (await db.select().from(chatActions).where(and(eq(chatActions.endpointId, f.endpoint.id), eq(chatActions.kind, "slack_private_source"))))
+        .map((row) => row.payload.issueId);
+      await recordSlackOriginBoundary(db, authorityFor(randomUUID()), api);
+      expect(await boundaries()).toEqual([]);
+      await db.update(chatEndpointResources).set({ enabled: false }).where(eq(chatEndpointResources.id, f.resource.id));
+      const disabled = randomUUID();
+      await recordSlackOriginBoundary(db, authorityFor(disabled), api);
+      expect(await boundaries()).toEqual([disabled]);
+    });
+
+    it("refuses the agent execution policy on providers it cannot lift anything for", async () => {
+      const f = await boardFixture({ trusted: false });
+      const github = await f.service.create(f.fixture.companyId, { provider: "github", assignedAgentId: f.fixture.assignedAgentId });
+      await expect(f.service.update(github.id, { externalExecutionPolicy: "agent" }, "owner-user"))
+        .rejects.toMatchObject({ status: 422, message: "The agent execution policy only applies to Slack connections (board-trusted channels) and AgentMail inboxes" });
+      expect((await f.service.update(github.id, { externalExecutionPolicy: "restricted" }, "owner-user")).externalExecutionPolicy).toBe("restricted");
+      expect((await f.service.update(f.endpoint.id, { externalExecutionPolicy: "agent" }, "owner-user")).externalExecutionPolicy).toBe("agent");
     });
 
     it("applies the execution restriction per conversation: agent policy lifts it only for board-trusted ones", async () => {
