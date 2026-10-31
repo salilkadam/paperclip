@@ -268,7 +268,7 @@ monitor:
     a workload is down/crashlooping, or fresh fatal errors are appearing.
 
 # Remediation: dispatched BY the monitor when a sweep reports WARN/FAIL
-# (see monitor.remediation). One job, up to ~90 minutes, full engineer
+# (see monitor.remediation). One job, up to ~3 hours, full engineer
 # latitude within bounded rules: diagnose -> classify -> fix (cluster ops
 # and/or code PR). It stops at an open PR; merging and deploying require
 # the operator's approval via the approvals component.
@@ -276,8 +276,15 @@ remediate:
   enabled: true
   # Hard cap: diagnosis + CI on the GPU host can take tens of minutes, and a
   # full `pnpm install/typecheck/test/build` cycle alone has been observed near
-  # 30 minutes. 3600 was tight enough to kill a healthy run mid-CI.
-  activeDeadlineSeconds: 5400
+  # 30 minutes. 3600 was tight enough to kill a healthy run mid-CI; 5400 then
+  # killed sre-harness-remediate-1793466042 on 2026-10-31 at minute 90, after
+  # it had pushed its fix branch (dshfix/health-sync-backup-scan-10311802,
+  # minute 79) but before it could open the PR - the session's whole work
+  # product orphaned. The cap must cover clone + diagnose + full CI + PR open
+  # with real margin, the way the monitor's did (1200 -> 2400 after three
+  # mid-diagnosis kills); 10800 is >2x the longest plausible healthy run.
+  # Dispatch frequency stays bounded by throttleHours regardless.
+  activeDeadlineSeconds: 10800
   # Never dispatch a second remediation if any remediate job started within
   # this many hours (a chronic WARN must not summon an army).
   throttleHours: 6
