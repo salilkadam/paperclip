@@ -44,6 +44,10 @@ export interface ChatEndpointResource {
   label: string;
   availability: "available" | "unavailable" | "removed";
   enabled: boolean;
+  /** Board-trust allowlist membership (Slack private channels only). */
+  boardTrusted?: boolean;
+  /** Why board trust cannot be turned on here; null when it can. */
+  boardTrustBlockedReason?: string | null;
   detail?: string | null;
   participants?: string[];
 }
