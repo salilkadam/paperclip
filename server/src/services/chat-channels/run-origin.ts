@@ -1,5 +1,6 @@
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { chatActions, chatConversations, chatEndpoints, chatMessageLinks, heartbeatRuns, issueComments, runIdentityContexts, type Db } from "@paperclipai/db";
+import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { chatActions, chatConversations, chatDeliveries, chatEndpointResources, chatEndpoints, chatIdentityLinks, chatMessageLinks, companyMemberships, heartbeatRuns, issueComments, runIdentityContexts, type Db } from "@paperclipai/db";
+import { BOARD_TRUST_ROLES } from "./board-trust.js";
 import type { ChatProvider } from "@paperclipai/shared";
 import { forbidden } from "../../errors.js";
 import { boundRunIssueId, boundRunIssueIdSql } from "../run-task-binding.js";
@@ -27,7 +28,8 @@ const MAX_FOREIGN_ORIGIN_CHAIN = 256;
 
 /**
  * True only for a comment the run's responsible user wrote directly on the board:
- * authored by that user and not an inbound chat message (Slack, GitHub, email...).
+ * authored by that user and not an inbound chat message (Slack, GitHub, email...),
+ * or an inbound Slack message that is currently board-trusted (see below).
  * Everything else counts as outside provenance: guest comments (stored as
  * system comments with no author), other users, inbound chat messages, and
  * comments that cannot be found.
@@ -41,10 +43,60 @@ async function isDirectBoardComment(db: Db, run: Run, commentId: string, issueId
       eq(issueComments.issueId, issueId), isNull(issueComments.deletedAt),
     )).limit(1);
   if (!comment || comment.authorType !== "user" || !run.responsibleUserId || comment.authorUserId !== run.responsibleUserId) return false;
-  const [inbound] = await db.select({ id: chatMessageLinks.id }).from(chatMessageLinks).where(and(
-    eq(chatMessageLinks.companyId, run.companyId), eq(chatMessageLinks.commentId, commentId), eq(chatMessageLinks.direction, "inbound"),
-  )).limit(1);
-  return !inbound;
+  const inbound = await db.select({ id: chatMessageLinks.id, deliveryId: chatMessageLinks.deliveryId, conversationId: chatMessageLinks.conversationId })
+    .from(chatMessageLinks).where(and(
+      eq(chatMessageLinks.companyId, run.companyId), eq(chatMessageLinks.commentId, commentId), eq(chatMessageLinks.direction, "inbound"),
+    ));
+  if (inbound.length === 0) return true;
+  // Board-channel trust: an inbound comment is the board's own words only when,
+  // read now (never from a stored snapshot), every link resolves through its
+  // delivery's principal to a current identity link to the run's responsible
+  // user, who is currently an active owner/admin, in a still board-trusted,
+  // enabled channel on an active endpoint. A missing delivery fails closed.
+  for (const link of inbound) {
+    if (!(await isBoardTrustedInboundLink(db, run.companyId, run.responsibleUserId, link))) return false;
+  }
+  return true;
+}
+
+async function isBoardTrustedInboundLink(
+  db: Db,
+  companyId: string,
+  responsibleUserId: string,
+  link: { deliveryId: string | null; conversationId: string },
+) {
+  if (!link.deliveryId) return false;
+  const [row] = await db.select({ id: chatDeliveries.id }).from(chatDeliveries)
+    .innerJoin(chatConversations, and(
+      eq(chatConversations.id, link.conversationId), eq(chatConversations.companyId, companyId),
+      eq(chatConversations.endpointId, chatDeliveries.endpointId), eq(chatDeliveries.conversationId, chatConversations.id),
+      eq(chatConversations.isDirectMessage, false),
+    ))
+    .innerJoin(chatEndpoints, and(
+      eq(chatEndpoints.id, chatConversations.endpointId), eq(chatEndpoints.companyId, companyId),
+      eq(chatEndpoints.provider, "slack"), eq(chatEndpoints.status, "active"),
+    ))
+    .innerJoin(chatEndpointResources, and(
+      eq(chatEndpointResources.id, chatConversations.resourceId), eq(chatEndpointResources.companyId, companyId),
+      eq(chatEndpointResources.endpointId, chatEndpoints.id), eq(chatEndpointResources.boardTrusted, true),
+      eq(chatEndpointResources.enabled, true), eq(chatEndpointResources.availability, "available"),
+    ))
+    .innerJoin(chatIdentityLinks, and(
+      eq(chatIdentityLinks.companyId, companyId), eq(chatIdentityLinks.endpointId, chatEndpoints.id),
+      eq(chatIdentityLinks.principalId, chatDeliveries.principalId), eq(chatIdentityLinks.status, "linked"),
+      eq(chatIdentityLinks.paperclipUserId, responsibleUserId),
+    ))
+    .innerJoin(companyMemberships, and(
+      eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, "user"),
+      eq(companyMemberships.principalId, responsibleUserId), eq(companyMemberships.status, "active"),
+      inArray(companyMemberships.membershipRole, [...BOARD_TRUST_ROLES]),
+    ))
+    .where(and(
+      eq(chatDeliveries.id, link.deliveryId), eq(chatDeliveries.companyId, companyId),
+      isNotNull(chatDeliveries.principalId),
+    ))
+    .limit(1);
+  return Boolean(row);
 }
 
 /**
