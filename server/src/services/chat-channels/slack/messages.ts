@@ -124,3 +124,47 @@ export function slackMessageMeetsMentionRequirement(
 ): boolean {
   return !endpoint.requireAtMention || thread.isDM || trigger === "mention" || message.isMention === true;
 }
+
+type SlackTrustMessage = Pick<Message, "id" | "raw"> & {
+  author?: Pick<Message["author"], "userId" | "isBot" | "isMe" | "isSystem">;
+};
+
+/**
+ * Board-trust rule 4: a plain human post. Fails closed: the raw Slack event must
+ * carry `ts` equal to the message id and carry no `bot_id`/`app_id`/
+ * `bot_profile`/`subtype` (user-token integrations post as the linked user but
+ * carry `app_id` or `bot_id`; edits, joins and file shares carry a `subtype`),
+ * and must not come from the bot itself.
+ */
+export function slackPlainHumanPost(
+  message: SlackTrustMessage,
+  botExternalId: string | null | undefined,
+): boolean {
+  const raw = message.raw;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const event = raw as Record<string, unknown>;
+  if (typeof event.ts !== "string" || event.ts !== message.id) return false;
+  for (const key of ["bot_id", "app_id", "bot_profile", "subtype"]) {
+    if (event[key] !== undefined && event[key] !== null) return false;
+  }
+  if (message.author && (message.author.isBot === true || message.author.isMe || message.author.isSystem)) return false;
+  if (botExternalId && (event.user === botExternalId || message.author?.userId === botExternalId)) return false;
+  return true;
+}
+
+/**
+ * Board-trust rules 4 and 5: a plain human post at the top level of a channel
+ * (`thread_ts` absent or equal to `ts`, and the thread rooted at this message).
+ * A recovered delivery keeps only the persisted verdict (see
+ * `slackPlainHumanTopLevel` in the normalized event).
+ */
+export function slackPlainHumanTopLevelPost(
+  thread: Pick<Thread, "id" | "isDM">,
+  message: SlackTrustMessage,
+  botExternalId: string | null | undefined,
+): boolean {
+  if (thread.isDM || !slackPlainHumanPost(message, botExternalId)) return false;
+  const event = message.raw as Record<string, unknown>;
+  if (event.thread_ts !== undefined && event.thread_ts !== null && event.thread_ts !== event.ts) return false;
+  return /^slack:[^:]+:(.+)$/.exec(thread.id)?.[1] === message.id;
+}

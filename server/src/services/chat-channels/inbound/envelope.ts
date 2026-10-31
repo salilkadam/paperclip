@@ -12,6 +12,7 @@ import {
 } from "../telegram/messages.js";
 import {
   slackMessageSentAt,
+  slackPlainHumanTopLevelPost,
 } from "../slack/messages.js";
 import {
   teamsActivitySentAt,
@@ -292,6 +293,11 @@ export function createInboundEnvelope(db: Db, options: InboundEnvelopeOptions) {
           endpoint.provider === "telegram" ? (providerUpdateId ?? null) : null,
         text: message.text.slice(0, MAX_INBOUND_TEXT),
         mentionedBot: message.isMention === true,
+        // Board trust needs the raw-event verdict after recovery, when the
+        // reconstructed message has no raw Slack event. Absent means false.
+        ...(endpoint.provider === "slack"
+          ? { slackPlainHumanTopLevel: slackPlainHumanTopLevelPost(thread, message, endpoint.botExternalId) }
+          : {}),
         providerSentAt: providerSentAt?.toISOString() ?? null,
         ...(providerSentAtSource ? { providerSentAtSource } : {}),
         ...((endpoint.provider === "github" ||

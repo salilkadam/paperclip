@@ -228,6 +228,7 @@ export function createChatConversationDeliveryQueue(db: Db, options: Conversatio
         }>;
         attachmentLimitOmissions?: unknown;
         photonReply?: { guid?: unknown; part?: unknown };
+        slackPlainHumanTopLevel?: unknown;
       };
       conversation?: { providerUrl?: unknown };
     };
@@ -323,7 +324,11 @@ export function createChatConversationDeliveryQueue(db: Db, options: Conversatio
               threadOriginatorPart: normalized.message.photonReply.part,
             }
           : endpointRuntime.provider === "github" && typeof normalized.message?.sourceProviderMessageId === "string"
-            ? { githubSourceMessageId: normalized.message.sourceProviderMessageId } : {},
+            ? { githubSourceMessageId: normalized.message.sourceProviderMessageId }
+            // Restore only the persisted board-trust verdict: a plain top-level
+            // post recomputes as one; anything else (or a legacy row) as not.
+            : endpointRuntime.provider === "slack" && normalized.message?.slackPlainHumanTopLevel === true
+              ? { ts: providerMessageId } : {},
       author: {
         userId: externalId,
         userName:
