@@ -19,6 +19,13 @@ export const HTTP_LOG_REDACT_PATHS = [
   'req.headers["x-paperclip-cloud-inspection"]',
   // Runtime GitHub capabilities authorize credential acquisition for a live run.
   'req.headers["x-paperclip-github-capability"]',
+  // Tool-gateway session tokens authorize arbitrary tool calls for a live
+  // session; they were leaking verbatim into stdout on every gateway request.
+  'req.headers["x-paperclip-tool-gateway-token"]',
+  // OpenClaw gateway bearer credentials arrive inbound on join/access routes
+  // and are only ever forwarded, never needed in request logs.
+  'req.headers["x-openclaw-token"]',
+  'req.headers["x-openclaw-auth"]',
   // Telegram's optional webhook verification header is a reusable bearer
   // secret sent on every provider callback.
   'req.headers["x-telegram-bot-api-secret-token"]',

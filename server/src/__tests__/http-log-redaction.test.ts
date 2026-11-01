@@ -413,6 +413,11 @@ describe("HTTP logger redaction", () => {
     expect(HTTP_LOG_REDACT_PATHS).toContain(
       'req.headers["x-telegram-bot-api-secret-token"]',
     );
+    expect(HTTP_LOG_REDACT_PATHS).toContain(
+      'req.headers["x-paperclip-tool-gateway-token"]',
+    );
+    expect(HTTP_LOG_REDACT_PATHS).toContain('req.headers["x-openclaw-token"]');
+    expect(HTTP_LOG_REDACT_PATHS).toContain('req.headers["x-openclaw-auth"]');
     expect(HTTP_LOG_REDACT_PATHS).toContain("reqBody.credentials");
     expect(HTTP_LOG_REDACT_PATHS).toContain("errorContext.details.credentials");
   });
@@ -517,6 +522,40 @@ describe("HTTP logger redaction", () => {
     const log = JSON.parse(output.trim());
     expect(log.req.headers["x-paperclip-github-capability"]).toBe("[Redacted]");
     expect(log.req.url).toBe("/runtime-tools/github/credentials");
+    expect(log.res.statusCode).toBe(status);
+  });
+
+  it.each([200, 403, 500])("redacts tool-gateway session and OpenClaw bearer headers from HTTP %i logs", async (status) => {
+    const headers = {
+      "X-Paperclip-Tool-Gateway-Token": "pcgt_session-token-canary",
+      "X-OpenClaw-Token": "openclaw-token-canary",
+      "X-OpenClaw-Auth": "openclaw-auth-canary",
+    };
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(chunk.toString());
+        callback();
+      },
+    });
+    const app = express();
+    app.use(createHttpLogger(pino({ redact: [...HTTP_LOG_REDACT_PATHS] }, stream)));
+    app.post("/api/tool-gateway/tools/call", (_req, res) => {
+      res.status(status).json({ status });
+    });
+
+    await request(app)
+      .post("/api/tool-gateway/tools/call")
+      .set(headers)
+      .send({ tool: "example-tool", parameters: {} })
+      .expect(status);
+
+    const output = chunks.join("");
+    for (const canary of Object.values(headers)) expect(output).not.toContain(canary);
+    const log = JSON.parse(output.trim());
+    expect(log.req.headers["x-paperclip-tool-gateway-token"]).toBe("[Redacted]");
+    expect(log.req.headers["x-openclaw-token"]).toBe("[Redacted]");
+    expect(log.req.headers["x-openclaw-auth"]).toBe("[Redacted]");
     expect(log.res.statusCode).toBe(status);
   });
 
