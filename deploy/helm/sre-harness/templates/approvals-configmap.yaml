@@ -179,6 +179,8 @@ data:
     ' "$DECISION")"
 
     DSH_PROFILE=approvals
+    # Watchdog self-report margin (see sre-harness.runHeadless).
+    DSH_SOFT_LIMIT_SECONDS={{ sub .Values.approvals.activeDeadlineSeconds 300 }}
 
     set +e
     {{- include "sre-harness.runHeadless" . | nindent 4 }}
