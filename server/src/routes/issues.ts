@@ -31,6 +31,7 @@ import { queuedInteractionId, readQueuedInteractionResponse, hasQueuedInteractio
 import { deliverConversationComments, isConversation } from "../services/agent-conversations.js";
 import { issueRecoveryActionReadModel } from "../services/issue-recovery-actions.js";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
+import { ToolGatewayHttpError } from "../services/tool-gateway.js";
 import { EXECUTION_RECONCILIATION_CAUSES, requiresExecutionReconciliation } from "@paperclipai/shared";
 import {
   validateExecutionReconciliation,
@@ -3349,6 +3350,21 @@ function logIssueListRequest(input: {
       "safe authenticated GET observed",
     );
   });
+}
+
+// Gateway tool-review callbacks surface `ToolGatewayHttpError`, which is not an
+// `HttpError`, so the central error middleware maps intentional refusals (e.g.
+// the 409 `formal_approval_required` thrown when a tool action is accepted
+// before its formal board approval lands) to a generic 500 and crash-reports
+// them. Answer at this route boundary the way the gateway route's own
+// `sendGatewayError` answers the same class (same precedent as
+// routes/slack-tools.ts and routes/plugins.ts).
+function sendToolGatewayError(res: Response, error: unknown): boolean {
+  if (error instanceof ToolGatewayHttpError) {
+    res.status(error.status).json({ error: error.message, reasonCode: error.reasonCode, ...error.details });
+    return true;
+  }
+  return false;
 }
 
 export function issueRoutes(
@@ -17021,17 +17037,22 @@ export function issueRoutes(
       ) {
         if (!opts.approveToolActionRequest)
           throw unprocessable("Tool review resolution is unavailable");
-        await opts.approveToolActionRequest({
-          companyId: issue.companyId,
-          issueId: issue.id,
-          interactionId: current.id,
-          actionRequestId: current.payload.toolAction.actionRequestId,
-          rememberAction: req.body.rememberAction === true,
-          actor: {
-            agentId: actor.agentId,
-            userId: actor.actorType === "user" ? actor.actorId : null,
-          },
-        });
+        try {
+          await opts.approveToolActionRequest({
+            companyId: issue.companyId,
+            issueId: issue.id,
+            interactionId: current.id,
+            actionRequestId: current.payload.toolAction.actionRequestId,
+            rememberAction: req.body.rememberAction === true,
+            actor: {
+              agentId: actor.agentId,
+              userId: actor.actorType === "user" ? actor.actorId : null,
+            },
+          });
+        } catch (err) {
+          if (sendToolGatewayError(res, err)) return;
+          throw err;
+        }
         res.json(await interactionSvc.getById(current.id));
         return;
       }
@@ -17071,16 +17092,22 @@ export function issueRoutes(
         typeof toolAction?.actionRequestId === "string" &&
         opts.approveToolActionRequest
       ) {
-        const approvalResult = await opts.approveToolActionRequest({
-          companyId: issue.companyId,
-          issueId: issue.id,
-          interactionId: interaction.id,
-          actionRequestId: toolAction.actionRequestId,
-          actor: {
-            agentId: actor.agentId,
-            userId: actor.actorType === "user" ? actor.actorId : null,
-          },
-        });
+        let approvalResult: unknown;
+        try {
+          approvalResult = await opts.approveToolActionRequest({
+            companyId: issue.companyId,
+            issueId: issue.id,
+            interactionId: interaction.id,
+            actionRequestId: toolAction.actionRequestId,
+            actor: {
+              agentId: actor.agentId,
+              userId: actor.actorType === "user" ? actor.actorId : null,
+            },
+          });
+        } catch (err) {
+          if (sendToolGatewayError(res, err)) return;
+          throw err;
+        }
         const approval = readObject(approvalResult);
         const executionStatus = readToolActionExecutionStatus(approval.status);
         if (executionStatus) {
@@ -17337,17 +17364,22 @@ export function issueRoutes(
       ) {
         if (!opts.declineToolActionRequest)
           throw unprocessable("Tool review resolution is unavailable");
-        await opts.declineToolActionRequest({
-          companyId: issue.companyId,
-          issueId: issue.id,
-          interactionId: current.id,
-          actionRequestId: current.payload.toolAction.actionRequestId,
-          reason: req.body.reason,
-          actor: {
-            agentId: actor.agentId,
-            userId: actor.actorType === "user" ? actor.actorId : null,
-          },
-        });
+        try {
+          await opts.declineToolActionRequest({
+            companyId: issue.companyId,
+            issueId: issue.id,
+            interactionId: current.id,
+            actionRequestId: current.payload.toolAction.actionRequestId,
+            reason: req.body.reason,
+            actor: {
+              agentId: actor.agentId,
+              userId: actor.actorType === "user" ? actor.actorId : null,
+            },
+          });
+        } catch (err) {
+          if (sendToolGatewayError(res, err)) return;
+          throw err;
+        }
         res.json(await interactionSvc.getById(current.id));
         return;
       }

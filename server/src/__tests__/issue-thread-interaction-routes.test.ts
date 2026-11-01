@@ -1412,6 +1412,144 @@ describe("issue thread interaction routes", () => {
     );
   });
 
+  it("answers 409 formal_approval_required when the gateway refuses a tool-action accept", async () => {
+    const { ToolGatewayHttpError } = await import("../services/tool-gateway.js");
+    const approveToolActionRequest = vi.fn().mockRejectedValueOnce(
+      new ToolGatewayHttpError(
+        409,
+        "Tool action request requires formal board approval before execution",
+        "formal_approval_required",
+        { approvalId: "approval-formal-1" },
+      ),
+    );
+    mockInteractionService.acceptInteraction.mockResolvedValueOnce({
+      interaction: {
+        id: "interaction-tool-action-formal",
+        companyId: "company-1",
+        issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        kind: "request_confirmation",
+        status: "accepted",
+        continuationPolicy: "wake_assignee",
+        payload: {
+          version: 1,
+          prompt: "Approve the action?",
+          toolAction: {
+            version: 1,
+            actionRequestId: "action-request-formal",
+            toolName: "trypost_create_post",
+          },
+        },
+        result: { version: 1, outcome: "accepted" },
+      },
+      createdIssues: [],
+    });
+    const app = await createApp(undefined, { approveToolActionRequest });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-tool-action-formal/accept")
+      .send({});
+
+    // `ToolGatewayHttpError` is not an `HttpError`, so before the route
+    // boundary conversion the error middleware mapped this intentional 409
+    // refusal to a generic 500 (and crash-reported it). It must answer the
+    // same body the gateway route's sendGatewayError answers.
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: "Tool action request requires formal board approval before execution",
+      reasonCode: "formal_approval_required",
+      approvalId: "approval-formal-1",
+    });
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("answers the gateway's 409 on the tool review resolution accept path", async () => {
+    const { ToolGatewayHttpError } = await import("../services/tool-gateway.js");
+    const approveToolActionRequest = vi.fn().mockRejectedValueOnce(
+      new ToolGatewayHttpError(
+        409,
+        "Tool action request requires formal board approval before execution",
+        "formal_approval_required",
+        { approvalId: "approval-formal-2" },
+      ),
+    );
+    mockInteractionService.getForIssue.mockResolvedValueOnce({
+      id: "interaction-tool-review-409",
+      kind: "request_confirmation",
+      status: "pending",
+      createdByAgentId: CREATED_AGENT_ID,
+      sourceRunId: RUN_1,
+      requestedResolverPolicy: "anyone",
+      effectiveResolverPolicy: "anyone",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        prompt: "Approve the action?",
+        toolAction: {
+          version: 1,
+          actionRequestId: "action-request-review-409",
+          toolName: "trypost_create_post",
+        },
+      },
+    });
+    const app = await createApp(undefined, { approveToolActionRequest });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-tool-review-409/accept")
+      .send({});
+
+    expect(approveToolActionRequest).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: "Tool action request requires formal board approval before execution",
+      reasonCode: "formal_approval_required",
+      approvalId: "approval-formal-2",
+    });
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("answers the gateway's 409 on the tool review resolution reject path", async () => {
+    const { ToolGatewayHttpError } = await import("../services/tool-gateway.js");
+    const declineToolActionRequest = vi.fn().mockRejectedValueOnce(
+      new ToolGatewayHttpError(
+        409,
+        "Tool action request was already resolved",
+        "action_request_invalidated",
+        {},
+      ),
+    );
+    mockInteractionService.getForIssue.mockResolvedValueOnce({
+      id: "interaction-tool-review-reject-409",
+      kind: "request_confirmation",
+      status: "pending",
+      createdByAgentId: CREATED_AGENT_ID,
+      sourceRunId: RUN_1,
+      requestedResolverPolicy: "anyone",
+      effectiveResolverPolicy: "anyone",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        prompt: "Approve the action?",
+        toolAction: {
+          version: 1,
+          actionRequestId: "action-request-reject-409",
+          toolName: "trypost_create_post",
+        },
+      },
+    });
+    const app = await createApp(undefined, { declineToolActionRequest });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-tool-review-reject-409/reject")
+      .send({ reason: "No longer needed" });
+
+    expect(declineToolActionRequest).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: "Tool action request was already resolved",
+      reasonCode: "action_request_invalidated",
+    });
+  });
+
   it("rejects client-supplied tool-action metadata on interaction creation", async () => {
     const app = await createApp();
 
