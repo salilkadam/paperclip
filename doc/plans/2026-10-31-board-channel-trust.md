@@ -159,3 +159,29 @@ Out of scope: binding arbitrary UI tasks to channels; mirroring every task threa
   evaluate-by-delivery with `--probe-delivery`; private-source exemption requires enabled/available; setup probes
   assert the refusing rule and a mandatory positive control; `agent` policy refused where it lifts nothing; tests
   for lock re-derivation on trust-off/link-revoked, the write-path exemption and DM provenance. All folded in above.
+- Code review round 2 (different model from the implementer), dispositions:
+  - Required, fixed: provenance test with the same Slack principal linked on the company's second bot, the link on
+    the arrival endpoint revoked (mutant: drop the identity link's endpoint predicate); private-source exemption test
+    with another company trusting a channel of the same id (see the mutant note below); the "not picked up" notice
+    is gated on a human-ish check (rule 4 minus `client_msg_id`) so a person's post that Slack delivers without
+    `client_msg_id` (e.g. "Schedule for later") is refused trust but told so, not dropped silently — trust itself
+    still requires `client_msg_id`, the 24 h claim is unchanged, a recovered delivery whose stored verdict is not
+    plain human gets no notice (its rebuilt raw event has no `ts`); setup script's dry-run summary corrected
+    (`--probe-delivery` evaluations do run in `--dry-run`; synthetic probes do not).
+  - Accepted (harmless observability): the verdict suffix "(plain human post: …; top-level: …)" now appears on every
+    filtered Slack delivery's detail, not only in board-trusted channels. It carries two booleans and no content.
+  - Accepted: an owner's *edit* of a board post arrives with a `subtype` and becomes a system-authored comment, so it
+    can never be a provenance root. Only the original post carries the board's authority; re-post to amend.
+  - Mutant note: `chat_endpoint_resources_company_endpoint_fk` ties a resource's company to its endpoint's, and the
+    exemption query's endpoint join also filters `chat_endpoints.company_id`, so replacing only
+    `chat_endpoint_resources.company_id = $company` with a tautology is an equivalent mutant (the cross-company test
+    still passes). The test is proven by tautologising both company predicates (it then fails).
+- Pre-enable gate (round 2; must hold before `board_trusted` is switched on for any channel): with trust still off,
+  the operator records, through the `{deliveryId}` evaluate route (`--probe-delivery`, also in `--dry-run`):
+  1. a real post made in the channel through a user-token integration (the claude.ai Slack connector) showing
+     `plainHuman=false`;
+  2. a real post typed by the owner in a Slack client showing `plainHuman=true`;
+  3. a real "Schedule for later" post by the owner, recording whether it is trusted (`plainHuman` true or false;
+     either is acceptable, the result is recorded here).
+  If the connector post shows `plainHuman=true`, trust stays off everywhere and the result goes back to the owner
+  as an open risk (rule 4 cannot tell that integration from the owner typing).

@@ -226,4 +226,4 @@ for a in "${ASSIGN[@]}"; do
   done_count=$((done_count + 1))
 done
 [[ "$done_count" -gt 0 ]] || die "no board channel configured"
-log "done: $done_count board channel(s)$([[ "$DRY" -eq 1 ]] && echo ' (dry run, no writes, no probes)')"
+log "done: $done_count board channel(s)$([[ "$DRY" -eq 1 ]] && echo ' (dry run: no writes; --probe-delivery deliveries were evaluated, synthetic refusal probes skipped)')"

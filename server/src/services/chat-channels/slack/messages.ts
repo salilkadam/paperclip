@@ -142,11 +142,25 @@ export function slackPlainHumanPost(
   message: SlackTrustMessage,
   botExternalId: string | null | undefined,
 ): boolean {
+  if (!slackHumanishPost(message, botExternalId)) return false;
+  const event = message.raw as Record<string, unknown>;
+  return typeof event.client_msg_id === "string" && event.client_msg_id.trim() !== "";
+}
+
+/**
+ * Rule 4 without the `client_msg_id` requirement. Used ONLY to decide whether a
+ * filtered post deserves the "not picked up" notice, never for trust: a real
+ * person's post that Slack delivers without `client_msg_id` (a client's
+ * "Schedule for later", for one) must fail closed loudly, not silently.
+ */
+export function slackHumanishPost(
+  message: SlackTrustMessage,
+  botExternalId: string | null | undefined,
+): boolean {
   const raw = message.raw;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
   const event = raw as Record<string, unknown>;
   if (typeof event.ts !== "string" || event.ts !== message.id) return false;
-  if (typeof event.client_msg_id !== "string" || event.client_msg_id.trim() === "") return false;
   for (const key of ["bot_id", "app_id", "bot_profile", "subtype"]) {
     if (event[key] !== undefined && event[key] !== null) return false;
   }
@@ -166,7 +180,16 @@ export function slackPlainHumanTopLevelPost(
   message: SlackTrustMessage,
   botExternalId: string | null | undefined,
 ): boolean {
-  if (thread.isDM || !slackPlainHumanPost(message, botExternalId)) return false;
+  return slackPlainHumanPost(message, botExternalId) && slackHumanishTopLevelPost(thread, message, botExternalId);
+}
+
+/** The top-level rule over `slackHumanishPost`: the notice gate only, never trust. */
+export function slackHumanishTopLevelPost(
+  thread: Pick<Thread, "id" | "isDM">,
+  message: SlackTrustMessage,
+  botExternalId: string | null | undefined,
+): boolean {
+  if (thread.isDM || !slackHumanishPost(message, botExternalId)) return false;
   const event = message.raw as Record<string, unknown>;
   if (event.thread_ts !== undefined && event.thread_ts !== null && event.thread_ts !== event.ts) return false;
   return /^slack:[^:]+:(.+)$/.exec(thread.id)?.[1] === message.id;

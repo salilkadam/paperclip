@@ -70,7 +70,7 @@ import { createGitHubSetupSecret } from "./chat-channels/github/setup-secret.js"
 import { createSlackInventory } from "./chat-channels/slack/inventory.js";
 import { getSlackBotChannel } from "./chat-provider-inventory.js";
 import { BOARD_NOTICE_NOT_LINKED, BOARD_NOTICE_NOT_PICKED_UP, boardTrustedChannel, isBoardTrustedMessage, slackFilterVerdictSuffix, userHoldsBoardTrustRole } from "./chat-channels/board-trust.js";
-import { slackPlainHumanPost, slackPlainHumanTopLevelPost } from "./chat-channels/slack/messages.js";
+import { slackHumanishTopLevelPost, slackPlainHumanPost, slackPlainHumanTopLevelPost } from "./chat-channels/slack/messages.js";
 
 import { REQUIRED_GITHUB_EVENTS, UNAVOIDABLE_GITHUB_EVENTS } from "./chat-channels/github/credentials.js";
 
@@ -1393,7 +1393,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   /**
    * Ephemeral notices for filtered Slack messages (board-channel trust plan):
    * - not_linked: an addressed plain human message from an unlinked sender;
-   * - not_picked_up: a top-level plain human message in a board-trusted channel
+   * - not_picked_up: a top-level human message (rule 4 minus client_msg_id) in a board-trusted channel
    *   that was filtered as not addressed, at most once per sender per endpoint
    *   in any rolling 24 hours (claimed by a conditional upsert).
    * Never for bots, app/user-token integrations, subtype events or the bot.
@@ -1417,7 +1417,9 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       notice === "not_picked_up" &&
       (input.addressed ||
         !boardTrustedChannel({ endpoint, resource: input.resource, thread }) ||
-        !slackPlainHumanTopLevelPost(thread, message, endpoint.botExternalId))
+        // Human-ish, not rule 4: a person's post Slack delivered without
+        // client_msg_id is refused trust but still told why (fail closed, not silent).
+        !slackHumanishTopLevelPost(thread, message, endpoint.botExternalId))
     )
       return;
     const userId = typeof (message.raw as { user?: unknown } | null)?.user === "string"

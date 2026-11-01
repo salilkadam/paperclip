@@ -373,6 +373,27 @@ const support = await getEmbeddedPostgresTestSupport();
     }
   });
 
+  // Slack principals are per workspace and shared by a company's two bots. The
+  // identity link that counts is the one on the endpoint the comment arrived
+  // through: a live link on the other bot must not keep a revoked one trusted.
+  it("refuses a board-trusted chain once the link on the arrival endpoint is revoked, even while the same principal stays linked on the company's other bot (message and wake)", async () => {
+    for (const where of ["message", "wake"] as const) {
+      const f = await derivedFixture();
+      const t = await boardTrustedInbound(f);
+      const [application] = await db.insert(toolApplications).values({ companyId: f.company.id, name: `slack-cmo-${randomUUID()}`, type: "chat" }).returning();
+      const [connection] = await db.insert(toolConnections).values({ companyId: f.company.id, applicationId: application.id, uid: randomUUID(), name: "slack-cmo", transport: "chat_sdk", connectionPurpose: "channel", enabled: true, status: "active" }).returning();
+      const [cmoEndpoint] = await db.insert(chatEndpoints).values({ companyId: f.company.id, connectionId: connection.id, provider: "slack", publicId: randomUUID(), assignedAgentId: f.creator.id, status: "active", providerAccountId: t.endpoint.providerAccountId, botExternalId: `B-${randomUUID()}` }).returning();
+      await db.insert(chatIdentityLinks).values({ companyId: f.company.id, endpointId: cmoEndpoint.id, principalId: t.principal.id, paperclipUserId: "requester", status: "linked", confirmedAt: new Date() });
+      if (where === "message") await db.update(runIdentityContexts).set({ messageId: t.comment.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+      else await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentId: t.comment.id } }).where(eq(heartbeatRuns.id, f.originRun.id));
+      expect(await chatRunSourceMessageId(db, f.run, slackOnly)).toBeNull();
+      await db.update(chatIdentityLinks).set({ status: "revoked", revokedAt: new Date() }).where(eq(chatIdentityLinks.id, t.link.id));
+      await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({
+        status: 403, details: { code: where === "message" ? "chat_provenance_foreign_message" : "chat_provenance_foreign_wake" },
+      });
+    }
+  });
+
   it("keeps refusing a GitHub guest comment even when its resource row is marked board-trusted", async () => {
     const f = await derivedFixture();
     const { comment, endpoint } = await inboundComment(f, { issueId: f.originTask.id, provider: "github", guest: true, agentId: f.creator.id });

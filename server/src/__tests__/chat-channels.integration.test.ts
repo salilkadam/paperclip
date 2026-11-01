@@ -9429,6 +9429,27 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect(await notices(f.endpoint.id)).toEqual([]);
     });
 
+    // Fail closed, not silent: a person's top-level post that Slack delivers
+    // without client_msg_id (a client's "Schedule for later") is refused trust
+    // but still gets the notice; the same shape from a bot gets none.
+    it.each(["admin", "member"])("stages the not-picked-up notice once for a linked %s's top-level post lacking client_msg_id, without trusting it", async (role) => {
+      const f = await boardFixture({ role });
+      await sendTopLevel(f, "8126.1", { raw: plainRaw("8126.1", "UBOARD", { client_msg_id: undefined }) });
+      await sendTopLevel(f, "8126.2", { raw: plainRaw("8126.2", "UBOARD", { client_msg_id: undefined }) });
+      expect(f.wakeup).not.toHaveBeenCalled();
+      expect(await readChatConversationsByEndpointId(f.endpoint.id)).toEqual([]);
+      expect(await deliveryFor(f.endpoint.id, "8126.1")).toMatchObject({ state: "filtered", redactedError: notAddressed(false, false) });
+      expect(await notices(f.endpoint.id)).toEqual([{ id: expect.stringContaining(":not_picked_up:"), text: expect.stringContaining("not picked up"), userId: "UBOARD" }]);
+    });
+
+    it("stages no notice for a bot's top-level post lacking client_msg_id", async () => {
+      const f = await boardFixture();
+      await sendTopLevel(f, "8127.1", { raw: plainRaw("8127.1", "UBOARD", { client_msg_id: undefined, bot_id: "B0INTEGR" }) });
+      expect(f.wakeup).not.toHaveBeenCalled();
+      expect(await deliveryFor(f.endpoint.id, "8127.1")).toMatchObject({ state: "filtered" });
+      expect(await notices(f.endpoint.id)).toEqual([]);
+    });
+
     it.each([
       ["bot_id", { bot_id: "B0INTEGR" }],
       ["app_id", { app_id: "A0CLAUDE" }],
@@ -9783,6 +9804,22 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       const other = await configuredSlackEndpoint(f.fixture, { linkedBoardUser: false, allowUnlinkedPeople: false, fetch: boardSlackFetch("U0BOTOTHR1") as typeof globalThis.fetch });
       await expect(other.service.evaluateBoardTrust(other.endpoint.id, { deliveryId: (await deliveryFor(f.endpoint.id, "8124.1"))!.id })).rejects.toMatchObject({ status: 404 });
       expect(await readChatDeliveriesByEndpointId(f.endpoint.id)).toEqual(before);
+    });
+
+    // The exemption is company-scoped: another company trusting a channel with
+    // the same Slack id must not lift this company's boundary for that id.
+    it("keeps the private-source boundary when only another company trusts a channel with the same id", async () => {
+      const a = await boardFixture({ trusted: false });
+      const b = await boardFixture();
+      expect((await db.select().from(chatEndpointResources).where(eq(chatEndpointResources.id, b.resource.id)))[0]).toMatchObject({ providerResourceId: BOARD_CHANNEL, boardTrusted: true });
+      const { recordSlackReadBoundary } = await import("../services/connectors/slack-access.js");
+      const [principal] = await db.select().from(chatExternalPrincipals).where(and(eq(chatExternalPrincipals.companyId, a.fixture.companyId), eq(chatExternalPrincipals.externalId, "UBOARD")));
+      const endpointRow = (await db.select().from(chatEndpoints).where(eq(chatEndpoints.id, a.endpoint.id)))[0];
+      const issueId = randomUUID();
+      await recordSlackReadBoundary(db, { endpoint: endpointRow, conversation: null, issueId, slackUserId: "UBOARD", principalId: principal.id, userId: "owner-user" } as unknown as Parameters<typeof recordSlackReadBoundary>[1],
+        { id: BOARD_CHANNEL, is_private: true });
+      expect((await db.select().from(chatActions).where(and(eq(chatActions.endpointId, a.endpoint.id), eq(chatActions.kind, "slack_private_source"))))
+        .map((row) => row.payload)).toEqual([expect.objectContaining({ issueId, channelId: BOARD_CHANNEL })]);
     });
 
     it("keeps the private-source boundary for a trusted channel that is disabled or unavailable", async () => {
