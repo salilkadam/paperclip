@@ -1186,12 +1186,19 @@ describe("durable inbound chat scheduler receipts", () => {
   });
 
   it.each([
-    { provider: "slack", state: "active", callerMarkers: false },
-    { provider: "telegram", state: "completed", callerMarkers: false },
-    { provider: "slack", state: "active", callerMarkers: true },
+    { provider: "slack", state: "active", callerMarkers: false, policy: "restricted", boardTrusted: false },
+    { provider: "telegram", state: "completed", callerMarkers: false, policy: "restricted", boardTrusted: false },
+    { provider: "slack", state: "active", callerMarkers: true, policy: "restricted", boardTrusted: false },
+    // Board-channel trust: the agent policy lifts nothing for a conversation that
+    // was not admitted from a board-trusted message, and the restricted policy
+    // keeps even a board-trusted conversation restricted.
+    { provider: "slack", state: "active", callerMarkers: false, policy: "agent", boardTrusted: false },
+    { provider: "slack", state: "active", callerMarkers: false, policy: "restricted", boardTrusted: true },
+    // The one combination that lifts the restriction: this site no longer refuses.
+    { provider: "slack", state: "active", callerMarkers: false, policy: "agent", boardTrusted: true },
   ] as const)(
-    "rejects generic failed-chat retry before admission ($provider/$state; caller markers: $callerMarkers)",
-    async ({ provider, state, callerMarkers }) => {
+    "rejects generic failed-chat retry before admission ($provider/$state; caller markers: $callerMarkers; policy: $policy; board-trusted: $boardTrusted)",
+    async ({ provider, state, callerMarkers, policy, boardTrusted }) => {
       // Keep the fixture-owned unrelated run occupying the only execution slot.
       // This exercises real heartbeat admission without starting an adapter.
       const f = await fixture();
@@ -1234,6 +1241,7 @@ describe("durable inbound chat scheduler receipts", () => {
         publicId: randomUUID(),
         assignedAgentId: f.agentId,
         status: "active",
+        externalExecutionPolicy: policy,
       });
       await db.insert(chatConversations).values({
         id: conversationId,
@@ -1245,6 +1253,7 @@ describe("durable inbound chat scheduler receipts", () => {
         externalLabel: `${provider} retry fixture`,
         sessionGeneration: 1,
         isDirectMessage: true,
+        boardTrusted,
         state: "active",
       });
       await db.insert(issueComments).values([
@@ -1386,6 +1395,11 @@ describe("durable inbound chat scheduler receipts", () => {
           () => null,
           (error: unknown) => error,
         );
+      if (policy === "agent" && boardTrusted) {
+        expect((rejection as { details?: { code?: unknown } } | null)?.details?.code)
+          .not.toBe("chat_failed_run_retry_requires_authorized_context");
+        return;
+      }
       expect.soft(rejection).toMatchObject({
         status: 409,
         details: { code: "chat_failed_run_retry_requires_authorized_context" },

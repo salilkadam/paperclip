@@ -1,3 +1,4 @@
+import { chatConversationExecutionRestricted } from "../services/chat-channels/board-trust.js";
 import { taskInterruptionPresentation, taskInterruptionPresentations } from "../services/task-interruption-presentation.js";
 import { parseObject } from "../adapters/utils.js";
 import { prepareRestrictedWorkspaceRetry } from "../services/restricted-workspace-retry.js";
@@ -9921,7 +9922,7 @@ export function issueRoutes(
             .innerJoin(chatEndpoints, eq(chatEndpoints.id, chatConversations.endpointId))
             .where(
               and(
-                eq(chatEndpoints.externalExecutionPolicy, "restricted"),
+                chatConversationExecutionRestricted(),
                 eq(chatConversations.companyId, lockedIssue.companyId),
                 eq(chatConversations.issueId, lockedIssue.id),
               ),

@@ -12,6 +12,8 @@ import {
 } from "../telegram/messages.js";
 import {
   slackMessageSentAt,
+  slackPlainHumanPost,
+  slackPlainHumanTopLevelPost,
 } from "../slack/messages.js";
 import {
   teamsActivitySentAt,
@@ -219,6 +221,15 @@ export function createInboundEnvelope(db: Db, options: InboundEnvelopeOptions) {
             isDirectMessage: thread.isDM,
           })
         : null;
+    // Board-trust rule 4 (plain human post) and rules 4+5 (also top-level),
+    // judged on the raw Slack event once, at ingress.
+    const slackTrustVerdicts =
+      endpoint.provider === "slack"
+        ? {
+            slackPlainHuman: slackPlainHumanPost(message, endpoint.botExternalId),
+            slackPlainHumanTopLevel: slackPlainHumanTopLevelPost(thread, message, endpoint.botExternalId),
+          }
+        : {};
     const normalized = {
       providerEventId,
       kind: eventKind,
@@ -292,6 +303,11 @@ export function createInboundEnvelope(db: Db, options: InboundEnvelopeOptions) {
           endpoint.provider === "telegram" ? (providerUpdateId ?? null) : null,
         text: message.text.slice(0, MAX_INBOUND_TEXT),
         mentionedBot: message.isMention === true,
+        // Board trust needs the raw-event verdicts after recovery, when the
+        // reconstructed message has no raw Slack event, and provenance reads
+        // `slackPlainHuman` (rule 4) for every inbound Slack comment at check
+        // time. Absent means false.
+        ...slackTrustVerdicts,
         providerSentAt: providerSentAt?.toISOString() ?? null,
         ...(providerSentAtSource ? { providerSentAtSource } : {}),
         ...((endpoint.provider === "github" ||
@@ -350,6 +366,9 @@ export function createInboundEnvelope(db: Db, options: InboundEnvelopeOptions) {
       message: {
         providerMessageId: message.id,
         providerSentAt: providerSentAt?.toISOString() ?? null,
+        // Static booleans, no content: lets an operator see why a filtered
+        // Slack post would (not) be board-trusted (board-trust evaluate route).
+        ...slackTrustVerdicts,
       },
       filtering: { contentRetained: false },
     };

@@ -156,10 +156,36 @@ export function createChatResourceReconciliation(db: Db, options: ResourceReconc
         ),
       )
       .orderBy(asc(chatEndpointResources.label));
+    const [endpoint] = await db.select({ companyId: chatEndpoints.companyId, provider: chatEndpoints.provider })
+      .from(chatEndpoints).where(eq(chatEndpoints.id, endpointId));
+    // Channels whose board trust is held by another connection of the company.
+    const trustedElsewhere = endpoint?.provider === "slack"
+      ? new Set((await db.select({ providerResourceId: chatEndpointResources.providerResourceId }).from(chatEndpointResources).where(and(
+          eq(chatEndpointResources.companyId, endpoint.companyId),
+          ne(chatEndpointResources.endpointId, endpointId),
+          eq(chatEndpointResources.boardTrusted, true),
+        ))).map((row) => row.providerResourceId))
+      : new Set<string>();
     return resources.map((resource) => ({
       ...resource,
       participants: imessageResourceParticipants(resource),
+      boardTrustBlockedReason: boardTrustBlockedReason(endpoint?.provider, resource, trustedElsewhere),
     }));
+  }
+
+  /** UI hint only; the update path re-reads Slack and the database before trusting. */
+  function boardTrustBlockedReason(
+    provider: string | undefined,
+    resource: typeof chatEndpointResources.$inferSelect,
+    trustedElsewhere: Set<string>,
+  ): string | null {
+    if (resource.boardTrusted) return null;
+    if (provider !== "slack" || resource.type !== "channel") return "Board trust is available for Slack channels only";
+    if (trustedElsewhere.has(resource.providerResourceId)) return "Another connection is already the board-trusted bot for this channel";
+    if (resource.metadata?.private === false) return "Only private channels can be board-trusted";
+    if (resource.metadata?.extShared === true) return "Slack Connect (shared) channels cannot be board-trusted";
+    if (resource.availability !== "available") return "The channel is no longer available to the bot";
+    return null;
   }
 
   async function replaceResources(

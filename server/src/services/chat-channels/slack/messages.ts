@@ -124,3 +124,73 @@ export function slackMessageMeetsMentionRequirement(
 ): boolean {
   return !endpoint.requireAtMention || thread.isDM || trigger === "mention" || message.isMention === true;
 }
+
+type SlackTrustMessage = Pick<Message, "id" | "raw"> & {
+  author?: Pick<Message["author"], "userId" | "isBot" | "isMe" | "isSystem">;
+};
+
+/**
+ * Board-trust rule 4: a plain human post. Fails closed: the raw Slack event must
+ * carry `ts` equal to the message id, a non-empty `client_msg_id` (set by Slack
+ * clients for typed messages; API posts carry one only when the caller supplies
+ * it, so this excludes integrations that do not, not every integration), and no
+ * `bot_id`/`app_id`/`bot_profile`/`subtype` (user-token integrations post as the
+ * linked user; edits, joins and file shares carry a `subtype`), and must not
+ * come from the bot itself.
+ */
+export function slackPlainHumanPost(
+  message: SlackTrustMessage,
+  botExternalId: string | null | undefined,
+): boolean {
+  if (!slackHumanishPost(message, botExternalId)) return false;
+  const event = message.raw as Record<string, unknown>;
+  return typeof event.client_msg_id === "string" && event.client_msg_id.trim() !== "";
+}
+
+/**
+ * Rule 4 without the `client_msg_id` requirement. Used ONLY to decide whether a
+ * filtered post deserves the "not picked up" notice, never for trust: a real
+ * person's post that Slack delivers without `client_msg_id` (a client's
+ * "Schedule for later", for one) must fail closed loudly, not silently.
+ */
+export function slackHumanishPost(
+  message: SlackTrustMessage,
+  botExternalId: string | null | undefined,
+): boolean {
+  const raw = message.raw;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const event = raw as Record<string, unknown>;
+  if (typeof event.ts !== "string" || event.ts !== message.id) return false;
+  for (const key of ["bot_id", "app_id", "bot_profile", "subtype"]) {
+    if (event[key] !== undefined && event[key] !== null) return false;
+  }
+  if (message.author && (message.author.isBot === true || message.author.isMe || message.author.isSystem)) return false;
+  if (botExternalId && (event.user === botExternalId || message.author?.userId === botExternalId)) return false;
+  return true;
+}
+
+/**
+ * Board-trust rules 4 and 5: a plain human post at the top level of a channel
+ * (`thread_ts` absent or equal to `ts`, and the thread rooted at this message).
+ * A recovered delivery keeps only the persisted verdict (see
+ * `slackPlainHumanTopLevel` in the normalized event).
+ */
+export function slackPlainHumanTopLevelPost(
+  thread: Pick<Thread, "id" | "isDM">,
+  message: SlackTrustMessage,
+  botExternalId: string | null | undefined,
+): boolean {
+  return slackPlainHumanPost(message, botExternalId) && slackHumanishTopLevelPost(thread, message, botExternalId);
+}
+
+/** The top-level rule over `slackHumanishPost`: the notice gate only, never trust. */
+export function slackHumanishTopLevelPost(
+  thread: Pick<Thread, "id" | "isDM">,
+  message: SlackTrustMessage,
+  botExternalId: string | null | undefined,
+): boolean {
+  if (thread.isDM || !slackHumanishPost(message, botExternalId)) return false;
+  const event = message.raw as Record<string, unknown>;
+  if (event.thread_ts !== undefined && event.thread_ts !== null && event.thread_ts !== event.ts) return false;
+  return /^slack:[^:]+:(.+)$/.exec(thread.id)?.[1] === message.id;
+}

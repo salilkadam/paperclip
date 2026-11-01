@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import { chatActions, chatEndpointResources, type Db } from "@paperclipai/db";
+import { chatActions, chatEndpointResources, chatEndpoints, type Db } from "@paperclipai/db";
 import { HttpError, forbidden, unprocessable } from "../../errors.js";
 import type { SlackTaskAuthority } from "./slack-authority.js";
 import {
@@ -166,6 +166,17 @@ export async function recordSlackReadBoundary(
     throw forbidden(
       "Ask for cross-channel private research in a DM with the bot",
     );
+  // Board-channel trust: the board's own allowlisted channel holds the board's
+  // instructions, not private research. Any other private source keeps its
+  // boundary. Read at the time of the read, company-wide (one trusted bot per
+  // channel), on an active endpoint.
+  if (
+    channel.is_im !== true &&
+    channel.is_mpim !== true &&
+    typeof channel.id === "string" &&
+    (await slackChannelIsBoardTrusted(db, authority.endpoint.companyId, channel.id))
+  )
+    return;
   await db
     .insert(chatActions)
     .values({
@@ -187,6 +198,39 @@ export async function recordSlackReadBoundary(
     })
     .onConflictDoNothing();
 }
+export async function slackChannelIsBoardTrusted(
+  db: Pick<Db, "select">,
+  companyId: string,
+  channelId: string,
+): Promise<boolean> {
+  const [trusted] = await db
+    .select({ id: chatEndpointResources.id })
+    .from(chatEndpointResources)
+    .innerJoin(
+      chatEndpoints,
+      and(
+        eq(chatEndpoints.id, chatEndpointResources.endpointId),
+        eq(chatEndpoints.companyId, companyId),
+        eq(chatEndpoints.provider, "slack"),
+        eq(chatEndpoints.status, "active"),
+      ),
+    )
+    .where(
+      and(
+        eq(chatEndpointResources.companyId, companyId),
+        eq(chatEndpointResources.type, "channel"),
+        eq(chatEndpointResources.providerResourceId, channelId.replace(/^slack:/, "")),
+        eq(chatEndpointResources.boardTrusted, true),
+        // Same as the provenance join: a disabled or unavailable channel is
+        // private research again.
+        eq(chatEndpointResources.enabled, true),
+        eq(chatEndpointResources.availability, "available"),
+      ),
+    )
+    .limit(1);
+  return Boolean(trusted);
+}
+
 export async function slackPublicationAllowed(
   db: Pick<Db, "select">,
   companyId: string,

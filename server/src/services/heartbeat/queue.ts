@@ -1,3 +1,4 @@
+import { chatConversationExecutionRestricted } from "../chat-channels/board-trust.js";
 import { authorizationService } from "../authorization.js";
 import { isRoutineExecutionSlotConflict } from "./routine-slot-conflict.js";
 import { assertTaskRetryConversationAllowed, readTaskRetryIntent, retireSupersededTaskRetry } from "../task-retry.js";
@@ -3003,7 +3004,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
                 .innerJoin(chatEndpoints, eq(chatEndpoints.id, chatConversations.endpointId))
                 .where(
                   and(
-                    eq(chatEndpoints.externalExecutionPolicy, "restricted"),
+                    chatConversationExecutionRestricted(),
                     eq(chatConversations.companyId, agent.companyId),
                     eq(chatConversations.issueId, issueId),
                   ),

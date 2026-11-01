@@ -503,6 +503,20 @@ function Settings({
         tone: "error",
       }),
   });
+  const updateBoardTrust = useMutation({
+    mutationFn: (boardChannelTrust: { resourceId: string; trusted: boolean }) =>
+      chatEndpointsApi.update(endpointId, { boardChannelTrust }),
+    onSuccess: (next) => {
+      queryClient.setQueryData(queryKeys.chatEndpoints.detail(endpointId), next);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chatEndpoints.resources(endpointId) });
+    },
+    onError: (error) =>
+      pushToast({
+        title: "Couldn't change board trust",
+        body: error instanceof Error ? error.message : "Try again.",
+        tone: "error",
+      }),
+  });
   if (endpoint.provider === "speko") return null;
   const resources = resourcesQuery.data ?? [];
   const destinationResources = resources.filter((resource) =>
@@ -568,6 +582,29 @@ function Settings({
                   }
                 />
               </div>
+              {endpoint.provider === "slack" && resource.type === "channel" && (
+                <div className="flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm">Board-trusted channel</p>
+                    <p className="text-xs text-muted-foreground">
+                      {resource.boardTrustBlockedReason && !resource.boardTrusted
+                        ? resource.boardTrustBlockedReason
+                        : "Top-level messages from linked owners and admins start work here without an @mention, with the same authority as the Paperclip UI."}
+                    </p>
+                  </div>
+                  <ToggleSwitch
+                    aria-label={`Board-trusted channel ${resource.label}`}
+                    checked={resource.boardTrusted ?? false}
+                    disabled={
+                      updateBoardTrust.isPending ||
+                      (!resource.boardTrusted && Boolean(resource.boardTrustBlockedReason))
+                    }
+                    onCheckedChange={(trusted) =>
+                      updateBoardTrust.mutate({ resourceId: resource.id, trusted })
+                    }
+                  />
+                </div>
+              )}
               <details className="text-sm">
                 <summary className="cursor-pointer text-muted-foreground">Task defaults</summary>
                 <div className="pt-3"><ChatExecutionDefaults
@@ -613,6 +650,17 @@ function Settings({
               pending={updateEndpoint.isPending}
               onChange={(requireAtMention) =>
                 updateEndpoint.mutate({ requireAtMention })
+              }
+            />
+          )}
+          {endpoint.provider === "slack" && (
+            <SettingToggle
+              label="Board-trusted tasks run with agent authority"
+              detail="Lets tasks started from a board-trusted channel retry, send email and restore connections like tasks started in Paperclip. Tasks from other channels and from members below admin stay restricted."
+              checked={endpoint.externalExecutionPolicy === "agent"}
+              pending={updateEndpoint.isPending}
+              onChange={(agent) =>
+                updateEndpoint.mutate({ externalExecutionPolicy: agent ? "agent" : "restricted" })
               }
             />
           )}

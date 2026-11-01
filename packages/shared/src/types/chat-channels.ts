@@ -303,6 +303,10 @@ export interface ChatEndpointResource {
   providerUrl?: string | null;
   availability: ChatResourceAvailability;
   enabled: boolean;
+  /** Board-trust allowlist membership (Slack private channels only). */
+  boardTrusted?: boolean;
+  /** Why board trust cannot be turned on here; null when it can. */
+  boardTrustBlockedReason?: string | null;
   createdAt: string;
   updatedAt: string;
   participants?: string[];
@@ -531,6 +535,10 @@ export interface UpdateChatEndpointInput {
   requireAtMention?: boolean;
   allowGroupChats?: boolean;
   allowUnlinkedPeople?: boolean;
+  /** `agent` lifts the external execution restriction for board-trusted conversations only. */
+  externalExecutionPolicy?: ExternalMessageExecutionPolicy;
+  /** Add or remove one Slack channel from the board-trust allowlist. */
+  boardChannelTrust?: { resourceId: string; trusted: boolean };
 }
 
 export interface ConfigureChatEndpointInput {

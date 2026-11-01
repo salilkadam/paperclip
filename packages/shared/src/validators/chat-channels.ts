@@ -103,6 +103,11 @@ export const updateChatEndpointSchema = z
     requireAtMention: z.boolean().optional(),
     allowGroupChats: z.boolean().optional(),
     allowUnlinkedPeople: z.boolean().optional(),
+    externalExecutionPolicy: z.enum(["restricted", "agent"]).optional(),
+    boardChannelTrust: z
+      .object({ resourceId: z.string().uuid(), trusted: z.boolean() })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
@@ -163,6 +168,19 @@ export const replaceChatEndpointResourcesSchema = z
       .max(500),
   })
   .strict();
+
+/** Dry-run the board-trust rules for one hypothetical Slack event; nothing is stored. */
+/** Either a hypothetical event in a channel, or a delivery already received. */
+export const evaluateChatBoardTrustSchema = z.union([
+  z
+    .object({
+      resourceId: z.string().uuid(),
+      slackUserId: z.string().regex(/^[UW][A-Z0-9]+$/),
+      event: z.record(z.string(), z.unknown()),
+    })
+    .strict(),
+  z.object({ deliveryId: z.string().uuid() }).strict(),
+]);
 
 export const gitHubRepositoryPageQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),

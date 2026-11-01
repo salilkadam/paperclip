@@ -1,3 +1,4 @@
+import { chatConversationExecutionRestricted } from "./chat-channels/board-trust.js";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
@@ -120,7 +121,7 @@ export async function requestTaskRetry(input: {
     const [chat] = await tx.select({ id: chatConversations.id }).from(chatConversations)
       .innerJoin(chatEndpoints, eq(chatEndpoints.id, chatConversations.endpointId)).where(and(
         eq(chatConversations.companyId, issue.companyId), eq(chatConversations.issueId, issue.id),
-        eq(chatEndpoints.externalExecutionPolicy, "restricted"))).limit(1);
+        chatConversationExecutionRestricted())).limit(1);
     await tx.insert(agentWakeupRequests).values({ id, companyId: issue.companyId, agentId: issue.assigneeAgentId,
       source: "on_demand", triggerDetail: "manual", reason: "task_retry", idempotencyKey: key,
       requestedByActorType: "user", requestedByActorId: input.actorId,

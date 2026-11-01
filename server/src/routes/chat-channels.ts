@@ -19,6 +19,7 @@ import {
   isUuidLike,
   publishChatPublicationSchema,
   replaceChatEndpointResourcesSchema,
+  evaluateChatBoardTrustSchema,
   gitHubRepositoryPageQuerySchema,
   toggleAllGitHubRepositoriesSchema,
   resolveChatActionSchema,
@@ -434,6 +435,16 @@ export function chatChannelRoutes(db: Db, options: ChatChannelRouteOptions) {
           actorUserId(req),
         ),
       );
+    },
+  );
+
+  router.post(
+    "/chat-endpoints/:endpointId/board-trust/evaluate",
+    validate(evaluateChatBoardTrustSchema),
+    async (req, res) => {
+      if (!(await assertEndpointManagementAccess(req, res))) return;
+      res.set("Cache-Control", "no-store");
+      res.json(await service.evaluateBoardTrust(endpointId(req), req.body));
     },
   );
 

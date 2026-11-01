@@ -91,6 +91,7 @@ describe("chat provider inventory", () => {
       label: "#new-agent-work",
       metadata: {
         private: true,
+        extShared: false,
         contextTeamId: "T-ENTERPRISE",
         source: "provider_inventory",
       },

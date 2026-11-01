@@ -70,6 +70,7 @@ export {
   chatAgentRoutes,
   chatEndpointLeases,
   chatSdkState,
+  chatBoardTrustNotices,
 } from "./chat_channels.js";
 export { issueRelations } from "./issue_relations.js";
 export { routines, routineRevisions, routineTriggers, routineWebhookTestReceipts, routineRuns } from "./routines.js";

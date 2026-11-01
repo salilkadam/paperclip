@@ -68,6 +68,9 @@ import { createTelegramCommands, telegramInboundControls, telegramGuidanceRespon
 import { createTeamsFileDelivery } from "./chat-channels/microsoft-teams/file-delivery.js";
 import { createGitHubSetupSecret } from "./chat-channels/github/setup-secret.js";
 import { createSlackInventory } from "./chat-channels/slack/inventory.js";
+import { getSlackBotChannel } from "./chat-provider-inventory.js";
+import { BOARD_NOTICE_NOT_LINKED, BOARD_NOTICE_NOT_PICKED_UP, boardTrustedChannel, isBoardTrustedMessage, slackFilterVerdictSuffix, userHoldsBoardTrustRole } from "./chat-channels/board-trust.js";
+import { slackHumanishTopLevelPost, slackPlainHumanPost, slackPlainHumanTopLevelPost } from "./chat-channels/slack/messages.js";
 
 import { REQUIRED_GITHUB_EVENTS, UNAVOIDABLE_GITHUB_EVENTS } from "./chat-channels/github/credentials.js";
 
@@ -158,6 +161,7 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 
 import {
@@ -170,7 +174,7 @@ import {
 
 import type { Db } from "@paperclipai/db";
 
-import { agentWakeupRequests, agents, chatActions, chatConversations, chatDeliveries, chatEndpointResources, chatEndpoints, chatExternalPrincipals, chatIdentityLinks, chatMessageLinks, chatPublications, chatTeamsFileTransfers, companyMemberships, heartbeatRuns, issueComments, issueThreadInteractions, issues, toolConnections } from "@paperclipai/db";
+import { agentWakeupRequests, agents, chatActions, chatBoardTrustNotices, chatConversations, chatDeliveries, chatEndpointResources, chatEndpoints, chatExternalPrincipals, chatIdentityLinks, chatMessageLinks, chatPublications, chatTeamsFileTransfers, companyMemberships, heartbeatRuns, issueComments, issueThreadInteractions, issues, toolConnections } from "@paperclipai/db";
 import type { ChatEventKind, ChatEndpointSetupState, ChatProvider, ExternalChannelBindingSummary, SafeChatPublicationPayload, ToolCredentialSecretRef } from "@paperclipai/shared";
 import {
   isUuidLike,
@@ -834,6 +838,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     endpointRecord, CAPABILITIES, PROVIDER_LABELS, withCredentialMutationLease,
     getPublicBaseUrl, getWebhookPublicBaseUrl,
     get slackRegistration() { return slackRegistration; },
+    inspectSlackBoardChannel: async (endpoint, channelId) => {
+      const credentials = await resolveCredentials(endpoint);
+      const channel = await getSlackBotChannel({ botToken: credentials.botToken, channelId: channelId.replace(/^slack:/, ""), fetch: fetchImpl });
+      return channel?.metadata ?? null;
+    },
   });
   const { generateSetupSecret } = createGitHubSetupSecret(db, {
     endpointRecord, withCredentialMutationLease, resolveCredentials, persistCredentials,
@@ -1381,6 +1390,81 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     }
   }
 
+  /**
+   * Ephemeral notices for filtered Slack messages (board-channel trust plan):
+   * - not_linked: an addressed plain human message from an unlinked sender;
+   * - not_picked_up: a top-level human message (rule 4 minus client_msg_id) in a board-trusted channel
+   *   that was filtered as not addressed, at most once per sender per endpoint
+   *   in any rolling 24 hours (claimed by a conditional upsert).
+   * Never for bots, app/user-token integrations, subtype events or the bot.
+   * Best effort: a notice failure is logged and never changes the delivery.
+   */
+  async function stageAdmissionNotice(input: {
+    endpoint: EndpointRow;
+    thread: Thread;
+    message: Message;
+    addressed: boolean;
+    resource: typeof chatEndpointResources.$inferSelect;
+    runtimeContext: InboundRuntimeContext | undefined;
+    deliveryId: string;
+    principalId: string;
+    notice: "not_linked" | "not_picked_up" | null;
+  }): Promise<void> {
+    const { endpoint, thread, message, notice } = input;
+    if (endpoint.provider !== "slack" || !notice) return;
+    if (notice === "not_linked" && (!input.addressed || !slackPlainHumanPost(message, endpoint.botExternalId))) return;
+    if (
+      notice === "not_picked_up" &&
+      (input.addressed ||
+        !boardTrustedChannel({ endpoint, resource: input.resource, thread }) ||
+        // Human-ish, not rule 4: a person's post Slack delivered without
+        // client_msg_id is refused trust but still told why (fail closed, not silent).
+        !slackHumanishTopLevelPost(thread, message, endpoint.botExternalId))
+    )
+      return;
+    const userId = typeof (message.raw as { user?: unknown } | null)?.user === "string"
+      ? (message.raw as { user: string }).user
+      : message.author.userId;
+    if (!userId) return;
+    try {
+      const record = await endpointRecord(endpoint.id);
+      if (!record) return;
+      const effectContext = input.runtimeContext ?? runtimeContextForRecord(record);
+      const effect = await db.transaction(async (tx) => {
+        if (notice === "not_picked_up") {
+          const claimed = await tx
+            .insert(chatBoardTrustNotices)
+            .values({ companyId: endpoint.companyId, endpointId: endpoint.id, principalId: input.principalId, lastNoticeAt: new Date() })
+            .onConflictDoUpdate({
+              target: [chatBoardTrustNotices.endpointId, chatBoardTrustNotices.principalId],
+              set: { lastNoticeAt: new Date() },
+              setWhere: sql`${chatBoardTrustNotices.lastNoticeAt} <= now() - interval '24 hours'`,
+            })
+            .returning({ endpointId: chatBoardTrustNotices.endpointId });
+          if (claimed.length === 0) return null;
+        }
+        return stageProviderEffect(tx, {
+          endpoint,
+          principalId: input.principalId,
+          providerActionId: `provider_effect:admission_notice:${notice}:${input.deliveryId}`,
+          payload: {
+            version: 1,
+            effect: "ephemeral_message",
+            authorizationMode: "safe_notice",
+            threadId: thread.channelId,
+            userId,
+            text: notice === "not_linked" ? BOARD_NOTICE_NOT_LINKED : BOARD_NOTICE_NOT_PICKED_UP,
+            settleDelivery: false,
+          },
+          runtimeContext: effectContext,
+        });
+      });
+      if (effect) scheduleProviderEffect(effect.id, thread);
+    } catch (error) {
+      logger.warn({ error: redactError(error), endpointId: endpoint.id, notice }, "chat admission notice could not be staged");
+    }
+  }
+
   async function processMessage(
     endpoint: EndpointRow,
     thread: Thread,
@@ -1654,7 +1738,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         // Subscription is part of the durable acceptance boundary. If it
         // fails, keep the delivery retryable; the committed message link makes
         // the retry resume here without duplicating the task or comment.
-        if (addressed && !thread.isDM) await thread.subscribe();
+        // A board-trusted root binds its thread exactly as a mention would.
+        if ((addressed || rebound.conversation.boardTrusted) && !thread.isDM) await thread.subscribe();
         await acceptInboundWakeup(activeDelivery.id, attachmentResult);
         if (!(await processInboundWakeup(activeDelivery.id))) return;
         const acceptedWake = await db
@@ -1743,7 +1828,25 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       const principalAllowed =
         !principalResolution.linkedDenied &&
         (principalResolution.userId !== null || guestSponsorAllowed || publicVoiceTaskAllowed);
-      const activationAllowed = addressed || existingConversation !== null;
+      // Board trust (plan 2026-10-31): a top-level plain human message from an
+      // active owner/admin in an allowlisted channel on an active endpoint is
+      // the board, equal to a mention. Computed after the principal and the
+      // resource are known; rechecked under lock at the task mutation below.
+      const boardRole =
+        boardTrustedChannel({ endpoint, resource, thread }) &&
+        principalResolution.userId !== null &&
+        !principalResolution.linkedDenied
+          ? await userHoldsBoardTrustRole(db, endpoint.companyId, principalResolution.userId)
+          : false;
+      const boardTrusted = isBoardTrustedMessage({
+        endpoint,
+        resource,
+        thread,
+        message,
+        principal: principalResolution,
+        boardRole,
+      });
+      const activationAllowed = addressed || existingConversation !== null || boardTrusted;
       const allowed =
         endpointAllowed &&
         destinationAllowed &&
@@ -1807,8 +1910,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               : !principalAllowed
                 ? endpoint.allowUnlinkedPeople
                   ? "Endpoint sponsor can no longer authorize external guests"
-                  : "External identity must be linked to a Paperclip account"
-                : "Message did not address the agent or an active task thread";
+                  : `External identity must be linked to a Paperclip account${slackFilterVerdictSuffix(endpoint, thread, message)}`
+                : `Message did not address the agent or an active task thread${slackFilterVerdictSuffix(endpoint, thread, message)}`;
         await db.transaction(async (tx) => {
           await notifyChatDeliveryWork(tx);
           return tx
@@ -1823,6 +1926,22 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               updatedAt: new Date(),
             })
             .where(eq(chatDeliveries.id, activeDelivery.id));
+        });
+        await stageAdmissionNotice({
+          endpoint,
+          thread,
+          message,
+          addressed,
+          resource,
+          runtimeContext,
+          deliveryId: activeDelivery.id,
+          principalId: principalResolution.principal.id,
+          notice:
+            endpointAllowed && destinationAllowed && !principalResolution.linkedDenied && !principalAllowed && !endpoint.allowUnlinkedPeople
+              ? "not_linked"
+              : endpointAllowed && destinationAllowed && principalAllowed && !activationAllowed
+                ? "not_picked_up"
+                : null,
         });
         return;
       }
@@ -1976,7 +2095,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                 thread,
               })
             : Promise.resolve(),
-          addressed && !thread.isDM ? thread.subscribe() : Promise.resolve(),
+          (addressed || boardTrusted) && !thread.isDM ? thread.subscribe() : Promise.resolve(),
         ]);
         return;
       }
@@ -2082,7 +2201,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                 thread,
               })
             : Promise.resolve(),
-          addressed && !thread.isDM ? thread.subscribe() : Promise.resolve(),
+          (addressed || boardTrusted) && !thread.isDM ? thread.subscribe() : Promise.resolve(),
         ]);
         return;
       }
@@ -2092,6 +2211,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         taskTx: DbOrTransaction,
         taskEndpoint: EndpointRow,
         taskUserId: string | null,
+        taskBoardTrusted: boolean,
       ) => {
         let conversation = existingConversation;
         if (!conversation) {
@@ -2148,6 +2268,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               externalLabel: resource.label,
               providerUrl,
               isDirectMessage: thread.isDM,
+              boardTrusted: taskBoardTrusted,
               communicationGuidance: buildChatCommunicationGuidance({
                 provider: taskEndpoint.provider,
                 isDirectMessage: thread.isDM,
@@ -2394,11 +2515,33 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         const mentionStillAllowed =
           currentEndpoint.provider !== "slack" ||
           slackMessageMeetsMentionRequirement(currentEndpoint, thread, trigger, message);
+        // Re-derive board trust from the locked endpoint, resource, link and
+        // membership. A message admitted only by trust is filtered if the
+        // allowlist, the endpoint, the link or the owner/admin role changed.
+        const boardStillTrusted =
+          boardTrusted &&
+          isBoardTrustedMessage({
+            endpoint: currentEndpoint,
+            resource: currentResource,
+            thread,
+            message,
+            principal: {
+              userId: currentPrincipalAuthorization.allowed ? currentPrincipalAuthorization.userId : null,
+              linkedDenied: currentPrincipalAuthorization.linkedDenied,
+            },
+            boardRole:
+              currentPrincipalAuthorization.allowed &&
+              currentPrincipalAuthorization.userId === principalResolution.userId &&
+              (await userHoldsBoardTrustRole(tx, currentEndpoint.companyId, currentPrincipalAuthorization.userId, { lock: true })),
+          });
+        const activationStillAllowed =
+          addressed || existingConversation !== null || boardStillTrusted;
         if (
           !endpointStillAllowed ||
           !mentionStillAllowed ||
           !destinationStillAllowed ||
-          !currentPrincipalAuthorization.allowed
+          !currentPrincipalAuthorization.allowed ||
+          !activationStillAllowed
         ) {
           const filteredAt = new Date();
           await notifyChatDeliveryWork(tx);
@@ -2412,13 +2555,15 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               processedAt: filteredAt,
               redactedError: !mentionStillAllowed
                 ? "Message did not @mention the bot"
+                : endpointStillAllowed && destinationStillAllowed && currentPrincipalAuthorization.allowed && !activationStillAllowed
+                ? `Message did not address the agent or an active task thread${slackFilterVerdictSuffix(currentEndpoint, thread, message)}`
                 : endpointStillAllowed
                   ? destinationStillAllowed
                     ? currentPrincipalAuthorization.linkedDenied
                       ? "Linked Paperclip account is not currently permitted"
                       : currentEndpoint.allowUnlinkedPeople
                         ? "Endpoint sponsor can no longer authorize external guests"
-                        : "External identity must be linked to a Paperclip account"
+                        : `External identity must be linked to a Paperclip account${slackFilterVerdictSuffix(currentEndpoint, thread, message)}`
                     : "Destination is not enabled in Paperclip"
                   : "Connection is not active",
               updatedAt: filteredAt,
@@ -2482,6 +2627,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           tx,
           currentPrincipalAuthorization.sponsorUserId ? { ...currentEndpoint, sponsorUserId: currentPrincipalAuthorization.sponsorUserId } : currentEndpoint,
           currentPrincipalAuthorization.userId,
+          boardStillTrusted,
         );
       });
       if (!taskMutation) return;
@@ -2534,7 +2680,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       // Do not discard a subscription failure after marking the delivery
       // processed. A retry reuses the committed message link above and tries
       // this idempotent subscription again before completing the delivery.
-      if (addressed && !thread.isDM) await thread.subscribe();
+      if ((addressed || boardTrusted) && !thread.isDM) await thread.subscribe();
       await acceptInboundWakeup(activeDelivery.id, attachmentResult);
       if (!(await processInboundWakeup(activeDelivery.id))) return;
       const acceptedWake = await db
@@ -3349,6 +3495,112 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     return deadlines.length ? Math.min(...deadlines) : null;
   }
 
+  /**
+   * Read-only dry run of the board-trust definition, using the same rules
+   * admission uses. Creates no principal, delivery or task.
+   *
+   * - `{ resourceId, slackUserId, event }`: a hypothetical Slack event in one of
+   *   this endpoint's channels. Used by the setup script to prove refusals (for
+   *   example a bot-authored post) without posting to Slack.
+   * - `{ deliveryId }`: a delivery this endpoint already received. Rules 4 and 5
+   *   come from the verdicts stored at ingress (the raw event is not kept); the
+   *   channel, sender link, role and mention rules are read now. A delivery
+   *   without a principal (filtered deliveries drop it) has no linked sender.
+   *   Used after deploy to prove a post made through a user-token integration
+   *   is not a plain human post.
+   */
+  async function evaluateBoardTrust(
+    endpointId: string,
+    input:
+      | { resourceId: string; slackUserId: string; event: Record<string, unknown> }
+      | { deliveryId: string },
+  ) {
+    const record = await endpointRecord(endpointId);
+    if (!record) throw notFound("Chat endpoint not found");
+    const endpoint = record.endpoint;
+    if (endpoint.provider !== "slack") throw unprocessable("Board trust is only supported for Slack connections");
+    const linkedUser = async (principalCondition: SQL) => {
+      const [link] = await db.select({ userId: chatIdentityLinks.paperclipUserId }).from(chatIdentityLinks)
+        .innerJoin(chatExternalPrincipals, and(
+          eq(chatExternalPrincipals.id, chatIdentityLinks.principalId),
+          eq(chatExternalPrincipals.companyId, endpoint.companyId),
+          eq(chatExternalPrincipals.provider, "slack"),
+          eq(chatExternalPrincipals.providerAccountId, endpoint.providerAccountId ?? "unknown"),
+          principalCondition,
+        ))
+        .where(and(
+          eq(chatIdentityLinks.companyId, endpoint.companyId),
+          eq(chatIdentityLinks.endpointId, endpoint.id),
+          eq(chatIdentityLinks.status, "linked"),
+        ))
+        .limit(1);
+      return link?.userId ?? null;
+    };
+    const channelResource = async (condition: SQL) => {
+      const [resource] = await db.select().from(chatEndpointResources).where(and(
+        eq(chatEndpointResources.companyId, endpoint.companyId),
+        eq(chatEndpointResources.endpointId, endpoint.id),
+        condition,
+      ));
+      return resource;
+    };
+    if ("deliveryId" in input) {
+      const [delivery] = await db.select({ principalId: chatDeliveries.principalId, normalizedEvent: chatDeliveries.normalizedEvent })
+        .from(chatDeliveries)
+        .where(and(
+          eq(chatDeliveries.id, input.deliveryId),
+          eq(chatDeliveries.companyId, endpoint.companyId),
+          eq(chatDeliveries.endpointId, endpoint.id),
+        ))
+        .limit(1);
+      if (!delivery) throw notFound("Delivery not found on this connection");
+      const event = (delivery.normalizedEvent ?? {}) as {
+        resource?: { type?: unknown; providerResourceId?: unknown };
+        conversation?: { isDirectMessage?: unknown };
+        message?: { slackPlainHuman?: unknown; slackPlainHumanTopLevel?: unknown };
+      };
+      const resourceId = typeof event.resource?.providerResourceId === "string" ? event.resource.providerResourceId : null;
+      // Only a channel resource can be trusted; anything else fails closed.
+      const resource = resourceId && event.resource?.type === "channel"
+        ? await channelResource(and(eq(chatEndpointResources.type, "channel"), eq(chatEndpointResources.providerResourceId, resourceId))!)
+        : undefined;
+      const userId = delivery.principalId ? await linkedUser(eq(chatExternalPrincipals.id, delivery.principalId)) : null;
+      const boardRole = await userHoldsBoardTrustRole(db, endpoint.companyId, userId);
+      const rules = {
+        channelTrusted: boardTrustedChannel({ endpoint, resource, thread: { id: "", isDM: event.conversation?.isDirectMessage === true } }),
+        senderLinked: userId !== null,
+        senderOwnerOrAdmin: boardRole,
+        plainHuman: event.message?.slackPlainHuman === true,
+        plainHumanTopLevel: event.message?.slackPlainHuman === true && event.message?.slackPlainHumanTopLevel === true,
+        mentionNotRequired: !endpoint.requireAtMention,
+      };
+      return { trusted: Object.values(rules).every(Boolean), rules };
+    }
+    const resource = await channelResource(eq(chatEndpointResources.id, input.resourceId));
+    if (!resource) throw notFound("Channel not found on this connection");
+    const ts = typeof input.event.ts === "string" ? input.event.ts : "";
+    const thread = { id: `slack:${resource.providerResourceId}:${ts}`, isDM: false };
+    const message = {
+      id: ts,
+      raw: input.event,
+      author: { userId: input.slackUserId, isBot: false, isMe: false, isSystem: false },
+    };
+    const userId = await linkedUser(eq(chatExternalPrincipals.externalId, input.slackUserId));
+    const boardRole = await userHoldsBoardTrustRole(db, endpoint.companyId, userId);
+    const rules = {
+      channelTrusted: boardTrustedChannel({ endpoint, resource, thread }),
+      senderLinked: userId !== null,
+      senderOwnerOrAdmin: boardRole,
+      plainHuman: slackPlainHumanPost(message, endpoint.botExternalId),
+      plainHumanTopLevel: slackPlainHumanTopLevelPost(thread, message, endpoint.botExternalId),
+      mentionNotRequired: !endpoint.requireAtMention,
+    };
+    return {
+      trusted: isBoardTrustedMessage({ endpoint, resource, thread, message, principal: { userId, linkedDenied: false }, boardRole }),
+      rules,
+    };
+  }
+
   async function getIssueBinding(
     issueId: string,
   ): Promise<ExternalChannelBindingSummary | null> {
@@ -3494,6 +3746,7 @@ return {
     listGitHubRepositories,
     toggleAllGitHubRepositories,
     replaceResources,
+    evaluateBoardTrust,
     listPrincipals,
     createLinkIntent,
     previewIdentityLink,

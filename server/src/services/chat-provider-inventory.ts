@@ -84,6 +84,7 @@ export async function listSlackBotChannels(input: {
         creator?: string;
         is_member?: boolean;
         is_private?: boolean;
+        is_ext_shared?: boolean;
         is_archived?: boolean;
         context_team_id?: string;
       }>;
@@ -102,6 +103,7 @@ export async function listSlackBotChannels(input: {
         metadata: {
           ...(channel.creator ? { creator: channel.creator } : {}),
           private: channel.is_private === true,
+          extShared: channel.is_ext_shared === true,
           ...(channel.context_team_id
             ? { contextTeamId: channel.context_team_id }
             : {}),
@@ -134,6 +136,10 @@ export async function getSlackBotChannel(input: {
       name?: string;
       is_member?: boolean;
       is_private?: boolean;
+      is_ext_shared?: boolean;
+      is_pending_ext_shared?: boolean;
+      is_mpim?: boolean;
+      is_im?: boolean;
       is_archived?: boolean;
       context_team_id?: string;
     };
@@ -156,6 +162,11 @@ export async function getSlackBotChannel(input: {
     label: channel.name ? `#${channel.name}` : channel.id,
     metadata: {
       private: channel.is_private === true,
+      extShared: channel.is_ext_shared === true,
+      // Board trust refuses group DMs, DMs and channels with a pending Slack
+      // Connect invitation; only present when true to keep the projection small.
+      ...(channel.is_pending_ext_shared === true ? { pendingExtShared: true } : {}),
+      ...(channel.is_mpim === true || channel.is_im === true ? { directConversation: true } : {}),
       ...(channel.context_team_id
         ? { contextTeamId: channel.context_team_id }
         : {}),
