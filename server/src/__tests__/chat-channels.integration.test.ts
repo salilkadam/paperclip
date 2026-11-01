@@ -24254,7 +24254,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         redactedError:
           authorizationChange === "viewer"
             ? "Linked Paperclip account is not currently permitted"
-            : "External identity must be linked to a Paperclip account",
+            : "External identity must be linked to a Paperclip account (plain human post: no; top-level: no)",
         normalizedEvent: {
           filtering: { contentRetained: false },
           message: { providerMessageId: messageId },
@@ -54811,7 +54811,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             ? "Destination is not enabled in Paperclip"
             : authorizationChange === "viewer"
               ? "Linked Paperclip account is not currently permitted"
-              : "External identity must be linked to a Paperclip account",
+              : "External identity must be linked to a Paperclip account (plain human post: no; top-level: no)",
         state: "filtered",
       });
       expect(JSON.stringify(delivery?.normalizedEvent)).not.toContain(
