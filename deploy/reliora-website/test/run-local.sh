@@ -37,7 +37,7 @@ C_STALE=$(mk stale "sed -i 's/Pricing/Pricingg/' site-src/pages/pricing.html")
 D_LOG=$(mk hostilelog "sed -i 's#location = /healthz {#location = /x { access_log /srv/site/state; return 200; }\n    location = /healthz {#' deploy/nginx.conf")
 E_SLOW=$(mk slow "sed -i 's#location = /healthz {#location = /_site-pricing.html { limit_rate 50; }\n    location = /healthz {#' deploy/nginx.conf")
 F_LINK=$(mk symlink "ln -s /etc/passwd public/leak.html")
-G_DAV=$(mk dav "sed -i 's#location = /healthz {#location /dav/ { root /srv/site; dav_methods PUT; }\n    location = /healthz {#' deploy/nginx.conf")
+G_DAV=$(mk dav "sed -i 's#location = /healthz {#location /dav/ { alias /srv/site/current/html/; dav_methods PUT DELETE; }\n    location = /healthz {#' deploy/nginx.conf")
 H_CONF=$(mk confchange "sed -i 's#location = /healthz {#location = /extra { return 204; }\n    location = /healthz {#' deploy/nginx.conf")
 git checkout -q main; rm -rf /tmp/$P-repo; git clone -q --bare $W /tmp/$P-repo; load repo /tmp/$P-repo
 cd - >/dev/null
@@ -95,8 +95,12 @@ root 'grep -c . /srv/site/state' | grep -q '^8$' && { echo "PASS state file unto
 echo "== 7 slow page (limit_rate)"; setmain $E_SLOW; run; expect slow "failed_smoke|failed_timeout" $A 1
 echo "== 8 symlink in public/"; setmain $F_LINK; run; expect symlink "failed_check" $A 1
 echo "== 9 WebDAV PUT allowed by the commit's config"; setmain $G_DAV; run; expect dav-deploys "ok" $G_DAV 0
-code="$(docker run --rm --network $NET --entrypoint sh "$IMG_K8S" -c "curl -s -o /dev/null -w %{http_code} --max-time 5 -X PUT --data x http://$LIVE_IP:8080/dav/planted.txt")"
-root 'ls /srv/site/dav /srv/site/planted.txt 2>&1' | grep -q 'No such file' && { echo "PASS dav PUT ($code) wrote nothing: volume is read-only"; pass=$((pass+1)); } || { echo "FAIL dav wrote to the volume ($code)"; fail=$((fail+1)); }
+# PUT a new file and DELETE a page, into a directory that exists: only the
+# read-only mount can stop them.
+code="$(docker run --rm --network $NET --entrypoint sh "$IMG_K8S" -c "curl -s -o /dev/null -w %{http_code} --max-time 5 -X PUT --data x http://$LIVE_IP:8080/dav/planted.txt; curl -s -o /dev/null -w ,%{http_code} --max-time 5 -X DELETE http://$LIVE_IP:8080/dav/_site-pricing.html")"
+if root "test ! -e /srv/site/releases/$G_DAV/html/planted.txt && test -f /srv/site/releases/$G_DAV/html/_site-pricing.html"; then
+  echo "PASS dav PUT,DELETE ($code) changed nothing: volume is read-only"; pass=$((pass+1))
+else echo "FAIL dav changed the volume ($code)"; fail=$((fail+1)); fi
 echo "== 10 config change: restart onto the new config"; setmain $H_CONF; run; expect confchange "ok" $H_CONF 0
 root 'grep -c restart /fake/events' | grep -qv '^0$' && { echo "PASS restart requested"; pass=$((pass+1)); } || { echo "FAIL no restart"; fail=$((fail+1)); }
 echo "== 11 live smoke fails once: rollback to the previous release"; setmain $A; root 'touch /fake/bad-endpoints-once; chown 101 /fake/bad-endpoints-once'; run; expect rollback "failed_smoke" $H_CONF 1
