@@ -245,6 +245,10 @@ describeDatabase("board-channel cards", () => {
     f.advance(11 * 60_000);
     await f.run();
     await f.run();
+    expect(f.sent).toHaveLength(0); // still inside the dead-card cool-down
+    f.advance(61 * 60_000);
+    await f.run();
+    await f.run();
     expect(f.sent).toHaveLength(1);
   });
 
@@ -277,9 +281,42 @@ describeDatabase("board-channel cards", () => {
     await f.run();
     expect(f.sent).toHaveLength(0);
     await db.update(chatEndpointResources).set({ enabled: true }).where(eq(chatEndpointResources.id, f.resource.id));
-    await db.update(issueThreadInteractions).set({ createdAt: new Date(Date.now() - 30 * 24 * 60 * 60_000) }).where(eq(issueThreadInteractions.companyId, f.company.id));
+    await db.update(issueThreadInteractions).set({ createdAt: new Date(Date.now() - 30 * 24 * 60 * 60_000), updatedAt: new Date(Date.now() - 30 * 24 * 60 * 60_000) }).where(eq(issueThreadInteractions.companyId, f.company.id));
     await f.run();
     expect(f.sent).toHaveLength(0);
+  });
+
+  it("does not loop when every send is refused: one dead card per cool-down, bounded", async () => {
+    const forbidden = Object.assign(new Error("not_in_channel"), { status: 403, code: "not_in_channel" });
+    const f = await fixture({ failPost: forbidden });
+    await f.interaction({ payload: toolActionPayload() });
+    for (let i = 0; i < 6; i++) await f.run();
+    const rows = await f.cardRows();
+    expect(rows.length).toBeLessThanOrEqual(2);
+    for (let i = 0; i < 20; i++) { f.advance(61 * 60_000); await f.run(); }
+    expect((await f.cardRows()).length).toBeLessThanOrEqual(5);
+  });
+
+  it("does not grow rows while the channel stays public", async () => {
+    const f = await fixture({ channel: { private: false } });
+    await f.interaction({ payload: toolActionPayload() });
+    for (let i = 0; i < 6; i++) await f.run();
+    expect((await f.cardRows()).length).toBe(1);
+  });
+
+  it("finishes a settle that was blocked by a public channel once it is private again", async () => {
+    let isPrivate = true;
+    const f = await fixture({ channel: () => ({ private: isPrivate }) });
+    const row = await f.interaction({ payload: toolActionPayload() });
+    await f.run();
+    isPrivate = false;
+    f.advance(11 * 60_000);
+    await db.update(issueThreadInteractions).set({ status: "accepted" }).where(eq(issueThreadInteractions.id, row.id));
+    await f.run(); await f.run();
+    isPrivate = true;
+    f.advance(61 * 60_000);
+    await f.run(); await f.run(); await f.run();
+    expect(f.sent.map((s) => s.op)).toEqual(["post", "edit"]);
   });
 });
 

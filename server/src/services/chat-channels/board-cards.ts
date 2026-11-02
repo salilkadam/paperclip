@@ -50,6 +50,10 @@ export const BOARD_CARD_SWEEP_MS = 20_000;
 export const BOARD_CARD_PROCESSING_STALE_MS = 60_000;
 /** Only decisions raised in this window are posted, so turning the channel on does not flood it with old items. */
 export const BOARD_CARD_BACKFILL_MS = 14 * 24 * 60 * 60_000;
+/** A dead card (cancelled or permanently failed) is retried no sooner than this, and only if the cause cleared. */
+export const BOARD_CARD_DEAD_RETRY_MS = 60 * 60_000;
+/** At most this many cards (revs) per decision, and this many settle revivals per card. */
+export const BOARD_CARD_MAX_REVS = 5;
 /** Re-check that the board channel is still private and not shared at most this often. */
 const CHANNEL_PROBE_TTL_MS = 10 * 60_000;
 const MAX_BODY = 1500;
@@ -382,7 +386,7 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
           sql`${issueThreadInteractions.createdByAgentId} is not null`,
           isNull(issueThreadInteractions.addresseeAgentId),
           isNull(issues.conversationAgentId),
-          sql`${issueThreadInteractions.createdAt} >= ${backfillSince.toISOString()}::timestamptz`,
+          sql`greatest(${issueThreadInteractions.createdAt}, ${issueThreadInteractions.updatedAt}) >= ${backfillSince.toISOString()}::timestamptz`,
           // A task that already lives in the board channel shows its card in its own thread.
           sql`not exists (select 1 from chat_conversations c where c.company_id = ${issues.companyId}
             and c.issue_id = ${issues.id} and c.state in ('active', 'waiting')
@@ -408,7 +412,7 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
       for (const row of pending) {
         const last = interactionLatest.get(row.id);
         // Live or uncertain card already exists: nothing to post. A dead post is re-staged.
-        if (last && !deadPost(last) && !(await isSettled(last.id))) continue;
+        if (last && !(await mayRestage(last, dest.endpoint, channelId))) continue;
         const rev = last ? Number((last.payload as unknown as BoardCardPost).rev ?? 0) + 1 : 0;
         const actionRequestId = (row.payload?.toolAction as Record<string, unknown> | undefined)?.actionRequestId;
         const contentRow = privateSourceIssues.has(row.issueId) ? { ...row, issueVisibility: "private" } : row;
@@ -429,13 +433,13 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
         .where(and(
           eq(approvals.companyId, companyId),
           eq(approvals.status, "pending"),
-          sql`${approvals.createdAt} >= ${backfillSince.toISOString()}::timestamptz`,
+          sql`greatest(${approvals.createdAt}, ${approvals.updatedAt}) >= ${backfillSince.toISOString()}::timestamptz`,
           or(sql`${approvals.payload}->>'source' is null`, sql`${approvals.payload}->>'source' <> 'tool_gateway'`),
         ));
       const approvalLatest = await latestPostsFor(companyId, "approval", pendingApprovals.map((r) => r.id));
       for (const row of pendingApprovals) {
         const last = approvalLatest.get(row.id);
-        if (last && !deadPost(last) && !(await isSettled(last.id))) continue;
+        if (last && !(await mayRestage(last, dest.endpoint, channelId))) continue;
         const rev = last ? Number((last.payload as unknown as BoardCardPost).rev ?? 0) + 1 : 0;
         const content = row.privateLinked
           ? { title: "An approval needs the board", body: `${row.agentName ?? "Someone"} requests a board approval on a private task. Decide in Paperclip.`, url: approvalCardContent(row, { baseUrl, issuePrefix }).url }
@@ -462,8 +466,53 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
           await stageSettle(post, current ? (APPROVAL_OUTCOME[current.status] ?? "Closed") : "Removed");
         }
       }
+      await reviveSettles(companyId, dest.endpoint, channelId);
     }
     lastSweepAt = now();
+  }
+
+  /**
+   * Whether a subject that still needs the board may get a new card. A live or
+   * uncertain card blocks; a settled one allows (re-pended subject). A dead card
+   * allows only after a cool-down, only when its cause has cleared, and only up
+   * to a cap, so a broken bot or channel cannot turn the sweep into a loop.
+   */
+  async function mayRestage(last: ActionRow, endpoint: EndpointRow, channelId: string) {
+    if (await isSettled(last.id)) return true;
+    if (!deadPost(last)) return false;
+    const rev = Number((last.payload as unknown as BoardCardPost).rev ?? 0);
+    if (rev + 1 >= BOARD_CARD_MAX_REVS) return false;
+    if (now() - last.updatedAt.getTime() < BOARD_CARD_DEAD_RETRY_MS) return false;
+    if (last.result?.code === "board_endpoint_unavailable") return false; // the destination now uses another bot or none
+    try {
+      return (await channelStillPrivate(endpoint, channelId)).ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Revive settles that died on an unsafe channel or exhausted retries, once the channel is safe again. */
+  async function reviveSettles(companyId: string, endpoint: EndpointRow, channelId: string) {
+    const dead = await db.select().from(chatActions).where(and(
+      eq(chatActions.companyId, companyId),
+      eq(chatActions.endpointId, endpoint.id),
+      eq(chatActions.kind, BOARD_CARD_KIND),
+      sql`${chatActions.payload}->>'op' = 'settle'`,
+      or(eq(chatActions.status, "cancelled"), and(eq(chatActions.status, "failed"), sql`coalesce(${chatActions.result}->>'retryable', 'false') <> 'true'`)),
+      lt(chatActions.updatedAt, new Date(now() - BOARD_CARD_DEAD_RETRY_MS)),
+      sql`coalesce((${chatActions.result}->>'revivals')::int, 0) < ${BOARD_CARD_MAX_REVS}`,
+    ));
+    if (!dead.length) return;
+    let safe = false;
+    try { safe = (await channelStillPrivate(endpoint, channelId)).ok; } catch { safe = false; }
+    if (!safe) return;
+    for (const row of dead) {
+      await db.update(chatActions).set({
+        status: "received",
+        result: { revivals: Number(row.result?.revivals ?? 0) + 1, previous: row.result ?? null },
+        updatedAt: new Date(),
+      }).where(and(eq(chatActions.id, row.id), eq(chatActions.status, row.status)));
+    }
   }
 
   async function isSettled(postId: string) {
@@ -571,7 +620,7 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
           await db.update(chatActions).set({ status: "received", updatedAt: new Date() }).where(eq(chatActions.id, action.id));
           return;
         }
-        if (settlePost.status === "cancelled" && settlePost.result?.code !== "settled_after_send") {
+        if (settlePost.status === "cancelled") {
           // Nothing was ever shown; nothing to settle.
           await db.update(chatActions).set({ status: "processed", result: { code: "post_never_shown" }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
           return;

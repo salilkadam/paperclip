@@ -120,3 +120,20 @@ originating run"), so a require_approval policy on a plugin tool (the agreement 
 the same release: an approved plugin action runs through the plugin dispatcher with the agent and run that requested
 it and the signed arguments; a plugin error is a failed execution. Test: approve once runs once with the approved
 arguments; approving again does not re-run; a plugin error fails the invocation; reverting the fix fails the test.
+
+## Code review round 2 (Fable 5.1) and dispositions
+
+Confirmed fixed by re-running the probes: sweep cost (5 queries regardless of history), archived-endpoint starvation,
+first-enable wake, board-channel-task exclusion, settle re-probe. Gateway: an approved plugin action cannot run
+without a valid human approval, twice, or for another agent/company/run.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | The round-1 "re-post dead cards" fix re-staged every 20 s without bound (refused bot, public channel). | **Fixed:** a dead card is retried only after a 1-hour cool-down, only when the channel probe is ok again, never for a removed/archived bot, and at most 5 cards per decision. Tests: every send refused → ≤ 2 rows in 6 sweeps and ≤ 5 over 20 hours; public channel → 1 row over 6 sweeps; planted removal of the cool-down fails 2 tests. |
+| 2 | A settle cancelled on a public channel (or exhausted) stayed dead, leaving the card live. | **Fixed:** dead settles are revived after the cool-down when the channel is safe again (≤ 5 revivals). Test: public → private → the card is edited; planted removal fails it. |
+| D | Backfill filtered on created_at, missing re-pended OAuth prompts. | **Fixed:** greatest(created_at, updated_at). |
+| D | `settled_after_send` guard was dead code. | **Fixed:** removed; a cancelled post was never shown, so it needs no settle. |
+| D | A settle follow-up that failed ambiguously may be retried (duplicate "Approved:" follow-up). | **Accepted**, owner: board; trigger: a duplicate follow-up seen in the board channel. |
+| D | Approved plugin actions pass the issue's current project (or none), not the run's original project. | **Accepted**, owner: board; pre-existing convention (`?? ""`); trigger: a plugin that scopes storage by project. |
+
+Review rounds: 2 of 2 (safety tier cap); remaining fixes verified by the reviewer's probe scenarios and plants.
