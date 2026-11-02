@@ -233,5 +233,22 @@ describeDatabase("board-channel card decisions (Slack buttons)", () => {
     const wakes = await db.select().from(chatActions).where(and(eq(chatActions.companyId, g.company.id), eq(chatActions.kind, "interaction_wakeup")));
     expect(wakes.filter((w) => (w.payload as Record<string, unknown>).interactionId === rejected.id)).toHaveLength(0);
   });
+
+  it("wakes the creator agent when accepting hands a human-assigned task back to it", async () => {
+    const f = await fixture();
+    await db.update(issues).set({ assigneeAgentId: null, assigneeUserId: f.userId }).where(eq(issues.id, f.issue.id));
+    const row = await f.interaction(plain);
+    await f.post();
+    expect(await f.click((await f.tokenFor("accept")).providerActionId)).toMatchObject({ outcome: "decided", status: "accepted" });
+    const [after] = await db.select().from(issues).where(eq(issues.id, f.issue.id));
+    const wakes = await db.select().from(chatActions).where(and(eq(chatActions.companyId, f.company.id), eq(chatActions.kind, "interaction_wakeup")));
+    if (after.assigneeAgentId) {
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0].payload).toMatchObject({ interactionId: row.id, agentId: after.assigneeAgentId });
+    } else {
+      expect(wakes).toHaveLength(0);
+    }
+    expect(after.assigneeAgentId).toBe(f.agent.id);
+  });
 });
 
