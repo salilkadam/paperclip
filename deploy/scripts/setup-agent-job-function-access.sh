@@ -52,8 +52,9 @@ REPORT_POLICY="job-function: C-level agents report to the board"
 BLOCK_POLICY="job-function: C-level agents do not write elsewhere"
 BLOCK_NAMED_POLICY="job-function: C-level agents do not use mutating tools classified read"
 # A tool classified read whose name has one of these words. Tokens, not substrings.
-MUTATING_NAME='(^|[_.:-])(merge|push|fork|assign|dismiss|create|update|delete|remove|add|star|unstar|subscribe|unsubscribe|write|trigger|send|publish|execute|run|cancel|rerun|request|manage|close|reopen|submit|register|modify|move|share|rename|upload|reply|edit|set|post|approve|reject|revoke|invite|lock|unlock|import|sync|restart|deploy)([_.:-]|$)'
-READ_NAME='^(get|list|search|read|fetch)[_.:-]|[_.:-](read|get|list)$'
+MUTATING_NAME='(^|[_.:-])(merge|push|fork|assign|dismiss|create|update|delete|remove|add|star|unstar|subscribe|unsubscribe|write|trigger|send|publish|execute|run|cancel|rerun|request|manage|close|reopen|submit|register|modify|move|share|rename|upload|reply|edit|set|post|approve|reject|revoke|invite|lock|unlock|import|sync|restart|deploy|append|hset|hdel|hincrby|incr|decr|lpush|rpush|lpop|rpop|lset|mset|expire|persist|flushdb|flushall|begin|commit|rollback|exec|clone|resize|reclassify|requeue|migrate|enable|disable|log|watch|unwatch)([_.:-]|$)'
+# A connection prefix is allowed (gh_get_post). calc_ only does arithmetic. preview-post only renders.
+READ_NAME='^([a-z0-9]+_)?(get|list|search|read|fetch)[_.:-]|[_.:-](read|get|list)$|^calc_|^preview-post-tool$'
 READ_ONLY_POLICY="job-function: this GitHub connection is read-only"
 BEGIN='<!-- BEGIN bionic-org:job-function -->'
 END='<!-- END bionic-org:job-function -->'
@@ -174,7 +175,7 @@ while read -r cid; do
 
   conns="$(api GET "/companies/$cid/tools/connections" | jq '(if type=="array" then . else .connections end) | [.[] | select(.status=="active")]')"
   ws="$(jq -r --arg n "$WORKSPACE_CONN" '[.[] | select(.name==$n)][0].id // empty' <<<"$conns")"
-  [[ -n "$ws" ]] || die "$cname: no active '$WORKSPACE_CONN' connection. Blocking now would leave C-level agents no place to write"
+  if [[ -z "$ws" ]]; then pending "$cname has no active '$WORKSPACE_CONN' connection, skipped: blocking now would leave C-level agents no place to write"; continue; fi
   catalog="$(api GET "/tool-connections/$ws/catalog")"
   jq -e --argjson t "$DRIVE_WRITE_TOOLS" '[(if type=="array" then . else (.tools // .entries // .catalog // []) end) | .[]? | select((.status // "active") == "active") | .toolName] as $have | all($t[]; . as $x | $have | index($x))' <<<"$catalog" >/dev/null \
     || die "$cname: $WORKSPACE_CONN catalog lacks a Drive write tool ($DRIVE_WRITE_TOOLS). Refresh the catalog first"

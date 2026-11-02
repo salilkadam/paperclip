@@ -54,8 +54,10 @@ State found on 2026-11-02:
 - **New agents:** the installs are explicit agent lists, so a new agent has no GitHub access and C-level policies do not cover a new executive. Run the script again after each hire. An agent with no install can fall back to `GH_TOKEN` or `GITHUB_TOKEN` company secrets, so the script reports those secrets.
 - **Approved requests in flight:** an ask-first request that was created before the script ran can still execute if it is approved. Accepted risk. Owner: Salil. Trigger: each apply. Decline open requests from C-level agents before you run the script, or wait for the 60-minute approval window to end.
 - **Agent classification:** C-level means role `ceo`, `cto`, `cmo` or `cfo`, a title of `Chief ... Officer`, or a name like `COO`. Engineering means a role with `engineer` or `devops`, or `qa`. Check both lists in the `--dry-run` output before you apply.
-- **Board reporting:** if C-level agents post to Slack through a tool connection, the block stops it until `BOARD_REPORT_TOOLS` names those tools. Use the dry-run output to find them.
-- **Routines assigned to C-level agents** can fail after the block. The script lists them but does not reassign them.
+- **Board reporting:** Slack for the CEO and CMO is a chat channel with no tools, so the block does not stop it. Paperclip issues, comments and confirmations are not tool connections either.
+- **Routines assigned to C-level agents** can fail after the block. The script lists them but does not reassign them. On Reliora, the CEO board report and the COO pace report use Paperclip and Drive, so they should keep working. The COO mailbox triage uses the agent mail plugin (`mark_read`, `send`). The block has no connection selector, so it can reach write-risk plugin tools. Not tested, and the dry run does not list plugin tools.
+- **Media and AI tools stay open:** image, 3D, PDF and audio generation, and AI completion, are classified read. They do not change a shared system, but they do cost money.
+- **Bionic has no Google Workspace connection.** The script skips Bionic and exits 3 until it has one. Bionic's C-level agents keep their current access until then, including `git` and `gh`.
 - **Gmail and Calendar writes** are blocked for C-level agents. "Write only to Google Drive" is read literally.
 
 ## Not built: cluster access
