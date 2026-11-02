@@ -16,12 +16,16 @@
 #   3. Ensures both can use the Composio connection: when the connection is not
 #      installed company-wide, the install set is read and PUT back whole with the
 #      two agents added (PUT replaces the set; never send a partial list).
-#   4. Syncs the skills `social-core`, `linkedin-marketing`, `linkedin-personal-account`
+#   4. Installs (force: updates) the skills `social-core`, `linkedin-marketing`,
+#      `linkedin-personal-account` into the company library, then syncs them
 #      onto both (mode "add": other skills are kept) and checks they resolve.
 #   5. Reports whether a LinkedIn app is connected on the Composio account, after
 #      asking the server to refresh its cached view. Informational: not connected
 #      is not fatal (skills fall back to Apify/TryPost and tell the board).
-#   6. PROVES, as the CMO, with gateway test calls (nothing posts):
+#   6. PROVES, as the MARKETER (the agent that acts; under the owner's job-function
+#      rule of 2026-11-02, C-level agents delegate tactical work and Composio's
+#      multi-execute counts as a write, so a governed CMO is refused there and
+#      only reported), with gateway test calls (nothing posts):
 #      LINKEDIN_GET_MY_INFO -> allowed (runs only if LinkedIn is connected; a
 #      Composio tool_error is still "allowed"); LINKEDIN_CREATE_COMMENT_ON_POST ->
 #      ask_first (declined); LINKEDIN_DELETE_UGC_POST -> off;
@@ -125,7 +129,18 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
     fi
   fi
 
-  # 4. skills
+  # 4. skills: install (or update, force) the catalog skills into the company
+  #    library first — an optional catalog skill an agent is told to use but the
+  #    company never installed resolves as "missing" — then sync onto both agents.
+  for k in $(jq -r '.[]' <<<"$SKILLS"); do
+    jq -n --arg id "$(tr '/' ':' <<<"$k")" '{catalogSkillId:$id, force:true}' > "$WORK/cat.json"
+    if [[ "$DRY" -eq 0 ]]; then
+      res="$(api POST "/companies/$cid/skills/install-catalog" "$WORK/cat.json")"
+      log "  catalog $k: $(jq -r '.action // "ok"' <<<"$res")"
+    else
+      log "  (dry run) would install catalog skill $k"
+    fi
+  done
   jq -n --argjson k "$SKILLS" '{mode:"add", desiredSkills:$k}' > "$WORK/skills.json"
   for aid in "$cmo" "$marketer"; do
     if [[ "$DRY" -eq 0 ]]; then
@@ -153,12 +168,15 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
     log "  LinkedIn-in-Composio status unavailable from this connection (HTTP $code); check the Apps page"
   fi
 
-  # 6. prove the gate as the CMO
+  # 6. prove the gate as the marketer; report the CMO (job-function policy may refuse it)
   if [[ "$DRY" -eq 0 ]]; then
-    probe "$cid" "$conn" "$cmo" "LinkedIn read (my info)" "$(t '[{"tool_slug":"LINKEDIN_GET_MY_INFO","arguments":{}}]')" allowed
-    probe "$cid" "$conn" "$cmo" "LinkedIn comment needs approval" "$(t '[{"tool_slug":"LINKEDIN_CREATE_COMMENT_ON_POST","arguments":{"parent_urn":"urn:li:share:probe","text":"governance probe"}}]')" ask_first
-    probe "$cid" "$conn" "$cmo" "LinkedIn delete is blocked" "$(t '[{"tool_slug":"LINKEDIN_DELETE_UGC_POST","arguments":{"post_urn":"urn:li:ugcPost:probe"}}]')" off deny_policy_block
-    probe "$cid" "$conn" "$cmo" "create then delete: block beats ask" "$(t '[{"tool_slug":"LINKEDIN_CREATE_LINKED_IN_POST","arguments":{"text":"probe"}},{"tool_slug":"LINKEDIN_DELETE_POST","arguments":{"post_urn":"urn:li:share:probe"}}]')" off deny_policy_block
+    jq -n --arg a "$cmo" --argjson p "$(t '[{"tool_slug":"LINKEDIN_GET_MY_INFO","arguments":{}}]')" '{agentId:$a, toolName:"COMPOSIO_MULTI_EXECUTE_TOOL", parameters:$p}' > "$WORK/cmo.json"
+    cmo_resp="$(api POST "/tool-connections/$conn/test-calls" "$WORK/cmo.json")"
+    log "  CMO via Composio: $(jq -r '.decision' <<<"$cmo_resp")$(jq -r 'if .decision=="off" then " — " + (.error.message // "") + " (expected where the job-function policy applies: the CMO delegates LinkedIn actions to the marketer)" else "" end' <<<"$cmo_resp")"
+    probe "$cid" "$conn" "$marketer" "LinkedIn read (my info)" "$(t '[{"tool_slug":"LINKEDIN_GET_MY_INFO","arguments":{}}]')" allowed
+    probe "$cid" "$conn" "$marketer" "LinkedIn comment needs approval" "$(t '[{"tool_slug":"LINKEDIN_CREATE_COMMENT_ON_POST","arguments":{"parent_urn":"urn:li:share:probe","text":"governance probe"}}]')" ask_first
+    probe "$cid" "$conn" "$marketer" "LinkedIn delete is blocked" "$(t '[{"tool_slug":"LINKEDIN_DELETE_UGC_POST","arguments":{"post_urn":"urn:li:ugcPost:probe"}}]')" off deny_policy_block
+    probe "$cid" "$conn" "$marketer" "create then delete: block beats ask" "$(t '[{"tool_slug":"LINKEDIN_CREATE_LINKED_IN_POST","arguments":{"text":"probe"}},{"tool_slug":"LINKEDIN_DELETE_POST","arguments":{"post_urn":"urn:li:share:probe"}}]')" off deny_policy_block
   fi
   total=$((total+1))
 done
