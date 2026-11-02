@@ -44,4 +44,6 @@ await writeFile(
     engines: pkg.engines,
   }, null, 2)}\n`,
 );
+const { execFileSync } = await import("node:child_process");
+execFileSync(process.execPath, [path.join(root, "scripts/copy-assets.mjs"), "--bundle"], { stdio: "inherit" });
 console.log(`bundled ${pkg.name}@${pkg.version} -> ${path.relative(process.cwd(), outDir)}`);

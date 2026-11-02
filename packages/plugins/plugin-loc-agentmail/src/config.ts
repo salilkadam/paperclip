@@ -10,7 +10,9 @@
  *    already allowed to use.
  */
 
+import type { DriveSettings } from "./drive.js";
 import type { ImapTlsMode } from "./imap.js";
+import { TEMPLATES } from "./documents/templates.js";
 
 /** Raised for configuration problems; messages name the offending field. */
 export class ConfigError extends Error {
@@ -75,6 +77,8 @@ export interface MailAccount {
   companyIds: string[];
   /** Agent allowlist. Empty means every agent in `companyIds`. */
   agentIds: string[];
+  /** Document templates this mailbox may attach. Empty means none. */
+  documentTemplates: string[];
 }
 
 /** Inbound polling behaviour. */
@@ -91,6 +95,8 @@ export interface LocAgentMailConfig {
   send: SendSettings;
   accounts: MailAccount[];
   poll: PollSettings;
+  /** Where filed documents go. Absent means `create_drive_file` and sent-copy filing are off. */
+  drive?: DriveSettings;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -240,6 +246,18 @@ export function parseConfig(raw: Record<string, unknown> | undefined): LocAgentM
       replyTo: strList(item.replyTo, `${field}.replyTo`, errors, EMAIL_RE, "reply-to address"),
       companyIds,
       agentIds,
+      documentTemplates: (() => {
+        const list = Array.isArray(item.documentTemplates) ? item.documentTemplates : [];
+        if (item.documentTemplates !== undefined && !Array.isArray(item.documentTemplates)) {
+          errors.push(`${field}.documentTemplates must be an array of template keys`);
+        }
+        const out: string[] = [];
+        for (const t of list) {
+          if (typeof t !== "string" || !TEMPLATES[t]) errors.push(`${field}.documentTemplates: unknown template "${String(t)}"`);
+          else out.push(t);
+        }
+        return out;
+      })(),
     });
   });
   if (accounts.length === 0) errors.push("accounts must declare at least one mailbox");
@@ -254,10 +272,34 @@ export function parseConfig(raw: Record<string, unknown> | undefined): LocAgentM
     markSeen: bool(pollRaw.markSeen, "poll.markSeen", false, errors),
   };
 
+  let drive: DriveSettings | undefined;
+  if (root.drive !== undefined && root.drive !== null) {
+    const d = asObject(root.drive, "drive", errors);
+    const mcpUrl = str(d.mcpUrl, "drive.mcpUrl", errors) ?? "";
+    if (mcpUrl && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(mcpUrl)) errors.push("drive.mcpUrl must be an http(s) URL");
+    const folders: Record<string, string> = {};
+    const rawFolders = asObject(d.folders, "drive.folders", errors);
+    for (const [key, id] of Object.entries(rawFolders)) {
+      if (!KEY_RE.test(key)) errors.push(`drive.folders key "${key}" must be a lowercase slug`);
+      else if (typeof id !== "string" || !/^[A-Za-z0-9_-]{10,128}$/.test(id.trim())) errors.push(`drive.folders.${key} must be a Drive folder id`);
+      else folders[key] = id.trim();
+    }
+    if (Object.keys(folders).length === 0) errors.push("drive.folders must list at least one folder");
+    drive = {
+      mcpUrl,
+      tenantId: str(d.tenantId, "drive.tenantId", errors) ?? "",
+      account: str(d.account, "drive.account", errors) ?? "",
+      folders,
+      timeoutMs: int(d.timeoutMs, "drive.timeoutMs", 20000, 1000, 45000, errors),
+      apiKey: (d.apiKey as SecretRefValue) ?? null,
+    };
+    if (!drive.apiKey) errors.push("drive.apiKey is required (the gateway key for the Google Workspace MCP server; pick a saved secret)");
+  }
+
   if (errors.length > 0) {
     throw new ConfigError(`Loc-AgentMail configuration is invalid:\n- ${Array.from(new Set(errors)).join("\n- ")}`);
   }
-  return { imap, send, accounts, poll };
+  return { imap, send, accounts, poll, drive };
 }
 
 /** Look up an account by the key an agent supplied. */

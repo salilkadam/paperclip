@@ -7,6 +7,8 @@
  * parses whatever the mailbox returns, including multipart alternatives.
  */
 
+import { createHash } from "node:crypto";
+
 const CRLF = "\r\n";
 const ASCII_ONLY = /^[\x20-\x7E]*$/;
 const LINE_BREAK_OR_NUL = /[\r\n\0]/;
@@ -174,6 +176,32 @@ export interface MessageInput {
   date?: Date;
   /** Extra `X-` style headers; forbidden names are dropped, not rejected. */
   headers?: Record<string, string>;
+  /** Files attached as `multipart/mixed` parts. */
+  attachments?: OutboundAttachment[];
+}
+
+/** A file to attach. Bytes are produced server-side, never by the caller. */
+export interface OutboundAttachment {
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,180}$/;
+
+/** Attachment part headers and base64 body for one file. */
+function attachmentPart(file: OutboundAttachment): string {
+  const filename = rejectInjection(String(file.filename ?? ""), "attachment filename").trim();
+  if (!SAFE_FILENAME.test(filename)) throw new MimeError(`attachment filename "${filename}" is not allowed`);
+  if (!/^[a-z]+\/[a-z0-9.+-]+$/i.test(file.contentType)) throw new MimeError(`attachment content type "${file.contentType}" is not valid`);
+  const b64 = Buffer.from(file.bytes).toString("base64").replace(/(.{76})/g, `$1${CRLF}`);
+  return [
+    `Content-Type: ${file.contentType}; name="${filename}"`,
+    "Content-Transfer-Encoding: base64",
+    `Content-Disposition: attachment; filename="${filename}"`,
+    "",
+    b64,
+  ].join(CRLF);
 }
 
 /**
@@ -216,23 +244,36 @@ export function buildRawMessage(input: MessageInput): string {
     headers.push(foldHeader(name, rejectInjection(String(value), `header ${name}`)));
   }
 
+  // The readable body: text alone, or text + html as alternatives.
+  const idPart = messageId.replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
+  let bodyHeaders: string[];
   let bodySection: string;
   if (html && html.trim()) {
-    const boundary = `paperclip-loc-agentmail-${messageId.replace(/[^A-Za-z0-9]/g, "").slice(0, 24)}`;
+    const boundary = `paperclip-loc-agentmail-alt-${idPart}`;
     const textPart = encodedPart("text/plain", text);
     const htmlPart = encodedPart("text/html", html);
-    headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    bodyHeaders = [`Content-Type: multipart/alternative; boundary="${boundary}"`];
     bodySection = [
       `--${boundary}${CRLF}${textPart.header}${CRLF}${CRLF}${textPart.body}`,
       `--${boundary}${CRLF}${htmlPart.header}${CRLF}${CRLF}${htmlPart.body}`,
       `--${boundary}--`,
     ].join(CRLF);
   } else {
-    headers.push("Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64");
+    bodyHeaders = ["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64"];
     bodySection = base64Body(text);
   }
 
-  return `${headers.join(CRLF)}${CRLF}${CRLF}${bodySection}${CRLF}`;
+  const attachments = input.attachments ?? [];
+  if (attachments.length === 0) {
+    headers.push(...bodyHeaders);
+    return `${headers.join(CRLF)}${CRLF}${CRLF}${bodySection}${CRLF}`;
+  }
+  const mixed = `paperclip-loc-agentmail-mixed-${idPart}`;
+  headers.push(`Content-Type: multipart/mixed; boundary="${mixed}"`);
+  const parts = [`--${mixed}${CRLF}${bodyHeaders.join(CRLF)}${CRLF}${CRLF}${bodySection}`];
+  for (const file of attachments) parts.push(`--${mixed}${CRLF}${attachmentPart(file)}`);
+  parts.push(`--${mixed}--`);
+  return `${headers.join(CRLF)}${CRLF}${CRLF}${parts.join(CRLF)}${CRLF}`;
 }
 
 /** Generate a Message-ID with a stable, non-revealing host part. */
@@ -438,4 +479,82 @@ export function parseRawMail(raw: string | Buffer): ParsedMail {
     html,
     snippet: snippetOf(bodyText),
   };
+}
+
+/** An attachment found in a received message. */
+export interface InboundAttachment {
+  /** Position among the message's attachments, from 0. */
+  index: number;
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  bytes: Buffer;
+}
+
+function headerParam(value: string, name: string): string {
+  // RFC 2231 extended form first: name*=utf-8''encoded
+  const ext = new RegExp(`${name}\\*\\s*=\\s*([^']*)'[^']*'([^;]+)`, "i").exec(value);
+  if (ext) {
+    try {
+      return decodeURIComponent(ext[2].trim().replace(/^"|"$/g, ""));
+    } catch {
+      return ext[2].trim();
+    }
+  }
+  const plain = new RegExp(`(?:^|;)\\s*${name}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*"|[^;]+)`, "i").exec(value);
+  if (!plain) return "";
+  return decodeWords(plain[1].trim().replace(/^"|"$/g, "").replace(/\\(["\\])/g, "$1"));
+}
+
+function decodePartBytes(body: string, cte: string): Buffer {
+  const enc = cte.trim().toLowerCase();
+  if (enc === "base64") return Buffer.from(body.replace(/[^0-9+/=A-Za-z]/g, ""), "base64");
+  if (enc === "quoted-printable") {
+    const soft = body.replace(/=\r?\n/g, "");
+    return Buffer.from(soft.replace(/=([0-9A-Fa-f]{2})/g, (_all, hex) => String.fromCharCode(parseInt(hex, 16))), "latin1");
+  }
+  return Buffer.from(body, "latin1");
+}
+
+/**
+ * List the attachments of a raw message, decoded to bytes.
+ *
+ * Works on a latin1 view of the raw bytes, which maps every byte to one
+ * character, so binary and 8bit parts survive the split unchanged.
+ */
+export function parseAttachments(raw: Buffer | string): InboundAttachment[] {
+  const text = typeof raw === "string" ? raw : raw.toString("latin1");
+  const found: Omit<InboundAttachment, "index">[] = [];
+  const walk = (part: string, depth: number) => {
+    const headerEnd = part.search(/\r?\n\r?\n/);
+    if (headerEnd < 0) return;
+    const headers = parseHeaderBlock(part.slice(0, headerEnd));
+    const body = part.slice(headerEnd).replace(/^\r?\n\r?\n/, "");
+    const contentType = headers["content-type"] ?? "text/plain";
+    if (/multipart\//i.test(contentType)) {
+      const boundary = /boundary\s*=\s*"?([^";\s]+)"?/i.exec(contentType)?.[1];
+      if (!boundary || depth >= 5) return;
+      const escaped = boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const pieces = body.split(new RegExp(`(?:^|\\r?\\n)--${escaped}(?:--)?[ \\t]*(?:\\r?\\n|$)`));
+      // pieces[0] is the preamble; anything after the closing boundary is the epilogue.
+      for (const piece of pieces.slice(1)) if (piece.trim()) walk(piece, depth + 1);
+      return;
+    }
+    const disposition = headers["content-disposition"] ?? "";
+    const filename = headerParam(disposition, "filename") || headerParam(contentType, "name");
+    const isAttachment = /^\s*attachment/i.test(disposition) || (!!filename && !/^\s*text\//i.test(contentType));
+    if (!isAttachment) return;
+    // The split above already consumed the line break before the next boundary.
+    const bytes = decodePartBytes(body, headers["content-transfer-encoding"] ?? "7bit");
+    found.push({
+      filename: filename || "attachment",
+      contentType: contentType.split(";")[0].trim().toLowerCase(),
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      bytes,
+    });
+  };
+  walk(text, 0);
+  return found.map((item, index) => ({ index, ...item }));
 }

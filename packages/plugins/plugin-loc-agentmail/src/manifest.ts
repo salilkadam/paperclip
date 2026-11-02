@@ -8,6 +8,9 @@
  */
 
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
+import { TEMPLATES } from "./documents/templates.js";
+
+const TEMPLATE_KEYS = Object.keys(TEMPLATES);
 
 /** Globally unique plugin id. */
 export const PLUGIN_ID = "paperclip.loc-agentmail";
@@ -18,6 +21,7 @@ export const TOOL_NAMES = {
   listInbox: "list_inbox",
   readMessage: "read_message",
   markRead: "mark_read",
+  createDriveFile: "create_drive_file",
 } as const;
 
 /** Scheduled inbound-poll job key. */
@@ -75,6 +79,13 @@ const accountProperties = {
     items: { type: "string", format: "uuid" },
     description: "Agents allowed to use this mailbox. Leave empty to allow every agent in the listed companies.",
   },
+  documentTemplates: {
+    type: "array",
+    items: { type: "string", enum: TEMPLATE_KEYS },
+    description:
+      "Document templates this mailbox may attach to a send. The legal text is committed in the connector source and pinned by hash; agents pass only fields.",
+    "x-paperclip-advanced": true,
+  },
 };
 
 const parameters = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -93,7 +104,7 @@ const parameters = (properties: Record<string, unknown>, required: string[] = []
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,
   apiVersion: 1,
-  version: "0.1.0",
+  version: "0.2.0",
   displayName: "Loc-AgentMail",
   description:
     "Self-hosted agent email. Receives over IMAP from your own mail server (Stalwart or anything equivalent) and sends directly through AWS SES so DKIM aligns with each mailbox. Repoint the server or the sending provider by changing configuration only.",
@@ -228,6 +239,35 @@ const manifest: PaperclipPluginManifestV1 = {
         },
         additionalProperties: false,
       },
+      drive: {
+        type: "object",
+        title: "Document filing (Google Drive)",
+        description:
+          "Where `create_drive_file` and `send.fileSentCopyTo` file PDFs. Uploads go through the Google Workspace MCP server; only the folders listed here can be written.",
+        properties: {
+          mcpUrl: {
+            type: "string",
+            description: "Google Workspace MCP endpoint (through the Kong gateway).",
+            default: "https://mcp.baisoln.com/gworkspace/mcp",
+          },
+          apiKey: {
+            type: ["string", "object"],
+            format: "secret-ref",
+            maxLength: 8192,
+            description: "Gateway key sent as X-API-Key. Pick the saved secret the Loc-Google Workspace connection uses.",
+          },
+          tenantId: { type: "string", description: "Workspace MCP tenant id, e.g. `base`." },
+          account: { type: "string", description: "Connected Google account alias that owns the folders." },
+          folders: {
+            type: "object",
+            description: "Folder key agents use (e.g. `dp-sent`, `dp-received`, `dp-executed`) mapped to a Drive folder id.",
+            additionalProperties: { type: "string" },
+          },
+          timeoutMs: { type: "integer", default: 20000, minimum: 1000, maximum: 45000, "x-paperclip-advanced": true },
+        },
+        required: ["mcpUrl", "tenantId", "account", "folders", "apiKey"],
+        additionalProperties: false,
+      },
     },
     required: ["imap", "accounts"],
     additionalProperties: false,
@@ -255,6 +295,26 @@ const manifest: PaperclipPluginManifestV1 = {
           html: { type: "string", maxLength: 400000, description: "Optional HTML body sent alongside the text." },
           inReplyTo: { type: "string", maxLength: 256, description: "Message-ID being replied to, from `read_message`." },
           references: { type: "array", items: { type: "string", maxLength: 256 }, description: "Message-IDs in the thread." },
+          attachments: {
+            type: "array",
+            maxItems: 1,
+            description:
+              "A document to render and attach, by template key and fields. The connector holds the text and renders the PDF; you never pass file content. With an attachment, `to` must be exactly the template's recipient field and `cc` must be empty.",
+            items: {
+              type: "object",
+              properties: {
+                template: { type: "string", enum: TEMPLATE_KEYS },
+                fields: { type: "object", additionalProperties: { type: "string" } },
+              },
+              required: ["template", "fields"],
+              additionalProperties: false,
+            },
+          },
+          fileSentCopyTo: {
+            type: "string",
+            maxLength: 64,
+            description: "Drive folder key to file the sent PDF in, in the same call, once the provider accepts the email.",
+          },
         },
         ["to", "subject"],
       ),
@@ -281,6 +341,24 @@ const manifest: PaperclipPluginManifestV1 = {
           includeHtml: { type: "boolean", default: false, description: "Include the HTML alternative when present." },
         },
         ["uid"],
+      ),
+    },
+    {
+      name: TOOL_NAMES.createDriveFile,
+      displayName: "Create Drive file from an attachment",
+      description:
+        "File a PDF into a configured Google Drive folder: either an attachment of a received message (uid, attachmentIndex and the sha256 read_message listed) or a sent document again (template, fields and the sha256 the send returned). The connector fetches or re-renders the bytes, checks the hash, and uploads them itself.",
+      parametersSchema: parameters(
+        {
+          uid: { type: "integer", minimum: 1, description: "Message UID from `list_inbox`." },
+          attachmentIndex: { type: "integer", minimum: 0, maximum: 50, description: "Attachment index from `read_message`." },
+          template: { type: "string", enum: TEMPLATE_KEYS, description: "Re-file a sent document: its template (instead of uid/attachmentIndex)." },
+          fields: { type: "object", additionalProperties: { type: "string" }, description: "Re-file a sent document: the exact fields it was sent with." },
+          sha256: { type: "string", pattern: "^[0-9a-f]{64}$", description: "The attachment's sha256 from `read_message`, or the sent document's sha256 from the send result." },
+          folder: { type: "string", maxLength: 64, description: "Configured Drive folder key, e.g. `dp-received` or `dp-executed`." },
+          name: { type: "string", maxLength: 180, description: "File name to create, ending in .pdf." },
+        },
+        ["sha256", "folder", "name"],
       ),
     },
     {
@@ -315,6 +393,17 @@ const manifest: PaperclipPluginManifestV1 = {
         "- `list_inbox` — newest messages with their `uid`.",
         "- `read_message` — full body plus the `messageId` to reply to.",
         "- `mark_read` — flag messages you have handled.",
+        "- `create_drive_file` — file an attachment of a received message into a configured Drive folder.",
+        "",
+        "## Documents",
+        "",
+        "- To send an agreement, call `send` with `attachments: [{template, fields}]`. The connector renders the approved",
+        "  text and attaches the PDF. `to` must be exactly the template's recipient field (the signatory email) and",
+        "  `cc` empty. Set `fileSentCopyTo` to file the sent PDF in the same call.",
+        "- `send` returns the email's `messageId` and each attachment's `sha256`. A partner's reply should carry that",
+        "  Message-ID in In-Reply-To or References; check it, not just the From address.",
+        "- `read_message` lists attachments with index, name, type, size and sha256. File one with `create_drive_file`,",
+        "  passing that sha256. Never try to copy file content yourself.",
         "",
         "## Working a mailbox",
         "",

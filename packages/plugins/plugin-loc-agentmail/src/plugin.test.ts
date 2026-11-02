@@ -370,12 +370,12 @@ afterEach(() => {
 });
 
 describe("worker registration", () => {
-  it("registers the four manifest tools and the poll job", async () => {
+  it("registers the five manifest tools and the poll job", async () => {
     const worker = await newWorker();
-    expect([...worker.tools.keys()].sort()).toEqual(["list_inbox", "mark_read", "read_message", "send"]);
+    expect([...worker.tools.keys()].sort()).toEqual(["create_drive_file", "list_inbox", "mark_read", "read_message", "send"]);
     expect(worker.jobs.has("poll-inbox")).toBe(true);
     // Declarations come from the manifest, so the two cannot drift apart.
-    for (const name of ["send", "list_inbox", "read_message", "mark_read"]) {
+    for (const name of ["send", "list_inbox", "read_message", "mark_read", "create_drive_file"]) {
       const declared = worker.manifest.tools?.find((tool) => tool.name === name);
       expect(declared?.description).toBeTruthy();
       expect(declared?.parametersSchema).toBeTruthy();
@@ -868,5 +868,354 @@ describe("onValidateConfig", () => {
     expect(joined).toMatch(/poll.enabled is false/);
     expect(joined).toMatch(/markSeen/);
     expect(joined).toMatch(/in the clear/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Documents: agreement attachments and Drive filing
+// ---------------------------------------------------------------------------
+
+const AGREEMENT = "reliora-dp-agreement-v1.0";
+const DRIVE_URL = "http://drive.test/mcp";
+const agreementFields = {
+  partnerLegalName: "Example Systems Ltd",
+  signatoryName: "Ada Test",
+  signatoryTitle: "Head of Platform",
+  signatoryEmail: "ada@example.com",
+  applicationReference: "DP-ABC12345",
+  applicationSignedAt: "2026-11-02T09:29:19.000Z",
+};
+
+function documentsConfig(port: number) {
+  const config = serverConfig(port) as Record<string, unknown> & { accounts: Array<Record<string, unknown>> };
+  config.accounts[0].documentTemplates = [AGREEMENT];
+  config.drive = {
+    mcpUrl: DRIVE_URL,
+    tenantId: "base",
+    account: "bionicorg",
+    apiKey: "gateway-key-value",
+    folders: { "dp-sent": "folderSent0001", "dp-received": "folderRecv0001", "dp-executed": "folderExec0001" },
+  };
+  return config;
+}
+
+/** One fetch double for SES and the Drive MCP server. */
+function fetchDouble(opts: { driveFails?: boolean; driveDown?: boolean } = {}) {
+  const drive: Array<{ method: string; args?: Record<string, unknown>; key?: string | null }> = [];
+  const ses: string[] = [];
+  const fn = vi.fn(async (url: string, init: RequestInit) => {
+    if (String(url).startsWith(DRIVE_URL)) {
+      const msg = JSON.parse(String(init.body));
+      const key = (init.headers as Record<string, string>)["x-api-key"] ?? null;
+      drive.push({ method: msg.method, args: msg.params?.arguments, key });
+      if (opts.driveDown || key !== "gateway-key-value") {
+        return new Response('{"error":"unauthorized"}', { status: 401, headers: { "content-type": "application/json" } });
+      }
+      if (msg.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-03-26" } }), {
+          status: 200,
+          headers: { "content-type": "application/json", "mcp-session-id": "sess-1" },
+        });
+      }
+      const payload = opts.driveFails
+        ? { success: false, error: "File not found: folderSent0001" }
+        : { success: true, data: { id: "driveFile123", name: msg.params.arguments.name, webViewLink: "https://drive.google.com/file/d/driveFile123/view" } };
+      // FastMCP's SSE framing, to prove the client reads event streams too.
+      return new Response(`event: message\r\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: false } })}\r\n\r\n`, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    const body = new URLSearchParams(String(init.body));
+    ses.push(Buffer.from(body.get("RawMessage.Data") ?? "", "base64").toString("latin1"));
+    return new Response(sesOk(`ses-msg-${ses.length}`), { status: 200 });
+  });
+  return { fn, drive, ses };
+}
+
+describe("send with an agreement attached", () => {
+  it("renders the approved PDF, sends it to the signatory only, and returns ids and hashes", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const result = await worker.call("send", {
+      to: ["Ada@Example.com"],
+      subject: "Your Srenix Design Partner agreement (DP-ABC12345)",
+      text: "Please sign the attached agreement.",
+      attachments: [{ template: AGREEMENT, fields: agreementFields }],
+    });
+    expect(result.error).toBeUndefined();
+    const data = result.data as { messageId: string; documents: Array<{ sha256: string; filename: string }> };
+    expect(data.messageId).toMatch(/@agentmail\.reliora\.ai$/);
+    expect(result.content).toContain(`Message-ID: <${data.messageId}>`);
+
+    const { parseAttachments } = await import("./mime.js");
+    const atts = parseAttachments(f.ses[0]!);
+    expect(atts).toHaveLength(1);
+    expect(atts[0].filename).toBe("example-systems-ltd-dp-agreement-v1.0-DP-ABC12345.pdf");
+    expect(atts[0].sha256).toBe(data.documents[0].sha256);
+    expect(atts[0].bytes.subarray(0, 5).toString()).toBe("%PDF-");
+
+    const entry = worker.activity.at(-1)!;
+    expect(JSON.stringify(entry.metadata)).toContain(data.documents[0].sha256);
+    expect(JSON.stringify(entry.metadata)).toContain(data.messageId);
+  });
+
+  it("refuses any recipient other than the signatory, any cc, and a mailbox without the template", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const base = { subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields: agreementFields }] };
+    expect((await worker.call("send", { ...base, to: ["attacker@evil.example"] })).error).toMatch(/must be exactly the signatoryEmail/);
+    expect((await worker.call("send", { ...base, to: ["ada@example.com", "attacker@evil.example"] })).error).toMatch(/must be exactly/);
+    expect((await worker.call("send", { ...base, to: ["ada@example.com"], cc: ["attacker@evil.example"] })).error).toMatch(/cc/);
+    expect((await worker.call("send", { ...base, to: ["ada@example.com"], attachments: [{ template: AGREEMENT, fields: agreementFields }, { template: AGREEMENT, fields: agreementFields }] })).error).toMatch(/at most one/);
+    expect((await worker.call("send", { ...base, to: ["ada@example.com"], attachments: [{ template: AGREEMENT, fields: { ...agreementFields, injected: "x" } }] })).error).toMatch(/unknown fields/);
+
+    const noTemplate = documentsConfig(993);
+    noTemplate.accounts[0].documentTemplates = [];
+    const other = await newWorker({ configs: { [COMPANY_A]: noTemplate } });
+    expect((await other.call("send", { ...base, to: ["ada@example.com"] })).error).toMatch(/not allowed to send/);
+    expect(f.ses).toHaveLength(0);
+  });
+
+  it("files the exact sent bytes in Drive in the same call", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const result = await worker.call("send", {
+      to: ["ada@example.com"],
+      subject: "s",
+      text: "t",
+      attachments: [{ template: AGREEMENT, fields: agreementFields }],
+      fileSentCopyTo: "dp-sent",
+    });
+    expect(result.error).toBeUndefined();
+    const upload = f.drive.find((c) => c.method === "tools/call")!;
+    expect(upload.args).toMatchObject({ tenant_id: "base", account: "bionicorg", folder_id: "folderSent0001", content_is_base64: true, mime_type: "application/pdf" });
+    const { parseAttachments } = await import("./mime.js");
+    const sentBytes = parseAttachments(f.ses[0]!)[0].bytes;
+    expect(Buffer.from(String(upload.args!.content), "base64").equals(sentBytes)).toBe(true);
+    expect((result.data as { sentCopy: { status: string } }).sentCopy.status).toBe("filed");
+  });
+
+  it("checks the folder before sending, and reports a filing failure after a send loudly", async () => {
+    const f = fetchDouble({ driveFails: true });
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const base = { to: ["ada@example.com"], subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields: agreementFields }] };
+    expect((await worker.call("send", { ...base, fileSentCopyTo: "nowhere" })).error).toMatch(/unknown Drive folder/);
+    expect(f.ses).toHaveLength(0);
+
+    const result = await worker.call("send", { ...base, fileSentCopyTo: "dp-sent" });
+    expect(result.error).toBeUndefined();
+    expect(result.content).toMatch(/WAS sent, but filing the sent copy FAILED: .*File not found/);
+    expect(worker.activity.some((a) => /FAILED to file the sent copy/.test(a.message))).toBe(true);
+  });
+});
+
+describe("attachments in received mail", () => {
+  const pdfBytes = Buffer.from("%PDF-1.7\n% signed agreement\n" + "x".repeat(500), "latin1");
+  const { createHash } = require("node:crypto") as typeof import("node:crypto");
+  const pdfSha = createHash("sha256").update(pdfBytes).digest("hex");
+  const signedReply = (attachment: Buffer, filename = "example-signed.pdf") =>
+    [
+      "From: Ada Test <ada@example.com>",
+      "To: support@agentmail.reliora.ai",
+      "Subject: Re: Your agreement",
+      "Date: Mon, 2 Nov 2026 12:00:00 +0000",
+      "Message-Id: <reply-1@gmail.example>",
+      "In-Reply-To: <sent-1@agentmail.reliora.ai>",
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/mixed; boundary="b1"',
+      "",
+      "--b1",
+      "Content-Type: text/plain",
+      "",
+      "Signed copy attached.",
+      "--b1",
+      `Content-Type: application/pdf; name="${filename}"`,
+      `Content-Disposition: attachment; filename="${filename}"`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      attachment.toString("base64"),
+      "--b1--",
+      "",
+    ].join("\r\n");
+
+  async function withServer(mails: string[]) {
+    const server = new FakeImapServer();
+    mails.forEach((raw, i) => server.mails.push({ uid: i + 1, seq: i + 1, flags: [], raw }));
+    await server.listen();
+    return server;
+  }
+
+  it("lists attachments with hashes in read_message, without content", async () => {
+    const server = await withServer([signedReply(pdfBytes)]);
+    try {
+      const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(server.port) } });
+      const result = await worker.call("read_message", { uid: 1 });
+      expect(result.content).toContain(`Attachment 0: example-signed.pdf (application/pdf, ${pdfBytes.length} bytes, sha256 ${pdfSha})`);
+      const data = result.data as { attachments: Array<Record<string, unknown>>; inReplyTo: string };
+      expect(data.inReplyTo).toBe("sent-1@agentmail.reliora.ai");
+      expect(data.attachments[0]).not.toHaveProperty("bytes");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("files the attachment only when the hash matches, only as a PDF, only to a configured folder", async () => {
+    const notPdf = Buffer.from("MZ not a pdf", "latin1");
+    const server = await withServer([signedReply(pdfBytes), signedReply(notPdf, "evil.pdf")]);
+    try {
+      const f = fetchDouble();
+      vi.stubGlobal("fetch", f.fn);
+      const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(server.port) } });
+      const args = { uid: 1, attachmentIndex: 0, sha256: pdfSha, folder: "dp-received", name: "example-dp-agreement-signed-2026-11-02.pdf" };
+
+      expect((await worker.call("create_drive_file", { ...args, sha256: "0".repeat(64) })).error).toMatch(/not the 0+ you read/);
+      expect((await worker.call("create_drive_file", { ...args, folder: "anywhere" })).error).toMatch(/unknown Drive folder/);
+      expect((await worker.call("create_drive_file", { ...args, name: "../x.pdf" })).error).toMatch(/plain file name/);
+      const notPdfSha = createHash("sha256").update(notPdf).digest("hex");
+      expect((await worker.call("create_drive_file", { ...args, uid: 2, sha256: notPdfSha })).error).toMatch(/not a PDF/);
+      expect(f.drive.filter((c) => c.method === "tools/call")).toHaveLength(0);
+      expect(worker.activity.filter((a) => /REFUSED to file/.test(a.message)).length).toBeGreaterThanOrEqual(2);
+
+      const ok = await worker.call("create_drive_file", args);
+      expect(ok.error).toBeUndefined();
+      const upload = f.drive.find((c) => c.method === "tools/call")!;
+      expect(upload.args).toMatchObject({ folder_id: "folderRecv0001", name: args.name });
+      expect(Buffer.from(String(upload.args!.content), "base64").equals(pdfBytes)).toBe(true);
+      const data = ok.data as { inReplyTo: string; drive: { fileId: string } };
+      expect(data.inReplyTo).toBe("sent-1@agentmail.reliora.ai");
+      expect(data.drive.fileId).toBe("driveFile123");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+
+describe("documents: review fixes", () => {
+  it("sends the gateway key to Drive and never puts it in activity", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const result = await worker.call("send", {
+      to: ["ada@example.com"], subject: "s", text: "t",
+      attachments: [{ template: AGREEMENT, fields: agreementFields }], fileSentCopyTo: "dp-sent",
+    });
+    expect(result.error).toBeUndefined();
+    expect(f.drive.every((c) => c.key === "gateway-key-value")).toBe(true);
+    expect(JSON.stringify(worker.activity)).not.toContain("gateway-key-value");
+  });
+
+  it("refuses to send at all when Drive filing was asked for and Drive is unreachable", async () => {
+    const f = fetchDouble({ driveDown: true });
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const result = await worker.call("send", {
+      to: ["ada@example.com"], subject: "s", text: "t",
+      attachments: [{ template: AGREEMENT, fields: agreementFields }], fileSentCopyTo: "dp-sent",
+    });
+    expect(result.error).toMatch(/HTTP 401.*check drive\.apiKey/);
+    expect(f.ses).toHaveLength(0);
+  });
+
+  it("refuses to send the identical agreement to the same person twice", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const args = { to: ["ada@example.com"], subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields: agreementFields }] };
+    expect((await worker.call("send", args)).error).toBeUndefined();
+    const again = await worker.call("send", args);
+    expect(again.error).toMatch(/already sent to ada@example.com/);
+    expect(f.ses).toHaveLength(1);
+    // A different agreement (new fields) is not blocked.
+    const other = await worker.call("send", { ...args, attachments: [{ template: AGREEMENT, fields: { ...agreementFields, signatoryTitle: "CTO" } }] });
+    expect(other.error).toBeUndefined();
+  });
+
+  it("re-files a sent agreement from template and fields only when the hash matches", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const sent = await worker.call("send", { to: ["ada@example.com"], subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields: agreementFields }] });
+    const sha = (sent.data as { documents: Array<{ sha256: string }> }).documents[0].sha256;
+    const base = { template: AGREEMENT, fields: agreementFields, folder: "dp-sent", name: "example-dp-agreement-v1.0-sent-2026-11-02.pdf" };
+    expect((await worker.call("create_drive_file", { ...base, sha256: "a".repeat(64) })).error).toMatch(/not the a+ that was sent/);
+    expect((await worker.call("create_drive_file", { ...base, uid: 1, sha256: sha })).error).toMatch(/give either/);
+    const ok = await worker.call("create_drive_file", { ...base, sha256: sha });
+    expect(ok.error).toBeUndefined();
+    const { parseAttachments } = await import("./mime.js");
+    const upload = f.drive.filter((c) => c.method === "tools/call").at(-1)!;
+    expect(Buffer.from(String(upload.args!.content), "base64").equals(parseAttachments(f.ses[0]!)[0].bytes)).toBe(true);
+  });
+
+  it("refuses invisible and text-direction characters and loose timestamps in fields", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    for (const ch of ["​", "‌", "‍", "⁠", "­", "͏", "‮", "⁧", "﻿", "️", "ㅤ"]) {
+      const r = await worker.call("send", {
+        to: ["ada@example.com"], subject: "s", text: "t",
+        attachments: [{ template: AGREEMENT, fields: { ...agreementFields, partnerLegalName: `Acme${ch} Ltd` } }],
+      });
+      expect(r.error, `U+${ch.codePointAt(0)!.toString(16)}`).toMatch(/invisible or text-direction character/);
+    }
+    for (const ts of ["1", "Nov 2 2026", "2026-11-02T09:29:19+05:30", "12/31/2026 11:59 PM"]) {
+      const r = await worker.call("send", {
+        to: ["ada@example.com"], subject: "s", text: "t",
+        attachments: [{ template: AGREEMENT, fields: { ...agreementFields, applicationSignedAt: ts } }],
+      });
+      expect(r.error, ts).toMatch(/UTC ISO timestamp/);
+    }
+    expect(f.ses).toHaveLength(0);
+  });
+});
+
+describe("documents: review round 2", () => {
+  const send = (worker: Awaited<ReturnType<typeof newWorker>>, fields = agreementFields) =>
+    worker.call("send", { to: ["ada@example.com"], subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields }] });
+
+  it("refuses a retry while the first send is still in flight", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    // Learn the deterministic sha256, then fake an in-flight marker for a second recipient-identical send.
+    const first = await send(worker);
+    const sha = (first.data as { documents: Array<{ sha256: string }> }).documents[0].sha256;
+    await worker.ctx.state.set(
+      { scopeKind: "company", scopeId: COMPANY_A, namespace: "loc-agentmail", stateKey: `doc-sent:${sha}:ada@example.com` },
+      { status: "sending", at: new Date().toISOString() },
+    );
+    expect((await send(worker)).error).toMatch(/being sent to ada@example.com right now/);
+    expect(f.ses).toHaveLength(1);
+  });
+
+  it("clears the in-flight marker when the provider refuses, so a retry can go out", async () => {
+    let fail = true;
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      if (fail && !String(url).startsWith(DRIVE_URL)) {
+        fail = false;
+        return new Response("<ErrorResponse><Error><Code>Throttling</Code><Message>slow down</Message></Error></ErrorResponse>", { status: 400 });
+      }
+      return f.fn(url, init);
+    }));
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    expect((await send(worker)).error).toBeTruthy();
+    expect(worker.activity.some((a) => /FAILED to send/.test(a.message))).toBe(true);
+    expect((await send(worker)).error).toBeUndefined();
+    expect(f.ses).toHaveLength(1);
+  });
+
+  it("warns when a name mixes lookalike alphabets", async () => {
+    vi.stubGlobal("fetch", fetchDouble().fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const r = await send(worker, { ...agreementFields, partnerLegalName: "Аcme Ltd" });
+    expect(r.error).toBeUndefined();
+    expect(r.content).toMatch(/WARNING: partnerLegalName mixes Latin and Cyrillic letters/);
   });
 });
