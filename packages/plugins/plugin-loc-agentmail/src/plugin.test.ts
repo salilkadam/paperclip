@@ -1174,3 +1174,48 @@ describe("documents: review fixes", () => {
     expect(f.ses).toHaveLength(0);
   });
 });
+
+describe("documents: review round 2", () => {
+  const send = (worker: Awaited<ReturnType<typeof newWorker>>, fields = agreementFields) =>
+    worker.call("send", { to: ["ada@example.com"], subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields }] });
+
+  it("refuses a retry while the first send is still in flight", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    // Learn the deterministic sha256, then fake an in-flight marker for a second recipient-identical send.
+    const first = await send(worker);
+    const sha = (first.data as { documents: Array<{ sha256: string }> }).documents[0].sha256;
+    await worker.ctx.state.set(
+      { scopeKind: "company", scopeId: COMPANY_A, namespace: "loc-agentmail", stateKey: `doc-sent:${sha}:ada@example.com` },
+      { status: "sending", at: new Date().toISOString() },
+    );
+    expect((await send(worker)).error).toMatch(/being sent to ada@example.com right now/);
+    expect(f.ses).toHaveLength(1);
+  });
+
+  it("clears the in-flight marker when the provider refuses, so a retry can go out", async () => {
+    let fail = true;
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      if (fail && !String(url).startsWith(DRIVE_URL)) {
+        fail = false;
+        return new Response("<ErrorResponse><Error><Code>Throttling</Code><Message>slow down</Message></Error></ErrorResponse>", { status: 400 });
+      }
+      return f.fn(url, init);
+    }));
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    expect((await send(worker)).error).toBeTruthy();
+    expect(worker.activity.some((a) => /FAILED to send/.test(a.message))).toBe(true);
+    expect((await send(worker)).error).toBeUndefined();
+    expect(f.ses).toHaveLength(1);
+  });
+
+  it("warns when a name mixes lookalike alphabets", async () => {
+    vi.stubGlobal("fetch", fetchDouble().fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const r = await send(worker, { ...agreementFields, partnerLegalName: "Аcme Ltd" });
+    expect(r.error).toBeUndefined();
+    expect(r.content).toMatch(/WARNING: partnerLegalName mixes Latin and Cyrillic letters/);
+  });
+});

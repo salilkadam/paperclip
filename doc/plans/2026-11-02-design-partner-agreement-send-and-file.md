@@ -79,3 +79,17 @@ Paperclip PR into `main`, tests at the tool level with real bytes (render, parse
 | 9 | PDFs inside forwarded message/rfc822 are not listed; 2231 multi-segment names rely on the `name=` fallback. | **Accepted risk**, owner: COO; trigger: a partner reply whose PDF is not listed. |
 | D2 | The Workspace server trusts Kong consumer headers from inside the cluster (no NetworkPolicy in `mcp`). | **Scheduled:** Deploy-repo defect, filed separately; not used by this change. |
 | 8 | HTML-only messages differ only in the alternative boundary token. | **No change needed.** |
+
+## Code review round 2 (Fable 5.1, 2026-11-02) and dispositions
+
+Round 2 confirmed B1, B2, the resend guard and the re-file path (five plants, all caught), and the policy semantics: `fieldExists ["attachments.0"]` works, a missing `folder` falls to require_approval, priority 9 runs before the job-function blocks at 11, and an approved execution is not re-blocked.
+
+| # | Finding | Disposition |
+|---|---|---|
+| B4 | The setup script called the Workspace server unauthenticated (401) and would stop at step 1. | **Fixed:** it calls through Kong with `x-api-key` read from Vault (`shared/api-keys`, `mcp_api_key`) via `lib/vault-ops.sh`, or from `MCP_API_KEY_FILE`; the key goes in a 0600 header file, never argv; non-200 stops with the HTTP code. |
+| B5 | Approval policies were COO-only while every Reliora agent may use reliora-info. | **Fixed:** both require_approval policies are company-wide (no `agentIds`). |
+| 3 | The resend guard did not cover a retry while the first send is in flight. | **Fixed:** an in-flight marker is written before SES and cleared if SES refuses; a retry within 5 minutes is refused. A legitimate resend within 24 h needs new fields or the board; **accepted**, owner board. |
+| 4 | Worst-case budget 70 s over the 60 s approved cap. | **Fixed:** the Drive preflight is capped at 8 s (8 + 30 + 20 = 58 s). Filing to `dp-received` runs under the 10 s default; a timeout there can leave a duplicate Drive file, not a duplicate email: **accepted risk**, owner COO, trigger a duplicate file in `received`. |
+| 5 | Homoglyph names unflagged. | **Fixed:** names mixing Latin, Cyrillic or Greek letters produce a WARNING line in the send result. |
+| 6 | `drive.apiKey` accepts a pasted plain value. | **Accepted risk**, owner board; the setup script writes a secret ref; trigger: any config edit by hand. |
+| D2 | Kong-header trust in the Workspace server. | **Scheduled** (Deploy repo), unchanged. |

@@ -87,6 +87,19 @@ const DRIVE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,170}\.pdf$/;
 
 /** Duplicate-send guard: the same document to the same recipient within this window is refused. */
 const RESEND_GUARD_MS = 24 * 60 * 60 * 1000;
+/** A send marked in flight longer than this is treated as abandoned (SES itself times out at 30 s). */
+const IN_FLIGHT_MS = 5 * 60 * 1000;
+/** Drive reachability check before a send; short, so preflight + SES + upload stay under the 60 s approved-execution cap. */
+const DRIVE_PREFLIGHT_MS = 8_000;
+
+/** Scripts a name's letters come from, among those that share lookalike glyphs. */
+function lookalikeScripts(value: string): string[] {
+  const scripts: string[] = [];
+  if (/\p{Script=Latin}/u.test(value)) scripts.push("Latin");
+  if (/\p{Script=Cyrillic}/u.test(value)) scripts.push("Cyrillic");
+  if (/\p{Script=Greek}/u.test(value)) scripts.push("Greek");
+  return scripts;
+}
 function sentDocKey(sha256: string, recipient: string): string {
   return `doc-sent:${sha256}:${recipient}`;
 }
@@ -725,7 +738,10 @@ const plugin = definePlugin({
               namespace: STATE_NAMESPACE,
               stateKey: sentDocKey(doc.sha256, to[0]!),
             });
-            if (isRecord(prior) && typeof prior.at === "string" && Date.now() - Date.parse(prior.at) < RESEND_GUARD_MS) {
+            if (isRecord(prior) && prior.status === "sending" && typeof prior.at === "string" && Date.now() - Date.parse(prior.at) < IN_FLIGHT_MS) {
+              return { error: `this exact ${doc.template} is being sent to ${to[0]} right now (started ${prior.at}). Wait and check the activity log; do not retry.` };
+            }
+            if (isRecord(prior) && prior.status !== "sending" && typeof prior.at === "string" && Date.now() - Date.parse(prior.at) < RESEND_GUARD_MS) {
               return {
                 error: `this exact ${doc.template} was already sent to ${to[0]} at ${prior.at} (Message-ID <${String(prior.messageId)}>). Not sending it again; check the earlier send.`,
               };
@@ -733,7 +749,15 @@ const plugin = definePlugin({
           }
           // Prove Drive is reachable with our key before anything leaves, so a filing failure cannot follow a sent email.
           const sentCopyDrive = sentCopyTarget ? await driveWithKey(ctx, runCtx.companyId, sentCopyTarget.drive) : null;
-          if (sentCopyDrive) await preflightDrive(sentCopyDrive);
+          if (sentCopyDrive) await preflightDrive({ ...sentCopyDrive, timeoutMs: Math.min(sentCopyDrive.timeoutMs, DRIVE_PREFLIGHT_MS) });
+          // Mark in flight before SES, so a retry during a slow send is refused too.
+          const markers = rendered.map((doc) => ({
+            scopeKind: "company" as const,
+            scopeId: runCtx.companyId,
+            namespace: STATE_NAMESPACE,
+            stateKey: sentDocKey(doc.sha256, to[0]!),
+          }));
+          for (const key of markers) await ctx.state.set(key, { status: "sending", at: new Date().toISOString() });
 
           const accessKeyId = await resolveSecretValue(ctx, config.send.accessKeyId, {
             companyId: runCtx.companyId,
@@ -776,6 +800,7 @@ const plugin = definePlugin({
               signal: AbortSignal.timeout(SES_SEND_TIMEOUT_MS),
             });
           } catch (error) {
+            for (const key of markers) await ctx.state.delete(key);
             if (documents.length) {
               // A document that failed to go out must be visible, not only in the agent's tool result.
               await ctx.activity.log({
@@ -811,7 +836,7 @@ const plugin = definePlugin({
           for (const doc of rendered) {
             await ctx.state.set(
               { scopeKind: "company", scopeId: runCtx.companyId, namespace: STATE_NAMESPACE, stateKey: sentDocKey(doc.sha256, to[0]!) },
-              { at: new Date().toISOString(), messageId, sesMessageId: sent.messageId },
+              { status: "sent", at: new Date().toISOString(), messageId, sesMessageId: sent.messageId },
             );
           }
 
@@ -852,6 +877,11 @@ const plugin = definePlugin({
           const docLines = documents.map(
             (d) => `Attached ${d.filename} (${d.template}, ${d.pages} pages, sha256 ${d.sha256}).`,
           );
+          const mixed = specs
+            .flatMap((spec) => (isRecord(spec) && isRecord(spec.fields) ? Object.entries(spec.fields) : []))
+            .filter(([, v]) => typeof v === "string" && lookalikeScripts(v).length > 1)
+            .map(([k, v]) => `${k} mixes ${lookalikeScripts(String(v)).join(" and ")} letters ("${String(v)}"); confirm it is the real name`);
+          if (mixed.length) docLines.push(`WARNING: ${mixed.join("; ")}.`);
           const copyLine =
             sentCopy?.status === "filed"
               ? `Sent copy filed in Drive: ${String(sentCopy.webViewLink)}.`
