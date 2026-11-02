@@ -123,7 +123,7 @@ step_fetch() {
         [ $(( $(now) - ${t:-0} )) -ge "$wait" ] || { echo skip > "$TRUSTED/plan"; outcome skip backoff; return; } ;;
     esac
   fi
-  rm -rf "$TRUSTED/src" /checkin/src
+  rm -rf "$TRUSTED/src" /checkin/src /checkin/.stop
   mkdir -p "$TRUSTED/src" && cd "$TRUSTED/src" && git init -q &&
     timeout -s KILL 120 git fetch -q --depth 1 "$REPO_URL" "$head" && git checkout -q FETCH_HEAD &&
     [ "$(git rev-parse HEAD)" = "$head" ] || { echo skip > "$TRUSTED/plan"; outcome infra_error clone; return; }
@@ -143,12 +143,20 @@ step_attempt() { # count attempts per commit+deployer before any untrusted work
   [ "$prev" = "$key" ] && n=$(( ${n:-0} + 1 )) || n=1
   kubectl -n "$NS" patch configmap site-deploy-state --type merge \
     -p "{\"data\":{\"attempt-key\":\"$key\",\"attempt-count\":\"$n\"}}" >/dev/null || { outcome infra_error cm_patch; return; }
-  if [ "$n" -gt 3 ]; then rm -rf /checkin/src; echo overflow > "$TRUSTED/plan"; outcome failed_timeout "attempts_exceeded"; return; fi
+  if [ "$n" -gt 3 ]; then
+    # Stop the commit's code: a marker the check honours, and its source removed.
+    # If neither can be written, say so instead of claiming it was stopped.
+    # (touch, not `: >`: a failed redirection on a special builtin exits the shell)
+    touch /checkin/.stop 2>/dev/null; rm -rf /checkin/src 2>/dev/null
+    if [ ! -e /checkin/.stop ] && [ -e /checkin/src ]; then outcome infra_error cannot_stop_check; return; fi
+    echo overflow > "$TRUSTED/plan" || { outcome infra_error plan_write; return; }
+    outcome failed_timeout "attempts_exceeded"; return
+  fi
   outcome ok "attempt_$n"
 }
 
 step_check() { # commit code; mounts /checkin and /checkout only; writes one word
-  [ -d /checkin/src ] || return 0
+  [ -d /checkin/src ] && [ ! -e /checkin/.stop ] || return 0
   ( cd /checkin/src && exec timeout -s KILL "${CHECK_TIMEOUT:-300}" node site-src/build.cjs --check ) > /dev/null 2>&1; rc=$?
   case "$rc" in 0) w=pass ;; 124|137|143) w=timeout ;; *) w=fail ;; esac
   # Commit code ran as this uid and may have left processes or planted
@@ -346,8 +354,14 @@ step_report() { # token, Slack webhook; sets the Job's exit code
       *) final="$o"; reason="$r" ;;
     esac
   done
-  # a deploy that never reached the switch step was killed by its time limit
-  if [ "$(plan_action)" = deploy ] && [ ! -f "$TRUSTED/status/switch" ] && [ "$final" = skip ]; then final=infra_error; reason=step_killed; fi
+  # A deploy or recovery run must have an outcome from each trusted step. A
+  # missing one means the step was killed or crashed: never report that as skip.
+  case "$(plan_action)" in
+    deploy) need="fetch attempt copy switch" ;; recover) need="fetch attempt switch" ;; *) need="" ;;
+  esac
+  for st in $need; do
+    [ -f "$TRUSTED/status/$st" ] || { case "$final" in skip|ok|published) final=infra_error; reason="no_outcome_$st" ;; esac; }
+  done
   echo "$final" | grep -q '^[a-z_]\{1,24\}$' || final=invalid
   echo "$reason" | grep -q '^[a-z0-9_]\{1,40\}$' || reason=invalid
   s="$(sha)"; s="${s:-none}"
