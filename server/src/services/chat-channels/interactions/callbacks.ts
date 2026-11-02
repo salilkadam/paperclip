@@ -1,3 +1,4 @@
+import type { createBoardCardDecisions } from "../board-card-decisions.js";
 import { createDiscordQuestionForms } from "../discord/question-forms.js";
 
 import { createProviderEffects, type ProviderEffectPayload } from "../provider-effects.js";
@@ -129,6 +130,8 @@ type InteractionCallbacksOptions = {
   questionResponses: Pick<ReturnType<typeof questionResponseDeliveryService>, "deliver">;
   scheduleMessageProcessing: (task: () => Promise<void>) => void;
   processPendingPublications: () => Promise<unknown>;
+  /** Stage 2 board-channel cards: decide a board card from its Slack button. */
+  boardCardDecisions?: ReturnType<typeof createBoardCardDecisions>;
   confirmationResolutionPersistBarrier?: () => Promise<void>;
   questionFormOpenAuthorizationBarrier?: () => Promise<void>;
   questionResolutionPersistBarrier?: () => Promise<void>;
@@ -647,11 +650,28 @@ export function createChatInteractionCallbacks(db: Db, options: InteractionCallb
             "question_answer",
             "question_form_open",
             "confirmation_response",
+            "board_card_decision",
           ]),
           eq(chatActions.providerActionId, sourceActionId),
         ),
       )
       .then((rows) => (rows.length === 1 ? rows[0]! : null));
+    // Board-channel cards have no task conversation; their own module checks
+    // the token, the card message, the board channel and the clicker's board
+    // authority under lock, and resolves through the UI's own paths.
+    if (actionBinding?.kind === "board_card_decision") {
+      if (!options.boardCardDecisions || event.provider !== "slack" || isCorrection) return deny({ principalId: principal.principal.id });
+      const result = await options.boardCardDecisions.handleClick({
+        endpoint: record.endpoint,
+        principalId: principal.principal.id,
+        userId: principal.userId,
+        actionId: event.event.actionId,
+        messageId: event.event.messageId,
+        threadId: event.event.threadId,
+      });
+      if (result.outcome === "refused") return deny({ principalId: principal.principal.id });
+      return;
+    }
     const originalPublicationId = actionBinding?.payload.publicationId;
     const actionInteractionId = actionBinding?.payload.interactionId;
     if (

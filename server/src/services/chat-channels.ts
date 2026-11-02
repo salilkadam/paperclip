@@ -28,6 +28,7 @@ import { createGitHubWebhookEvents } from "./chat-channels/github/webhook-events
 import { createSlackTaskStartResolution } from "./chat-channels/slack/task-start-resolution.js";
 import { createSlackBoardMessages } from "./chat-channels/slack/board-messages.js";
 import { createBoardCards } from "./chat-channels/board-cards.js";
+import { createBoardCardDecisions } from "./chat-channels/board-card-decisions.js";
 import { PROVIDER_LABELS, CAPABILITIES } from "./chat-channels/provider-catalog.js";
 import { createMessageResourceAdmission } from "./chat-channels/inbound/resource-admission.js";
 import type { DiscordGatewayOwnership } from "./chat-channels/runtime-types.js";
@@ -335,6 +336,11 @@ type ConversationRow = typeof chatConversations.$inferSelect;
 type DeliveryRow = typeof chatDeliveries.$inferSelect;
 
 export interface ChatChannelServiceOptions {
+  /** The gateway's board approve/decline for tool actions (the same calls the UI routes use). */
+  toolActionDecisions?: {
+    approve: (input: import("./chat-channels/board-card-decisions.js").ToolActionDecisionInput) => Promise<unknown>;
+    decline: (input: import("./chat-channels/board-card-decisions.js").ToolActionDecisionInput) => Promise<unknown>;
+  };
   /**
    * Provider webhooks await only the durable ingress write, then finish task
    * processing outside the provider response budget. Tests may leave this off
@@ -3704,7 +3710,12 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   const { processPendingInteractionWakeups } = createChatInteractionContinuations(db, {
     redactError, CONFIRMATION_WAKEUP_RETRY_BACKOFF_MS, get heartbeat() { return options.heartbeat; },
   });
+  const boardCardDecisions = createBoardCardDecisions(db, {
+    approveToolAction: (input) => options.toolActionDecisions ? options.toolActionDecisions.approve(input) : Promise.reject(new Error("tool decisions unavailable")),
+    declineToolAction: (input) => options.toolActionDecisions ? options.toolActionDecisions.decline(input) : Promise.reject(new Error("tool decisions unavailable")),
+  });
   const { handleAction, handleModalSubmit, reconcileTerminalConfirmationActions } = createChatInteractionCallbacks(db, {
+    boardCardDecisions,
     CAPABILITIES, MAX_ERROR_TEXT, actionThreadMatchesConversation, nonDirectDestinationAllowed, sameTeamsThreadIdentity,
     ensurePrincipal, endpointRecord, runtimeCallbackRecord, runtimeCallbackEndpoint,
     requireCurrentExternalActionAuthorization, isExternalActionAuthorizationChange,

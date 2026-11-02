@@ -137,3 +137,21 @@ without a valid human approval, twice, or for another agent/company/run.
 | D | Approved plugin actions pass the issue's current project (or none), not the run's original project. | **Accepted**, owner: board; pre-existing convention (`?? ""`); trigger: a plugin that scopes storage by project. |
 
 Review rounds: 2 of 2 (safety tier cap); remaining fixes verified by the reviewer's probe scenarios and plants.
+
+## Stage 2 as built
+
+- Tokens: `chat_actions` kind `board_card_decision`, two per eligible card (accept/reject), issued in the same
+  transaction as the post, bound to that post, expiring at the earlier of 7 days and the subject's own expiry, and
+  expired when the card is settled.
+- Eligible: plain confirmations (Telegram predicate: no reject-reason, secret proposal, connection authorization or
+  plan-document review) and read/write tool actions without a formal approval, on non-private tasks. Questions,
+  destructive or formal-approval tool actions, approvals and private tasks stay link-only (single-select questions
+  are deferred: the per-issue path supports them, the board path does not yet).
+- A click (Slack `block_actions`, signature-verified upstream) reaches `board-card-decisions.ts` only for a
+  `board_card_decision` token on the same bot. It requires the token issued and unexpired, the card published with
+  the clicked message id in the board channel, and, under lock in the resolving transaction: the Slack identity
+  linked on this bot to the clicking user, an active owner/admin membership, the channel still the enabled board
+  channel, and `issue:read` for that user. Plain confirmations resolve through `issueThreadInteractionService`
+  (accept/reject, the UI's service) with an `interaction_wakeup` for the assignee; tool actions through the
+  gateway's approve/decline (the UI route's calls). Refusals are ephemeral and logged
+  (`chat.board_card_decision_refused`); decisions are logged (`chat.board_card_decided`).
