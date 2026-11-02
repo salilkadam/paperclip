@@ -98,7 +98,7 @@ export function RemoteMcpConnectionSetup({ provider, state: s, actions: a, agent
     extra={extra}
     // Something inside is load-bearing: the operator has already chosen a
     // non-default sign-in method, or the provider just rejected a credential.
-    forceOpen={s.auth !== (provider.supportsBrowserAuth ? "auto" : "none") || s.connectStatus === "rejected"}
+    forceOpen={s.auth !== (provider.defaultAuth ?? (provider.supportsBrowserAuth ? "auto" : "none")) || s.connectStatus === "rejected"}
     disabled={busy}
     authKind={authKind}
     grantKinds={fixedGrantKind ? [fixedGrantKind] : undefined}
@@ -124,6 +124,9 @@ export function RemoteMcpConnectionSetup({ provider, state: s, actions: a, agent
     {provider.id === "executor" ? <div className="space-y-2"><div className="flex items-center gap-2"><Label htmlFor={`${uid}-management`}>Console URL (optional)</Label>
       <FieldHelp label="Executor console URL">The URL of your Executor organization’s integrations page. Used to open and manage imported accounts.</FieldHelp></div>
       <Input id={`${uid}-management`} type="url" value={s.managementUrl ?? ""} placeholder="https://executor.sh/your-organization/integrations" onChange={event => change({ managementUrl: event.target.value })} />
+    </div> : provider.id === "connecthub" ? <div className="space-y-2"><div className="flex items-center gap-2"><Label htmlFor={`${uid}-management`}>Dashboard URL (optional)</Label>
+      <FieldHelp label="Connect Hub dashboard URL">An HTTPS page on the same host as the MCP URL, used to manage connected accounts. Defaults to /dashboard on the hub.</FieldHelp></div>
+      <Input id={`${uid}-management`} type="url" value={s.managementUrl ?? ""} placeholder="https://your-hub.example.com/dashboard" onChange={event => change({ managementUrl: event.target.value })} />
     </div> : null}
   </div>;
 
@@ -155,7 +158,7 @@ export function RemoteMcpConnectionSetup({ provider, state: s, actions: a, agent
         {s.step === "connect" && <>
           <div className="space-y-3">
             <ol className="list-decimal space-y-2 pl-5 text-sm">{provider.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ol>
-            {external("setup", `Open ${provider.name} setup guide`)}
+            {provider.setupUrl ? external("setup", `Open ${provider.name} setup guide`) : null}
           </div>
           {s.connectStatus === "sign_in" && provider.supportsBrowserAuth ? <>
             <div role="status"><InlineBanner title={`Finish signing in to ${provider.name}`}>

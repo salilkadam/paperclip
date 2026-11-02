@@ -53,6 +53,11 @@ function providerTools(provider: RemoteMcpProviderId, broad = false): RemoteMcpT
       action("execute", "Execute code", "Run code using the sources configured in your Executor workspace.", codeSchema, true),
       action("resume", "Resume execution", "Continue a paused execution after its provider approval.", { type: "object", required: ["executionId", "action"], properties: { executionId: { type: "string", default: "review-execution-001" }, action: { type: "string", enum: ["accept", "decline", "cancel"], default: "accept" }, content: { type: "string", default: "{}" } } }, true),
     ];
+    case "connecthub": return [
+      readAction("hub_list_connections", "List connections", "List the apps this user has connected on the hub."),
+      action("hub_connect", "Connect an app", "Create a link the user opens to connect an app account.", { type: "object", required: ["toolkit"], properties: { toolkit: { type: "string", default: "github" } } }),
+      readAction("github__github_list_repos", "List repositories", "List repositories in the connected GitHub account."),
+    ];
   }
 }
 

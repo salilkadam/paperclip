@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
-import type { ToolConnection } from "@paperclipai/shared";
+import type { ComposioAppSetupResult, ToolConnection } from "@paperclipai/shared";
 import { AGGREGATOR_NAMES, aggregatorManagementUrl, isAppAggregator } from "@paperclipai/shared/aggregator-apps";
 import type { AggregatorAppCatalogEntry } from "@paperclipai/shared/aggregator-app-catalog";
 import { toolsApi } from "@/api/tools";
@@ -40,9 +40,25 @@ function AccountObservations({ app, connection, onClose }: { app: AggregatorAppC
   const refresh = useMutation({ mutationFn: async () => { const result = await toolsApi.refreshAggregatorApps(connection.id, snapshots.map(snapshot => snapshot.toolkit)); queries.setQueryData(key, result); } });
   const provider = query.data?.provider;
   const name = provider ? AGGREGATOR_NAMES[provider] : "provider";
-  const managementUrl = provider ? aggregatorManagementUrl(provider, accounts[0]?.account.managementUrl ?? (typeof connection.config?.managementUrl === "string" ? connection.config?.managementUrl : null)) : null;
+  const managementUrl = provider ? aggregatorManagementUrl(provider, accounts[0]?.account.managementUrl ?? (typeof connection.config?.managementUrl === "string" ? connection.config?.managementUrl : null), typeof connection.config?.url === "string" ? connection.config.url : null) : null;
+  // Connect Hub hands the person a one-time link on the hub; the hub stores the credential.
+  const [handoff, setHandoff] = useState<ComposioAppSetupResult | null>(null);
+  const hubToolkit = provider === "connecthub" ? snapshots[0]?.toolkit : undefined;
+  const connect = useMutation({ mutationFn: async (action: "start" | "complete") => {
+    const result = await toolsApi.setupAggregatorApp(connection.id, hubToolkit!, { action });
+    setHandoff(result);
+    await queries.invalidateQueries({ queryKey: key, exact: true });
+    return result;
+  } });
+  const hubConnected = accounts.some(({ account }) => account.status === "ACTIVE");
   return <>
     {query.isError || refresh.isError || query.data?.sync.status === "error" ? <p role="alert" className="text-sm text-destructive">Couldn’t check {name}. Last known accounts are shown.</p> : null}
+    {connect.isError ? <p role="alert" className="text-sm text-destructive">{connect.error instanceof Error ? connect.error.message : `Couldn’t connect ${app.name}. Try again.`}</p> : null}
+    {handoff?.status === "connected" ? <p role="status" className="text-sm text-muted-foreground">{app.name} is connected in {name}.</p> : null}
+    {handoff?.authorizationUrl ? <div className="space-y-2">
+      <p role="status" className="text-sm text-muted-foreground">Finish connecting {app.name} in {name}, then return here.</p>
+      <Button asChild variant="outline" className="w-full"><a href={handoff.authorizationUrl} target="_blank" rel="noopener noreferrer">Connect {app.name} in {name}<ExternalLink className="size-4" /></a></Button>
+    </div> : null}
     {query.isLoading ? <p role="status" className="text-sm text-muted-foreground">Loading accounts…</p> : accounts.length ? <div className="divide-y divide-border">
       {accounts.map(({ account, snapshot }) => <div key={`${snapshot.toolkit}:${account.id}`} className="py-3">
         <p className="text-sm font-medium">{account.alias || `${app.name} account`}</p>
@@ -52,6 +68,8 @@ function AccountObservations({ app, connection, onClose }: { app: AggregatorAppC
     <p className="text-xs text-muted-foreground">Via <Link to={`/apps/${connection.id}/permissions`} onClick={onClose} className="underline underline-offset-2">“{connection.name}”</Link></p>
     <DialogFooter className="sm:justify-between"><Button variant="ghost" onClick={onClose}>Close</Button><div className="flex flex-wrap items-center gap-2">
       <Button variant="ghost" disabled={!settled || refresh.isPending || query.data?.discovery.availability !== "available"} onClick={() => refresh.mutate()}>Refresh</Button>
+      {hubToolkit && !hubConnected && handoff?.status !== "connected" ? <Button variant={handoff?.authorizationUrl ? "ghost" : "default"} disabled={!settled || connect.isPending || query.data?.discovery.availability !== "available"}
+        onClick={() => connect.mutate(handoff?.authorizationUrl ? "complete" : "start")}>{connect.isPending ? "Checking…" : handoff?.authorizationUrl ? "I’ve connected it" : `Connect ${app.name}`}</Button> : null}
       {managementUrl ? <Button asChild><a href={managementUrl} target="_blank" rel="noopener noreferrer">Open in {name}<ExternalLink className="size-4" /></a></Button> : null}
     </div></DialogFooter>
   </>;

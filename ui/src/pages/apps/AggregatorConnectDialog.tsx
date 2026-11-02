@@ -29,7 +29,7 @@ export function AggregatorConnectDialog({ app, connections, initialProvider, onC
   const existing = selected ? connections[selected.provider] ?? [] : [];
   const usableConnection = existing.find((connection) => connection.status === "active" && connection.enabled && !isToolConnectionAttentionHealth(connection.healthStatus));
   const account = existing.find(connection => connection.id === selectedAccountId) ?? usableConnection ?? existing[0];
-  const managementUrl = selected ? aggregatorManagementUrl(selected.provider, typeof account?.config?.managementUrl === "string" ? account.config.managementUrl : null) : null;
+  const managementUrl = selected ? aggregatorManagementUrl(selected.provider, typeof account?.config?.managementUrl === "string" ? account.config.managementUrl : null, typeof account?.config?.url === "string" ? account.config.url : null) : null;
   const provider = selected ? remoteMcpProviders[selected.provider] : null;
   function choose(route: AggregatorAppRoute) {
     const accounts = connections[route.provider] ?? [];

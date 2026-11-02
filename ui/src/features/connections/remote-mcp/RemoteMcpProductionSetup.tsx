@@ -69,7 +69,7 @@ export function RemoteMcpProductionSetup({ providerId, connection, host = "page"
     setupComplete: Boolean(connection && connection.status !== "draft"),
     url: typeof connection?.config?.url === "string" ? connection.config?.url : provider.defaultUrl,
     managementUrl: typeof connection?.config?.managementUrl === "string" ? connection.config.managementUrl : "",
-    auth: connection?.config?.mcpAuthMode === "bearer" ? "bearer" : connection?.authKind === "api_key" ? "headers" : provider.supportsBrowserAuth ? "auto" : "none",
+    auth: connection?.config?.mcpAuthMode === "bearer" ? "bearer" : connection?.authKind === "api_key" ? "headers" : provider.defaultAuth ?? (provider.supportsBrowserAuth ? "auto" : "none"),
     token: "", headers: [], connectStatus: oauthOutcome === "denied" ? "cancelled" : oauthOutcome === "failed" ? "oauth_failed" : "idle", connected: false,
     identity: null, allAgents: true, agentIds: [], permissions: {}, tools: [], notice: connection?.authKind === "api_key" ? "Saved credentials are retained when these fields are left blank. Enter a replacement only to change them." : null, refreshing: false,
     ...(!connection ? readAccessDraft(accessDraftKey) : {}),
@@ -150,9 +150,13 @@ export function RemoteMcpProductionSetup({ providerId, connection, host = "page"
           credentials[`headers.${header.name.trim()}`] = header.value;
         }
       }
-      const managementUrl = providerId === "executor" && state.managementUrl?.trim()
-        ? aggregatorManagementUrl("executor", state.managementUrl.trim()) : null;
-      if (providerId === "executor" && state.managementUrl?.trim() && !managementUrl) throw new Error("Use an HTTPS console URL without credentials.");
+      const managedProvider = providerId === "executor" || providerId === "connecthub" ? providerId : null;
+      const managesUrl = managedProvider !== null;
+      const managementUrl = managedProvider && state.managementUrl?.trim()
+        ? aggregatorManagementUrl(managedProvider, state.managementUrl.trim(), state.url.trim()) : null;
+      if (managesUrl && state.managementUrl?.trim() && !managementUrl) throw new Error(providerId === "connecthub"
+        ? "Use an HTTPS dashboard URL on the same host as the hub's MCP URL, without credentials."
+        : "Use an HTTPS console URL without credentials.");
       const prior = savedConnection.current;
       const result = await toolsApi.connectApp(selectedCompanyId, {
         galleryKey: providerId, connectionMethodKey: REMOTE_MCP_CONNECTOR_METHODS[providerId],
@@ -234,7 +238,11 @@ export function RemoteMcpProductionSetup({ providerId, connection, host = "page"
         edit({ connectStatus: "sign_in", notice: null });
         onPhaseChange?.("authorizing");
       }
-      else window.open(provider.setupUrl, "_blank", "noopener,noreferrer");
+      else {
+        const destination = providerId === "connecthub"
+          ? aggregatorManagementUrl("connecthub", state.managementUrl?.trim() || null, state.url.trim()) : provider.setupUrl;
+        if (destination) window.open(destination, "_blank", "noopener,noreferrer");
+      }
     },
     saveExit: () => {
       if (busy.current) return;
