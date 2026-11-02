@@ -85,6 +85,14 @@ export class TemplateError extends Error {
 
 const EMAIL_RE = /^[^\s@"\\,]+(?:\.[^\s@"\\,]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const REFERENCE_RE = /^[A-Z]{2}-[A-Z0-9]{4,24}$/;
+const UTC_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?Z$/;
+/**
+ * Characters that print as nothing or change how text around them reads:
+ * format characters (zero-width space and joiners, word joiner, soft hyphen,
+ * bidi embeddings and isolates, BOM), the combining grapheme joiner, Hangul
+ * fillers and variation selectors. None belongs in a party's name on a contract.
+ */
+const INVISIBLE_RE = /[\p{Cf}\u034F\u115F\u1160\u3164\uFFA0\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/u;
 
 /** Look up a template, or say which ones exist. */
 export function getTemplate(key: unknown): DocumentTemplate {
@@ -125,6 +133,11 @@ export function validateFields(template: DocumentTemplate, raw: unknown): Record
   const problems: string[] = [];
   for (const field of template.fields) {
     const value = typeof input[field.key] === "string" ? (input[field.key] as string) : "";
+    const invisible = [...value].find((ch) => INVISIBLE_RE.test(ch));
+    if (invisible) {
+      problems.push(`${field.key} contains an invisible or text-direction character (U+${invisible.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")})`);
+      continue;
+    }
     const oneLine = value.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
     if (!oneLine) {
       problems.push(`${field.key} is required`);
@@ -136,7 +149,9 @@ export function validateFields(template: DocumentTemplate, raw: unknown): Record
     }
     if (field.kind === "email" && !EMAIL_RE.test(oneLine)) problems.push(`${field.key} is not an email address`);
     if (field.kind === "reference" && !REFERENCE_RE.test(oneLine)) problems.push(`${field.key} must look like DP-ABC12345`);
-    if (field.kind === "timestamp" && Number.isNaN(Date.parse(oneLine))) problems.push(`${field.key} is not a timestamp`);
+    if (field.kind === "timestamp" && (!UTC_TIMESTAMP_RE.test(oneLine) || Number.isNaN(Date.parse(oneLine)))) {
+      problems.push(`${field.key} must be a UTC ISO timestamp like 2026-11-02T09:29:19Z`);
+    }
     out[field.key] = field.kind === "email" ? oneLine.toLowerCase() : oneLine;
   }
   if (problems.length) throw new TemplateError(`invalid fields for ${template.key}: ${problems.join("; ")}`);

@@ -894,19 +894,24 @@ function documentsConfig(port: number) {
     mcpUrl: DRIVE_URL,
     tenantId: "base",
     account: "bionicorg",
+    apiKey: "gateway-key-value",
     folders: { "dp-sent": "folderSent0001", "dp-received": "folderRecv0001", "dp-executed": "folderExec0001" },
   };
   return config;
 }
 
 /** One fetch double for SES and the Drive MCP server. */
-function fetchDouble(opts: { driveFails?: boolean } = {}) {
-  const drive: Array<{ method: string; args?: Record<string, unknown> }> = [];
+function fetchDouble(opts: { driveFails?: boolean; driveDown?: boolean } = {}) {
+  const drive: Array<{ method: string; args?: Record<string, unknown>; key?: string | null }> = [];
   const ses: string[] = [];
   const fn = vi.fn(async (url: string, init: RequestInit) => {
     if (String(url).startsWith(DRIVE_URL)) {
       const msg = JSON.parse(String(init.body));
-      drive.push({ method: msg.method, args: msg.params?.arguments });
+      const key = (init.headers as Record<string, string>)["x-api-key"] ?? null;
+      drive.push({ method: msg.method, args: msg.params?.arguments, key });
+      if (opts.driveDown || key !== "gateway-key-value") {
+        return new Response('{"error":"unauthorized"}', { status: 401, headers: { "content-type": "application/json" } });
+      }
       if (msg.method === "initialize") {
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-03-26" } }), {
           status: 200,
@@ -1088,5 +1093,84 @@ describe("attachments in received mail", () => {
     } finally {
       await server.close();
     }
+  });
+});
+
+
+describe("documents: review fixes", () => {
+  it("sends the gateway key to Drive and never puts it in activity", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const result = await worker.call("send", {
+      to: ["ada@example.com"], subject: "s", text: "t",
+      attachments: [{ template: AGREEMENT, fields: agreementFields }], fileSentCopyTo: "dp-sent",
+    });
+    expect(result.error).toBeUndefined();
+    expect(f.drive.every((c) => c.key === "gateway-key-value")).toBe(true);
+    expect(JSON.stringify(worker.activity)).not.toContain("gateway-key-value");
+  });
+
+  it("refuses to send at all when Drive filing was asked for and Drive is unreachable", async () => {
+    const f = fetchDouble({ driveDown: true });
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const result = await worker.call("send", {
+      to: ["ada@example.com"], subject: "s", text: "t",
+      attachments: [{ template: AGREEMENT, fields: agreementFields }], fileSentCopyTo: "dp-sent",
+    });
+    expect(result.error).toMatch(/HTTP 401.*check drive\.apiKey/);
+    expect(f.ses).toHaveLength(0);
+  });
+
+  it("refuses to send the identical agreement to the same person twice", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const args = { to: ["ada@example.com"], subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields: agreementFields }] };
+    expect((await worker.call("send", args)).error).toBeUndefined();
+    const again = await worker.call("send", args);
+    expect(again.error).toMatch(/already sent to ada@example.com/);
+    expect(f.ses).toHaveLength(1);
+    // A different agreement (new fields) is not blocked.
+    const other = await worker.call("send", { ...args, attachments: [{ template: AGREEMENT, fields: { ...agreementFields, signatoryTitle: "CTO" } }] });
+    expect(other.error).toBeUndefined();
+  });
+
+  it("re-files a sent agreement from template and fields only when the hash matches", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    const sent = await worker.call("send", { to: ["ada@example.com"], subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields: agreementFields }] });
+    const sha = (sent.data as { documents: Array<{ sha256: string }> }).documents[0].sha256;
+    const base = { template: AGREEMENT, fields: agreementFields, folder: "dp-sent", name: "example-dp-agreement-v1.0-sent-2026-11-02.pdf" };
+    expect((await worker.call("create_drive_file", { ...base, sha256: "a".repeat(64) })).error).toMatch(/not the a+ that was sent/);
+    expect((await worker.call("create_drive_file", { ...base, uid: 1, sha256: sha })).error).toMatch(/give either/);
+    const ok = await worker.call("create_drive_file", { ...base, sha256: sha });
+    expect(ok.error).toBeUndefined();
+    const { parseAttachments } = await import("./mime.js");
+    const upload = f.drive.filter((c) => c.method === "tools/call").at(-1)!;
+    expect(Buffer.from(String(upload.args!.content), "base64").equals(parseAttachments(f.ses[0]!)[0].bytes)).toBe(true);
+  });
+
+  it("refuses invisible and text-direction characters and loose timestamps in fields", async () => {
+    const f = fetchDouble();
+    vi.stubGlobal("fetch", f.fn);
+    const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
+    for (const ch of ["​", "‌", "‍", "⁠", "­", "͏", "‮", "⁧", "﻿", "️", "ㅤ"]) {
+      const r = await worker.call("send", {
+        to: ["ada@example.com"], subject: "s", text: "t",
+        attachments: [{ template: AGREEMENT, fields: { ...agreementFields, partnerLegalName: `Acme${ch} Ltd` } }],
+      });
+      expect(r.error, `U+${ch.codePointAt(0)!.toString(16)}`).toMatch(/invisible or text-direction character/);
+    }
+    for (const ts of ["1", "Nov 2 2026", "2026-11-02T09:29:19+05:30", "12/31/2026 11:59 PM"]) {
+      const r = await worker.call("send", {
+        to: ["ada@example.com"], subject: "s", text: "t",
+        attachments: [{ template: AGREEMENT, fields: { ...agreementFields, applicationSignedAt: ts } }],
+      });
+      expect(r.error, ts).toMatch(/UTC ISO timestamp/);
+    }
+    expect(f.ses).toHaveLength(0);
   });
 });

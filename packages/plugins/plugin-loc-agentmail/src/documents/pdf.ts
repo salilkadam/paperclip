@@ -287,7 +287,7 @@ export async function renderDocument(template: DocumentTemplate, fields: Record<
     ]);
   }
   w.runs([{ text: `Agreement version: ${template.version}`, bold: false }], { gapAfter: 4 });
-  w.runs([{ text: `Approved text: ${template.approval}. Text fingerprint (sha256): ${textSha256}`, bold: false }], {
+  w.runs([{ text: `Approved text: ${template.approval}. Approved source file sha256: ${template.sourceSha256}. Agreement text sha256: ${textSha256}`, bold: false }], {
     size: 8,
     gapAfter: 10,
   });

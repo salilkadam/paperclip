@@ -290,8 +290,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): LocAgentM
       tenantId: str(d.tenantId, "drive.tenantId", errors) ?? "",
       account: str(d.account, "drive.account", errors) ?? "",
       folders,
-      timeoutMs: int(d.timeoutMs, "drive.timeoutMs", 60000, 1000, 300000, errors),
+      timeoutMs: int(d.timeoutMs, "drive.timeoutMs", 20000, 1000, 45000, errors),
+      apiKey: (d.apiKey as SecretRefValue) ?? null,
     };
+    if (!drive.apiKey) errors.push("drive.apiKey is required (the gateway key for the Google Workspace MCP server; pick a saved secret)");
   }
 
   if (errors.length > 0) {

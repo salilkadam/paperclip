@@ -28,7 +28,9 @@ TEMPLATE="reliora-dp-agreement-v1.0"
 TENANT="base"; ACCOUNT="salil-bionicaisolutions"
 AI_TEAM_ROOT="1MmJAx3Rkag90KSSlFISiVvkuWwvO38dK"
 MCP_SVC="svc/mcp-gworkspace-server"; MCP_NS="mcp"; MCP_PORT=8015; LOCAL_PORT=18015
-DRIVE_URL_IN_CLUSTER="http://mcp-gworkspace-server.mcp.svc.cluster.local:8015/mcp"
+DRIVE_URL="https://mcp.baisoln.com/gworkspace/mcp"   # through Kong, which checks X-API-Key
+# The gateway key the Loc-Google Workspace connection (78ad5e0e) already uses, as a Paperclip secret ref.
+DRIVE_KEY_SECRET_ID="622bf7b5-10d1-42c9-958b-3b48ca973398"
 
 die() { echo "FAIL: $*" >&2; exit 1; }
 for bin in kubectl curl jq; do command -v "$bin" >/dev/null || die "$bin is not installed"; done
@@ -81,10 +83,11 @@ echo "== 2. Loc-AgentMail config for Reliora"
 CURRENT="$(api GET "/plugins/$PLUGIN/config?companyId=$COMPANY")"
 CFG="$(jq -c '.configJson // .config // .' <<<"$CURRENT")"
 jq -e '.accounts | map(.key) | index("reliora-info")' <<<"$CFG" >/dev/null || die "reliora-info is not a configured mailbox"
-NEW="$(jq -c --arg t "$TEMPLATE" --arg url "$DRIVE_URL_IN_CLUSTER" --arg ten "$TENANT" --arg acc "$ACCOUNT" \
+NEW="$(jq -c --arg t "$TEMPLATE" --arg url "$DRIVE_URL" --arg ten "$TENANT" --arg acc "$ACCOUNT" --arg key "$DRIVE_KEY_SECRET_ID" \
   --arg s "$SENT" --arg r "$RECV" --arg e "$EXEC" '
   .accounts |= map(if .key == "reliora-info" then .documentTemplates = ((.documentTemplates // []) + [$t] | unique) else . end)
-  | .drive = {mcpUrl: $url, tenantId: $ten, account: $acc, folders: {"dp-sent": $s, "dp-received": $r, "dp-executed": $e}}' <<<"$CFG")"
+  | .drive = {mcpUrl: $url, tenantId: $ten, account: $acc, apiKey: {type: "secret_ref", secretId: $key, version: "latest"},
+              folders: {"dp-sent": $s, "dp-received": $r, "dp-executed": $e}}' <<<"$CFG")"
 echo "  change: $(diff <(jq -S 'del(.accounts[].password) | {accounts: [.accounts[] | {key, documentTemplates}], drive}' <<<"$CFG") <(jq -S 'del(.accounts[].password) | {accounts: [.accounts[] | {key, documentTemplates}], drive}' <<<"$NEW") | grep '^[<>]' | tr '\n' ' ')"
 if (( ! DRY )); then
   api POST "/plugins/$PLUGIN/config" "$(jq -nc --arg c "$COMPANY" --argjson j "$NEW" '{companyId:$c, configJson:$j}')" >/dev/null

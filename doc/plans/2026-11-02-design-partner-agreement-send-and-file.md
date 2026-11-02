@@ -63,3 +63,19 @@ Paperclip PR into `main`, tests at the tool level with real bytes (render, parse
 | Dissent | "outbound-email-approval" is a convention, not a gateway policy (verified: no require_approval on `paperclip.loc-agentmail:send` in production). | **Fixed in design:** add gateway policies: `require_approval` on `send` when `attachments` exists, and on `create_drive_file` when the folder is `executed`. |
 | Dissent | Any Reliora agent may use reliora-info. | **Accepted:** every agreement send needs board approval by policy. |
 | L1 | Attachments must be handled as bytes; list fetches pull whole messages. | **Fixed for attachments** (byte-level parsing). Header-only listing **scheduled**, not in this change. |
+
+## Code review round 1 (Fable 5.1, 2026-11-02) and dispositions
+
+| # | Finding | Disposition |
+|---|---|---|
+| B1 | The Drive client sent no credential; the live Workspace server answers 401. | **Fixed:** `drive.apiKey` (secret ref, required) is sent as `X-API-Key` through Kong; the setup script points it at the key the Loc-Google Workspace connection already uses. With `fileSentCopyTo`, an `initialize` preflight runs before SES, so an unreachable or unauthorised Drive stops the send. |
+| B2 | Invisible and bidi characters (zero-width, soft hyphen, RLO, isolates, CGJ) passed into the legal name. | **Fixed:** fields refuse `\p{Cf}`, U+034F, Hangul fillers and variation selectors; tested per character. |
+| B3 | No approval gate ships with the code. | **Fixed in delivery:** `deploy/scripts/setup-dp-agreement-pipeline.sh` creates the three COO policies; the stage closes only after they are verified live. |
+| 4 | No way to re-file a sent copy after a filing failure. | **Fixed:** `create_drive_file` accepts `{template, fields, sha256}` and files only if the deterministic re-render matches the sent hash. |
+| 6 | Gateway timeout can return `tool_timeout` while the send completes; a retry would double-send. | **Fixed:** the same agreement bytes to the same recipient are refused for 24 h (state record with the Message-ID). Drive timeout default lowered to 20 s, max 45 s; approved executions run with 60 s. |
+| 10 | The PDF printed only the body hash, not the CLO's source-file hash. | **Fixed:** both are printed. |
+| 11 | Timestamp accepted loose formats under a "(UTC)" label; template enum duplicated. | **Fixed:** strict `…Z` ISO timestamp; manifest enum derived from the template registry. |
+| 7 | Round trip proves presence, not legibility (white text would pass). | **Accepted risk**, owner: board; trigger: any change to the renderer's colours or layout. |
+| 9 | PDFs inside forwarded message/rfc822 are not listed; 2231 multi-segment names rely on the `name=` fallback. | **Accepted risk**, owner: COO; trigger: a partner reply whose PDF is not listed. |
+| D2 | The Workspace server trusts Kong consumer headers from inside the cluster (no NetworkPolicy in `mcp`). | **Scheduled:** Deploy-repo defect, filed separately; not used by this change. |
+| 8 | HTML-only messages differ only in the alternative boundary token. | **No change needed.** |

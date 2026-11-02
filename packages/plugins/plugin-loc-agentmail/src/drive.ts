@@ -22,6 +22,8 @@ export interface DriveSettings {
   /** Folder key -> Drive folder id. Only these folders can be written. */
   folders: Record<string, string>;
   timeoutMs: number;
+  /** Gateway key (sent as X-API-Key), resolved from a secret ref at call time. */
+  apiKey?: unknown;
 }
 
 export interface DriveUploadResult {
@@ -61,7 +63,7 @@ function rpcMessage(body: string, contentType: string): Record<string, unknown> 
 
 async function rpc(
   fetchImpl: Fetch,
-  settings: DriveSettings,
+  settings: DriveSettings & { resolvedKey?: string },
   method: string,
   params: Record<string, unknown>,
   id: number,
@@ -72,6 +74,7 @@ async function rpc(
     accept: "application/json, text/event-stream",
   };
   if (sessionId) headers["mcp-session-id"] = sessionId;
+  if (settings.resolvedKey) headers["x-api-key"] = settings.resolvedKey;
   let response: Response;
   try {
     response = await fetchImpl(settings.mcpUrl, {
@@ -84,7 +87,10 @@ async function rpc(
     throw new DriveError(`could not reach the Drive server at ${settings.mcpUrl}: ${error instanceof Error ? error.message : String(error)}`);
   }
   const text = await response.text();
-  if (!response.ok) throw new DriveError(`the Drive server answered HTTP ${response.status} to ${method}: ${text.slice(0, 300)}`);
+  if (!response.ok) {
+    const hint = response.status === 401 || response.status === 403 ? " (check drive.apiKey)" : "";
+    throw new DriveError(`the Drive server answered HTTP ${response.status} to ${method}${hint}: ${text.slice(0, 300)}`);
+  }
   return { message: rpcMessage(text, response.headers.get("content-type") ?? ""), sessionId: response.headers.get("mcp-session-id") ?? sessionId };
 }
 
@@ -113,8 +119,24 @@ function toolPayload(result: Record<string, unknown>): Record<string, unknown> {
  * Upload bytes as a new file in one of the configured folders.
  * Throws DriveError on any failure, including a tool-level `success: false`.
  */
+/** Prove the Drive server is reachable and accepts our credential, without writing anything. */
+export async function preflightDrive(
+  settings: DriveSettings & { resolvedKey?: string },
+  fetchImpl: Fetch = globalThis.fetch,
+): Promise<void> {
+  const init = await rpc(
+    fetchImpl,
+    settings,
+    "initialize",
+    { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "paperclip-loc-agentmail", version: "0.2.0" } },
+    1,
+    null,
+  );
+  if (init.message.error) throw new DriveError(`the Drive server refused initialize: ${JSON.stringify(init.message.error).slice(0, 300)}`);
+}
+
 export async function uploadToDrive(
-  settings: DriveSettings,
+  settings: DriveSettings & { resolvedKey?: string },
   input: { folderKey: string; name: string; bytes: Uint8Array; mimeType: string },
   fetchImpl: Fetch = globalThis.fetch,
 ): Promise<DriveUploadResult> {

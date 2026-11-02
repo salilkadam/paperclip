@@ -8,6 +8,9 @@
  */
 
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
+import { TEMPLATES } from "./documents/templates.js";
+
+const TEMPLATE_KEYS = Object.keys(TEMPLATES);
 
 /** Globally unique plugin id. */
 export const PLUGIN_ID = "paperclip.loc-agentmail";
@@ -78,7 +81,7 @@ const accountProperties = {
   },
   documentTemplates: {
     type: "array",
-    items: { type: "string", enum: ["reliora-dp-agreement-v1.0"] },
+    items: { type: "string", enum: TEMPLATE_KEYS },
     description:
       "Document templates this mailbox may attach to a send. The legal text is committed in the connector source and pinned by hash; agents pass only fields.",
     "x-paperclip-advanced": true,
@@ -244,8 +247,14 @@ const manifest: PaperclipPluginManifestV1 = {
         properties: {
           mcpUrl: {
             type: "string",
-            description: "Google Workspace MCP endpoint.",
-            default: "http://mcp-gworkspace-server.mcp.svc.cluster.local:8015/mcp",
+            description: "Google Workspace MCP endpoint (through the Kong gateway).",
+            default: "https://mcp.baisoln.com/gworkspace/mcp",
+          },
+          apiKey: {
+            type: ["string", "object"],
+            format: "secret-ref",
+            maxLength: 8192,
+            description: "Gateway key sent as X-API-Key. Pick the saved secret the Loc-Google Workspace connection uses.",
           },
           tenantId: { type: "string", description: "Workspace MCP tenant id, e.g. `base`." },
           account: { type: "string", description: "Connected Google account alias that owns the folders." },
@@ -254,9 +263,9 @@ const manifest: PaperclipPluginManifestV1 = {
             description: "Folder key agents use (e.g. `dp-sent`, `dp-received`, `dp-executed`) mapped to a Drive folder id.",
             additionalProperties: { type: "string" },
           },
-          timeoutMs: { type: "integer", default: 60000, minimum: 1000, maximum: 300000, "x-paperclip-advanced": true },
+          timeoutMs: { type: "integer", default: 20000, minimum: 1000, maximum: 45000, "x-paperclip-advanced": true },
         },
-        required: ["mcpUrl", "tenantId", "account", "folders"],
+        required: ["mcpUrl", "tenantId", "account", "folders", "apiKey"],
         additionalProperties: false,
       },
     },
@@ -294,7 +303,7 @@ const manifest: PaperclipPluginManifestV1 = {
             items: {
               type: "object",
               properties: {
-                template: { type: "string", enum: ["reliora-dp-agreement-v1.0"] },
+                template: { type: "string", enum: TEMPLATE_KEYS },
                 fields: { type: "object", additionalProperties: { type: "string" } },
               },
               required: ["template", "fields"],
@@ -338,16 +347,18 @@ const manifest: PaperclipPluginManifestV1 = {
       name: TOOL_NAMES.createDriveFile,
       displayName: "Create Drive file from an attachment",
       description:
-        "File one attachment of a received message into a configured Google Drive folder. Pass the uid, the attachment index and the sha256 that read_message listed; the connector re-reads the message, checks the hash, and uploads the bytes itself.",
+        "File a PDF into a configured Google Drive folder: either an attachment of a received message (uid, attachmentIndex and the sha256 read_message listed) or a sent document again (template, fields and the sha256 the send returned). The connector fetches or re-renders the bytes, checks the hash, and uploads them itself.",
       parametersSchema: parameters(
         {
           uid: { type: "integer", minimum: 1, description: "Message UID from `list_inbox`." },
           attachmentIndex: { type: "integer", minimum: 0, maximum: 50, description: "Attachment index from `read_message`." },
-          sha256: { type: "string", pattern: "^[0-9a-f]{64}$", description: "The attachment's sha256 from `read_message`." },
+          template: { type: "string", enum: TEMPLATE_KEYS, description: "Re-file a sent document: its template (instead of uid/attachmentIndex)." },
+          fields: { type: "object", additionalProperties: { type: "string" }, description: "Re-file a sent document: the exact fields it was sent with." },
+          sha256: { type: "string", pattern: "^[0-9a-f]{64}$", description: "The attachment's sha256 from `read_message`, or the sent document's sha256 from the send result." },
           folder: { type: "string", maxLength: 64, description: "Configured Drive folder key, e.g. `dp-received` or `dp-executed`." },
           name: { type: "string", maxLength: 180, description: "File name to create, ending in .pdf." },
         },
-        ["uid", "attachmentIndex", "sha256", "folder", "name"],
+        ["sha256", "folder", "name"],
       ),
     },
     {
