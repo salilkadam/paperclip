@@ -3,14 +3,16 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 /** Shared by the saved connection and its interactive review stories. */
-export function RemoteMcpManagement({ providerName, connected = true, canReconnect = true, canDisconnect = true, busy = false, onReconnect, onManage, onDisconnect }: {
+export function RemoteMcpManagement({ providerName, connected = true, canReconnect = true, canDisconnect = true, busy = false, onReconnect, onManage, manageUrl, onDisconnect }: {
   providerName: string;
   connected?: boolean;
   canReconnect?: boolean;
   canDisconnect?: boolean;
   busy?: boolean;
   onReconnect: () => void;
-  onManage: () => void;
+  onManage?: () => void;
+  /** Where "Manage in …" goes when no onManage is given; the button is hidden when neither is available. */
+  manageUrl?: string | null;
   onDisconnect: () => void | Promise<unknown>;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -18,7 +20,7 @@ export function RemoteMcpManagement({ providerName, connected = true, canReconne
     <h2 className="text-sm font-semibold">Connection settings</h2>
     <div className="flex flex-wrap items-center gap-3">
       <Button variant="outline" disabled={!canReconnect || busy} onClick={onReconnect}>Reconnect</Button>
-      <Button variant="outline" onClick={onManage}>Manage in {providerName}</Button>
+      {(onManage || manageUrl) && <Button variant="outline" onClick={() => (onManage ? onManage() : window.open(manageUrl!, "_blank", "noopener,noreferrer"))}>Manage in {providerName}</Button>}
       {connected && canDisconnect && <AlertDialog open={confirming} onOpenChange={(open) => { if (!busy) setConfirming(open); }}>
         <AlertDialogTrigger asChild><Button variant="ghost" className="text-destructive">Disconnect</Button></AlertDialogTrigger>
         <AlertDialogContent>

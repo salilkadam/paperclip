@@ -99,7 +99,7 @@ describe("aggregator inventory adapters", () => {
   it("keeps Connect Hub management URLs on the connection endpoint's host", () => {
     expect(aggregatorManagementUrl("connecthub", null, "https://hub.example/mcp")).toBe("https://hub.example/dashboard");
     expect(aggregatorManagementUrl("connecthub", "https://hub.example/tenants/acme", "https://hub.example/mcp")).toBe("https://hub.example/tenants/acme");
-    for (const url of ["https://other.example/dashboard", "http://hub.example/dashboard", "https://user:pw@hub.example/", "https://hub.example/?token=secret"]) {
+    for (const url of ["https://other.example/dashboard", "http://hub.example/dashboard", "https://user:pw@hub.example/", "https://hub.example/?token=secret", "https://hub.example:8443/dashboard"]) {
       expect(aggregatorManagementUrl("connecthub", url, "https://hub.example/mcp")).toBeNull();
     }
     expect(aggregatorManagementUrl("connecthub")).toBeNull();

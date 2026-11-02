@@ -62,7 +62,7 @@ export function aggregatorManagementUrl(provider: AppCatalogAggregator, configur
       if (url.protocol !== "https:" || url.username || url.password || [...url.searchParams.keys()].some(key => /token|secret|api.?key|authorization|code/i.test(key))) return null;
       if (provider === "composio" && url.hostname !== "dashboard.composio.dev") return null;
       if (provider === "arcade" && url.hostname !== "app.arcade.dev") return null;
-      if (provider === "connecthub" && url.hostname !== new URL(hubOrigin!).hostname) return null;
+      if (provider === "connecthub" && url.origin !== hubOrigin) return null; // same origin: host and port
       return url.toString();
     } catch { return null; }
   }

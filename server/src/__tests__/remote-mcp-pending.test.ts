@@ -29,6 +29,16 @@ describe("remote MCP provider handoffs", () => {
     const pending = extractRemoteMcpPending({ jsonrpc: "2.0", id: 1, error: { code: -32042, message: "connect", data: { elicitations: [{ mode: "url", elicitationId: "ln_9", url: "https://hub.example/connect/ln_9?sig=x", message: "Connect GitHub" }] } } }, "connecthub", "github__github_get_issue", { endpoint: "https://hub.example/mcp" });
     expect(pending).toMatchObject({ kind: "authorization", elicitationId: "ln_9", links: [{ host: "hub.example", elicitationId: "ln_9" }] });
   });
+  it("refuses a Connect Hub URL elicitation whose link is not on the connection's own origin", () => {
+    const elicit = (url: string) => ({ jsonrpc: "2.0", id: 1, error: { code: -32042, message: "connect", data: { elicitations: [{ mode: "url", elicitationId: "ln_9", url }] } } });
+    for (const url of ["https://phish.example/connect/ln_9", "https://hub.example:8443/connect/ln_9", "http://hub.example/connect/ln_9"]) {
+      expect(extractRemoteMcpPending(elicit(url), "connecthub", "github__github_get_issue", { endpoint: "https://hub.example/mcp" }), url).toBeNull();
+    }
+    // Without a known https endpoint there is no origin to trust.
+    expect(extractRemoteMcpPending(elicit("https://hub.example/connect/ln_9"), "connecthub", "x", {})).toBeNull();
+    // Other providers keep the generic elicitation behaviour.
+    expect(extractRemoteMcpPending(elicit("https://provider.example/approve"), "custom", "x")).toMatchObject({ kind: "authorization" });
+  });
   it("preserves URL elicitation identities and drops unsafe navigation targets", () => {
     const elicitations = [
       { mode: "url", elicitationId: "consent-1", url: "https://provider.example/approve" },

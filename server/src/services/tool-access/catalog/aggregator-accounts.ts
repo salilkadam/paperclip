@@ -1,7 +1,7 @@
 import { actorForSecret } from "../oauth/credential-store.js";
 import type { ActorInfo } from "../types.js";
 import { remoteEndpoint, projectedConnectionHeaders } from "../connection-methods.js";
-import { AGGREGATOR_NAMES, CONNECT_HUB_DISCOVERY_TOOLS, aggregatorManagementUrl, isAppAggregator, type AggregatorAppsResponse, type ArcadeDiscoverySetupInput } from "@paperclipai/shared/aggregator-apps";
+import { AGGREGATOR_NAMES, CONNECT_HUB_DISCOVERY_TOOLS, aggregatorManagementUrl, connectHubOrigin, isAppAggregator, type AggregatorAppsResponse, type ArcadeDiscoverySetupInput } from "@paperclipai/shared/aggregator-apps";
 import { resolveAggregatorApp, type AppCatalogAggregator } from "@paperclipai/shared/aggregator-app-catalog";
 import { AggregatorDiscoveryUnavailableError, connectHubConnectLink, discoverArcadeApps, discoverConnectHubApps, discoverExecutorApps, type DiscoveredApp, type McpCall } from "../../aggregator-app-discovery.js";
 import { COMPOSIO_APP_TOOLKITS, findComposioCatalogApp } from "@paperclipai/shared/aggregator-app-catalog";
@@ -386,7 +386,11 @@ export function createAggregatorAccounts(db: Db, { options, secrets, audit, cred
         if (error instanceof HttpError) throw error;
         throw unprocessable("Connect Hub could not create a sign-in link for this app. Check the app in Connect Hub.");
       }
-      if (!link) throw unprocessable("Connect Hub did not return a sign-in link on its own address. Check the hub's public URL.");
+      if (!link) {
+        throw unprocessable(connectHubOrigin(endpoint)
+          ? "Connect Hub did not return a sign-in link on its own address. Check that the hub's PUBLIC_URL matches the URL this connection uses."
+          : "Connect Hub sign-in links are only trusted over https. Point this connection at the hub's https URL.");
+      }
       result = { status: "authorization_required", authorizationUrl: link };
     }
     if (input.action === "complete") {

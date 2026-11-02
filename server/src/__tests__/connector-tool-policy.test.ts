@@ -80,6 +80,11 @@ describe("reviewed connector risk dispatch", () => {
     expect(classifyRisk({ name: "hub_connect" }, "connecthub")).toBe("write");
     expect(classifyRisk({ name: "slack__slack_list_channels", annotations: { readOnlyHint: true } }, "connecthub")).toBe("read");
     expect(classifyRisk({ name: "slack__slack_post_message", annotations: { readOnlyHint: false } }, "connecthub")).toBe("write");
+    // A readOnlyHint never downgrades an action that names a write verb (hub annotations are heuristic, and any
+    // custom server listing the hub tools is classified here).
+    expect(classifyRisk({ name: "slack__slack_send_message", annotations: { readOnlyHint: true } }, "connecthub")).toBe("write");
+    expect(classifyRisk({ name: "github__github_create_issue", annotations: { readOnlyHint: true } }, "connecthub")).toBe("write");
+    expect(classifyRisk({ name: "jira__transitionIssue", annotations: { readOnlyHint: true } }, "connecthub")).toBe("write");
     // No other connector inherits it.
     expect(connectorToolPolicy("composio").quarantineTool).toBeUndefined();
     expect(connectorToolPolicy("custom").quarantineTool).toBeUndefined();

@@ -84,8 +84,19 @@ function connectHubRisk(tool: ToolDescriptor): ToolRiskLevel {
   const annotations = tool.annotations ?? {};
   const action = tool.name.includes("__") ? tool.name.slice(tool.name.indexOf("__") + 2) : tool.name;
   if (annotations.destructiveHint === true || /(?:^|[_-])(?:delete|remove|destroy|purge|revoke)(?:[_-]|$)/i.test(action)) return "destructive";
+  // The hub infers readOnlyHint heuristically, and any custom server that lists hub_list_connections/hub_connect is
+  // classified here, so readOnlyHint may only lower the risk of an action whose name carries no write verb.
+  const words = action.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.some(word => CONNECT_HUB_WRITE_VERBS.has(word))) return "write";
   return annotations.readOnlyHint === true ? "read" : "write";
 }
+
+const CONNECT_HUB_WRITE_VERBS = new Set([
+  "create", "update", "write", "set", "send", "publish", "post", "mutate", "mark", "archive", "add", "insert",
+  "upsert", "reply", "edit", "move", "copy", "rename", "assign", "invite", "share", "run", "start", "trigger",
+  "append", "save", "approve", "merge", "complete", "schedule", "subscribe", "follow", "like", "comment", "react",
+  "upload", "transition", "execute", "submit", "close", "cancel", "reject", "lock", "block", "mute", "disable",
+]);
 
 // host + path of an https endpoint (case-insensitive host, trailing slashes ignored); anything else is not ours
 const endpointPath = (url: unknown): string | null => {

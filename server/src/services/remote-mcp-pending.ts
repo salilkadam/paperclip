@@ -25,6 +25,12 @@ export function extractRemoteMcpPending(value: unknown, provider?: string | null
   const urlElicitation = (value: unknown) => {
     const item = record(value);
     if (item?.mode !== "url" || typeof item.elicitationId !== "string") return;
+    // A Connect Hub link is trusted only on the connection's own origin, whichever way the hub hands it over.
+    if (provider === "connecthub") {
+      const origin = connectHubOrigin(options.endpoint);
+      const checked = checkOAuthEndpointUrl(item.url);
+      if (!origin || !checked.ok || new URL(checked.url).origin !== origin) return;
+    }
     pending ??= { kind: "authorization", links: [] };
     const id = item.elicitationId.slice(0, 512);
     addLink(item.url, id);

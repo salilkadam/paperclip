@@ -128,11 +128,20 @@ if (!support.supported) console.warn(`Connect Hub database tests unavailable: ${
     const f = await fixture();
     const app = express(); app.use(express.json());
     let viewingUser = randomUUID();
-    app.use((req, _res, next) => { req.actor = { type: "board", userId: viewingUser, source: "session", isInstanceAdmin: false, companyIds: viewingUser === f.actor.actorId ? [f.company.id] : [] }; next(); });
+    let memberCompanies: string[] = [];
+    app.use((req, _res, next) => { req.actor = { type: "board", userId: viewingUser, source: "session", isInstanceAdmin: false, companyIds: viewingUser === f.actor.actorId ? [f.company.id] : memberCompanies }; next(); });
     app.use("/api", toolAccessRoutes(db, { remoteHttpRequest: f.remoteHttpRequest })); app.use(errorHandler);
     const endpoint = `/api/tool-connections/${f.connection.id}/aggregator/apps/github/setup`;
     expect([403, 404]).toContain((await request(app).post(endpoint).send({ action: "start" })).status);
     expect(f.calls.some(call => call.name === "hub_connect")).toBe(false);
+    // A company member without tools:manage_connections is refused by the manager gate itself.
+    const memberId = randomUUID();
+    await db.insert(companyMemberships).values({ companyId: f.company.id, principalType: "user", principalId: memberId, membershipRole: "member", status: "active" });
+    viewingUser = memberId;
+    memberCompanies = [f.company.id];
+    expect((await request(app).post(endpoint).send({ action: "start" })).status).toBe(403);
+    expect(f.calls.some(call => call.name === "hub_connect")).toBe(false);
+    memberCompanies = [];
     viewingUser = f.actor.actorId;
     await request(app).post(endpoint).send({ action: "bogus" }).expect(400);
     const response = await request(app).post(endpoint).send({ action: "start" }).expect(200);
