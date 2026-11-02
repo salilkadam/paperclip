@@ -108,6 +108,82 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     }
   }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
 
+  function writePgDumpFixture(dir: string, body: string): string {
+    const executable = path.join(dir, "pg-dump-fixture");
+    fs.writeFileSync(executable, `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+    return executable;
+  }
+
+  function withBackupCliEnv(values: Record<string, string>, run: () => Promise<void>): Promise<void> {
+    const previous = new Map(Object.keys(values).map(key => [key, process.env[key]] as const));
+    for (const [key, value] of Object.entries(values)) process.env[key] = value;
+    return run().finally(() => {
+      for (const [key, value] of previous.entries()) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+  }
+
+  it("hands pg_dump archives to an external gzip instead of compressing on the event loop", async () => {
+    const connectionString = await createTempDatabase();
+    const backupDir = createTempDir("pg-dump-external-gzip-");
+    const payload = Array.from({ length: 5000 }, (_, index) => `INSERT INTO fixture VALUES (${index});`).join("\n");
+    const payloadFile = path.join(backupDir, "payload.sql");
+    fs.writeFileSync(payloadFile, `${payload}\n`);
+    const dumpPath = writePgDumpFixture(backupDir, `cat '${payloadFile}'`);
+    const gzipWrapper = path.join(backupDir, "gzip-fixture");
+    const invocations = path.join(backupDir, "gzip-invocations");
+    fs.writeFileSync(gzipWrapper, `#!/bin/sh\nprintf 'invocation\\n' >> '${invocations}'\nexec gzip "$@"\n`, { mode: 0o700 });
+
+    await withBackupCliEnv({ PAPERCLIP_PG_DUMP_PATH: dumpPath, PAPERCLIP_GZIP_PATH: gzipWrapper }, async () => {
+      const backup = await runDatabaseBackup({
+        connectionString, backupDir,
+        retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+        backupEngine: "pg_dump",
+      });
+      expect(gunzipSync(fs.readFileSync(backup.backupFile)).toString()).toBe(`${payload}\n`);
+      expect(backup.sizeBytes).toBe(fs.statSync(backup.backupFile).size);
+      // One availability probe plus one real compression invocation: the
+      // archive was deflated by the external compressor, never by in-process
+      // zlib on the serving event loop.
+      expect(fs.readFileSync(invocations, "utf8").trim().split("\n")).toHaveLength(2);
+    });
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
+  it("falls back to the in-process pipeline when no external gzip is available", async () => {
+    const connectionString = await createTempDatabase();
+    const backupDir = createTempDir("pg-dump-internal-gzip-");
+    const payload = "-- in process fallback\nSELECT 42;\n";
+    const payloadFile = path.join(backupDir, "payload.sql");
+    fs.writeFileSync(payloadFile, payload);
+    const dumpPath = writePgDumpFixture(backupDir, `cat '${payloadFile}'`);
+
+    await withBackupCliEnv({ PAPERCLIP_PG_DUMP_PATH: dumpPath, PAPERCLIP_GZIP_PATH: "/nonexistent/paperclip-gzip-fixture" }, async () => {
+      const backup = await runDatabaseBackup({
+        connectionString, backupDir,
+        retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+        backupEngine: "pg_dump",
+      });
+      expect(gunzipSync(fs.readFileSync(backup.backupFile)).toString()).toBe(payload);
+    });
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
+  it("propagates pg_dump failures and removes partial archives when compressing externally", async () => {
+    const connectionString = await createTempDatabase();
+    const backupDir = createTempDir("pg-dump-failure-");
+    const dumpPath = writePgDumpFixture(backupDir, "printf 'pg_dump fixture boom\\n' >&2\nexit 3");
+
+    await withBackupCliEnv({ PAPERCLIP_PG_DUMP_PATH: dumpPath }, async () => {
+      await expect(runDatabaseBackup({
+        connectionString, backupDir,
+        retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+        backupEngine: "pg_dump",
+      })).rejects.toThrow(/boom/);
+      expect(fs.readdirSync(backupDir).filter(name => name.endsWith(".sql.gz"))).toEqual([]);
+    });
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
   it("preserves identity generation, sequence options and progress in JavaScript backups", async () => {
     const source = await createTempDatabase();
     const target = await createSiblingDatabase(source, "identity_restore_target");
