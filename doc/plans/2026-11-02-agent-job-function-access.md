@@ -12,6 +12,14 @@ Status: Owner's decision recorded. Not applied to production yet.
 
 The reason: the Reliora CMO reported that it could not open website pull requests without GitHub access. That work is not the CMO's job function.
 
+## Reliora website pages
+
+The site is in `Reliora-Inc/reliora-website`. The CMO routes a page, the Content Marketer writes the copy, and engineering builds and deploys it. Pages must follow the existing site styles. Blog posts stay with the marketer, in Ghost.
+
+`deploy/scripts/setup-reliora-website-routing.sh` writes this into the three agents' instructions. The site's build fails a page that brings its own look.
+
+**Open gap:** engineering cannot deploy yet. Agents have no cluster access or image build, so a deploy needs the owner or the SRE harness. Engineering reports "merged, not deployed" until then.
+
 ## How it is enforced
 
 `deploy/scripts/setup-agent-job-function-access.sh` applies this per company.
