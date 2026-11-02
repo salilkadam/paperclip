@@ -257,6 +257,21 @@ monitor:
        superseded failure as stale history: mention it in one bullet, but
        it must not, alone or with other benign signals, make the verdict
        WARN or FAIL.
+    6. reliora.ai and its deployer (namespace reliora-website, read-only):
+       `curl -fsS -m 10 -o /dev/null https://reliora.ai/healthz` and
+       `curl -fsS -m 10 -o /dev/null https://reliora.ai/_site-pricing.html`
+       - either failing is FAIL. Then, only if
+       `kubectl -n reliora-website get cronjob site-deployer` exists and
+       `.spec.suspend` is not true, read
+       `kubectl -n reliora-website get configmap site-deploy-state -o json`:
+       - ConfigMap missing: FAIL "site deployer state missing";
+       - `heartbeat` older than 15 minutes: WARN "site deployer not running";
+       - `state` is `broken`: FAIL; `failed_check`, `failed_smoke`,
+         `failed_timeout` or `infra_error`: WARN, quoting state, reason and
+         commit;
+       - `state` is `staging`, `switching`, `restarting` or `rolling_back`
+         with `time` older than 20 minutes: WARN "site deploy stuck".
+       The deployer deploys reliora.ai by itself. You only report it.
 
     Your final message MUST start with exactly one line, either:
     PAPERCLIP HEALTH: OK

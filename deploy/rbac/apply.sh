@@ -45,6 +45,12 @@ for f in paperclip-agent-web.yaml sre-harness.yaml; do
   render < "${f}" | kubectl apply "${DRY[@]}" -f -
 done
 
+# Objects these templates no longer define. `kubectl apply` does not remove
+# them, so a re-run would otherwise leave the harness with full rights in the
+# Reliora website namespace, where the site deployer keeps its deploy key.
+echo "=== Removing retired objects in ${WEBSITE_NS} ==="
+kubectl -n "${WEBSITE_NS}" delete "${DRY[@]}" --ignore-not-found rolebinding/sre-harness-full role/sre-harness-full
+
 echo
 if [ ${#DRY[@]} -gt 0 ]; then
   echo "Dry-run complete. Templates render and validate cleanly."

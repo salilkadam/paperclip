@@ -86,11 +86,8 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
-  # Write rights, pinned to the single marketing website deployment.
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "patch", "update"]
-    resourceNames: ["reliora-website"]
+  # No write rights here: the site deployer (deploy/reliora-website) is the only
+  # writer of reliora-website. Agents change the site by merging to its main.
 ---
 # Bindings: the agent ServiceAccount lives in ${PAPERCLIP_NS} and is
 # referenced cross-namespace from each website namespace role.
