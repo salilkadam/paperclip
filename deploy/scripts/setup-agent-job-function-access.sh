@@ -13,14 +13,20 @@
 #      then block every non-read tool on every connection. The allow has the
 #      lower priority number, so it is evaluated first. A write tool added later
 #      is blocked by default. BOARD_REPORT_TOOLS (space-separated exact tool
-#      names) adds an allow for the tools C-level agents report to the board with;
+#      names) adds an allow for the tools C-level agents report to the board with.
+#      The catalog classifies any unrecognized verb as "read" (gw_modify_message,
+#      gw_register_tenant), so tools whose NAME looks mutating are blocked by name
+#      too. A mutating tool with an innocent name is still open: --dry-run lists
+#      every read-classified tool for a person to check;
 #   2. splits GitHub by connection, because `git` and `gh` receive a real token
 #      and tool policies do NOT reach them. Only the install target does:
 #        managed (connectorProfile github.code) -> engineering agents only;
 #        any other GitHub connection            -> everyone else, MCP read-only.
 #      It narrows nothing until BOTH exist. Otherwise C-level agents would lose
 #      GitHub reads, or the two grants would collide in the credential resolver.
-#      The missing connection is reported as pending, and the run exits 3;
+#      It also narrows nothing while a grant on the read connection could export
+#      a token (it has both oauth.access_token and GitHub metadata). The run then
+#      reports pending and exits 3;
 #   3. writes a marker-delimited delegation section into each C-level AGENTS.md;
 #   4. proves it (not in --dry-run): access summaries for every C-level agent on
 #      every connection, a real gateway call that must be refused, and engineer
@@ -44,6 +50,10 @@ NON_READ_RISKS='["low","medium","high","critical","write","destructive"]'
 ALLOW_POLICY="job-function: C-level agents write to Google Drive"
 REPORT_POLICY="job-function: C-level agents report to the board"
 BLOCK_POLICY="job-function: C-level agents do not write elsewhere"
+BLOCK_NAMED_POLICY="job-function: C-level agents do not use mutating tools classified read"
+# A tool classified read whose name has one of these words. Tokens, not substrings.
+MUTATING_NAME='(^|[_.:-])(merge|push|fork|assign|dismiss|create|update|delete|remove|add|star|subscribe|write|trigger|send|publish|execute|run|cancel|rerun|request|manage|close|reopen|submit|register|modify|move|share|rename|upload|reply|edit|set|post|approve|reject|revoke|invite|lock|unlock|import|sync|restart|deploy)([_.:-]|$)'
+READ_NAME='^(get|list|search|read|fetch)[_.:-]|[_.:-](read|get|list)$'
 READ_ONLY_POLICY="job-function: this GitHub connection is read-only"
 BEGIN='<!-- BEGIN bionic-org:job-function -->'
 END='<!-- END bionic-org:job-function -->'
@@ -52,7 +62,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --company-id) ONLY_COMPANY="${2:?--company-id needs a value}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -139,7 +149,7 @@ You delegate, review, strategize and answer to the board. You do not do tactical
 - Review the result when the task comes back. A missing write permission is expected: delegate, do not report it as a blocker.
 EOF
 
-companies="$(api GET /companies)"
+companies="$(api GET "/companies?scope=accessible")"
 jq -e 'type=="array"' <<<"$companies" >/dev/null || companies="$(jq '.companies // .items' <<<"$companies")"
 companies="$(jq '[.[] | select((.status // "active") != "archived")]' <<<"$companies")"
 [[ -z "$ONLY_COMPANY" ]] || companies="$(jq --arg id "$ONLY_COMPANY" '[.[] | select(.id==$id)]' <<<"$companies")"
@@ -150,8 +160,8 @@ while read -r cid; do
   log "== $cname"
   agents="$(api GET "/companies/$cid/agents" | jq '[.[] | select(.status != "terminated")]')"
   clevel="$(jq -c '[.[] | select((.role | IN("ceo","cto","cmo","cfo"))
-      or ((.title // "") | test("^Chief ")) or (.name | test("^C[A-Z]O$"))) | .id]' <<<"$agents")"
-  engineers="$(jq -c --argjson c "$clevel" '[.[] | select((.role | IN("engineer","devops","qa")) and (.id | IN($c[]) | not)) | .id]' <<<"$agents")"
+      or ((.title // "") | test("^Chief .*Officer$")) or (.name | test("^C[A-Z]O$"))) | .id]' <<<"$agents")"
+  engineers="$(jq -c --argjson c "$clevel" '[.[] | select((.role | ascii_downcase | test("engineer|devops|^qa$")) and (.id | IN($c[]) | not)) | .id]' <<<"$agents")"
   others="$(jq -c --argjson e "$engineers" '[.[] | select(.id | IN($e[]) | not) | .id]' <<<"$agents")"
   log "  C-level: $(jq -r --argjson c "$clevel" '[.[] | select(.id | IN($c[])) | .name] | join(", ")' <<<"$agents")"
   log "  engineering: $(jq -r --argjson c "$engineers" '[.[] | select(.id | IN($c[])) | .name] | join(", ")' <<<"$agents")"
@@ -166,14 +176,31 @@ while read -r cid; do
 
   # What the block will take away, and which routines C-level agents still own.
   jq -c '.[]' <<<"$conns" > "$WORK/conns"
+  : > "$WORK/named"
   while read -r conn; do
     cid_conn="$(jq -r .id <<<"$conn")"
     while read -r aid; do
       access="$(api GET "/tool-connections/$cid_conn/test-agents/$aid/access")"
       open="$(jq -r '[.access.tools[] | select(.risk != "read" and .decision != "off") | .toolName] | join(", ")' <<<"$access")"
       [[ -z "$open" ]] || log "  open now: $(jq -r --arg a "$aid" '.[]|select(.id==$a)|.name' <<<"$agents") on $(jq -r .name <<<"$conn"): $open"
+      jq -r --arg m "$MUTATING_NAME" --arg r "$READ_NAME" '.access.tools[] | select(.risk == "read"
+          and (.toolName | test($m; "i")) and (.toolName | test($r; "i") | not)) | .toolName' <<<"$access" >> "$WORK/named"
+      if (( DRY )) && [[ "$aid" == "$(jq -r '.[0]' <<<"$clevel")" ]]; then
+        log "  read-classified on $(jq -r .name <<<"$conn"), check these by eye: $(jq -r '[.access.tools[] | select(.risk == "read") | .toolName] | join(", ")' <<<"$access")"
+      fi
     done < <(jq -r '.[]' <<<"$clevel")
   done < "$WORK/conns"
+  named="$(sort -u "$WORK/named" | jq -R . | jq -cs .)"
+  # Everything below that can abort runs before the first change, so a bad
+  # precondition cannot leave a company half-applied.
+  while read -r aid; do
+    api GET "/agents/$aid/instructions-bundle/file?path=AGENTS.md" >/dev/null
+    access="$(api GET "/tool-connections/$ws/test-agents/$aid/access")"
+    jq -e --argjson t "$DRIVE_WRITE_TOOLS" '[.access.tools[] | select(.toolName | IN($t[]))] | length == ($t | length)' <<<"$access" >/dev/null \
+      || die "$cname: agent $aid does not see the Drive write tools. Is $WORKSPACE_CONN healthy and installed? Nothing was changed for this company"
+  done < <(jq -r '.[]' <<<"$clevel")
+  legacy="$(api GET "/companies/$cid/secrets" | jq -r '(if type=="array" then . else .secrets end) | [.[] | .name | select(test("^(GH|GITHUB)_TOKEN$"))] | join(", ")')"
+  [[ -z "$legacy" ]] || pending "$cname has legacy company secrets ($legacy). An agent with no GitHub install can fall back to them for git"
   routines="$(api GET "/companies/$cid/routines")"
   jq -r --argjson c "$clevel" --argjson a "$agents" '.[] | select(.status != "archived" and (.assigneeAgentId | IN($c[])))
       | "[job-function]   C-level routine: \(.title) -> \(.assigneeAgentId as $i | $a[] | select(.id==$i) | .name)"' <<<"$routines"
@@ -191,15 +218,35 @@ while read -r cid; do
     '{name: $n, description: "C-level agents delegate tactical work. Create a task for the agent whose job function it is.",
       policyType: "block", priority: 11, enabled: true, selectors: {agentIds: $a, riskLevels: $r}, conditions: null}')"
 
+  if [[ "$named" != "[]" ]]; then
+    log "  mutating names classified read: $(jq -r 'join(", ")' <<<"$named")"
+    ensure_policy "$cid" "$existing" "$(jq -n --arg n "$BLOCK_NAMED_POLICY" --argjson a "$clevel" --argjson t "$named" \
+      '{name: $n, description: "C-level agents delegate tactical work. Create a task for the agent whose job function it is.",
+        policyType: "block", priority: 11, enabled: true, selectors: {agentIds: $a, toolNames: $t}, conditions: null}')"
+  fi
+
   github="$(jq -c '[.[] | select((.config.sourceTemplateKey // .transportConfig.sourceTemplateKey) == "github")]' <<<"$conns")"
   managed="$(jq -r '[.[] | select(.config.oauth.connectorProfile == "github.code")] | if length == 1 then .[0].id else "" end' <<<"$github")"
   readconn="$(jq -r '[.[] | select(.config.oauth.connectorProfile != "github.code")] | if length == 1 then .[0].id else "" end' <<<"$github")"
+  exports=""
+  if [[ -n "$readconn" ]]; then
+    # git-credentials.ts issues a token only with both of these. A response that
+    # omits the fields counts as able to export, and so does an empty list: this
+    # route hides personal grants from a key that may not see them.
+    exports="$(api GET "/tool-connections/$readconn/grants" | jq -r '(if type=="array" then . else .grants end)
+      | [.[] | select(.status == "active")] as $g
+      | if ($g | length) == 0 then "(none visible to this key)" else
+          [$g[] | select((has("credentialSecretRefs") | not) or (([.credentialSecretRefs[]?.configPath] | index("oauth.access_token")) and (.providerTenant.github != null)))
+           | .id] | join(", ") end')"
+  fi
   if [[ "$(jq length <<<"$engineers")" -eq 0 ]]; then
     pending "$cname has no engineering agents: GitHub installs not narrowed"
   elif [[ -z "$managed" ]]; then
     pending "$cname needs exactly one managed GitHub connection for engineering (owner's consent): GitHub installs not narrowed"
   elif [[ -z "$readconn" ]]; then
     pending "$cname needs exactly one separate read-only GitHub connection for everyone else: GitHub installs not narrowed. Until then C-level agents can still use git and gh"
+  elif [[ -n "$exports" ]]; then
+    pending "$cname: grant(s) $exports on the read connection can give git and gh a real token: GitHub installs not narrowed. Use a credential without GitHub metadata"
   else
     ensure_policy "$cid" "$existing" "$(jq -n --arg n "$READ_ONLY_POLICY" --arg c "$readconn" --argjson r "$NON_READ_RISKS" \
       '{name: $n, description: "Repo writes go through the engineering agents.", policyType: "block", priority: 12, enabled: true,
@@ -222,10 +269,9 @@ while read -r cid; do
            | select((.toolName | IN($rep[])) | not)
            | select(($c == $ws and (.toolName | IN($t[]))) | not) | .toolName] | join(", ")' <<<"$access")"
       [[ -z "$open" ]] || die "$cname: agent $aid still has write tools on $(jq -r .name <<<"$conn"): $open"
-      misread="$(jq -r '[.access.tools[] | select(.risk == "read" and .decision != "off"
-          and (.toolName | test("merge|push|fork|assign|dismiss|create|update|delete|remove|add_|star|subscribe|write|trigger|send|publish|execute"; "i"))
-          and (.toolName | test("^(get|list|search)_|_(read|get|list)$"; "i") | not)) | .toolName] | join(", ")' <<<"$access")"
-      [[ -z "$misread" ]] || pending "agent $aid on $(jq -r .name <<<"$conn"): tools classified read that look mutating, not blocked: $misread"
+      misread="$(jq -r --arg m "$MUTATING_NAME" --arg r "$READ_NAME" '[.access.tools[] | select(.risk == "read" and .decision != "off"
+          and (.toolName | test($m; "i")) and (.toolName | test($r; "i") | not)) | .toolName] | join(", ")' <<<"$access")"
+      [[ -z "$misread" ]] || die "$cname: agent $aid can still use mutating tools classified read on $(jq -r .name <<<"$conn"): $misread"
     done < <(jq -r '.[]' <<<"$clevel")
   done < "$WORK/conns"
   while read -r aid; do
@@ -235,13 +281,18 @@ while read -r cid; do
   done < <(jq -r '.[]' <<<"$clevel")
   # A real gateway call as a C-level agent. The repository does not exist, so
   # nothing could be written even if the block failed.
-  first_gh="$(jq -r '.[0].id // empty' <<<"$github")"; probe_agent="$(jq -r '.[0]' <<<"$clevel")"
+  probe_agent="$(jq -r '.[0]' <<<"$clevel")"; first_gh=""
+  while read -r g; do
+    if api GET "/tool-connections/$g/test-agents/$probe_agent/access" | jq -e '[.access.tools[] | select(.toolName == "create_branch")] | length == 1' >/dev/null; then first_gh="$g"; break; fi
+  done < <(jq -r '.[].id' <<<"$github")
   if [[ -n "$first_gh" ]]; then
     jq -n --arg a "$probe_agent" '{agentId: $a, toolName: "create_branch", parameters: {owner: "zz-governance-probe", repo: "none", branch: "probe"}}' > "$WORK/probe.json"
     resp="$(api POST "/tool-connections/$first_gh/test-calls" "$WORK/probe.json")"
     [[ "$(jq -r '.decision // "none"' <<<"$resp")" == off && "$(jq -r '.error.reasonCode // ""' <<<"$resp")" == deny_policy_block ]] \
       || die "$cname: C-level create_branch was not refused by policy: $(head -c 300 <<<"$resp")"
     log "  probe ok: C-level create_branch -> off (deny_policy_block)"
+  elif [[ "$(jq length <<<"$github")" -gt 0 ]]; then
+    pending "$cname: no GitHub connection lists create_branch for $probe_agent, so the live refusal was not proven"
   fi
   if [[ -n "$managed" && "$(jq length <<<"$engineers")" -gt 0 ]]; then
     while read -r aid; do

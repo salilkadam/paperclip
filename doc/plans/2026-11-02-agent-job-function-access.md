@@ -41,7 +41,11 @@ State found on 2026-11-02:
 ## Known limits
 
 - **Agent memory** is not covered by these policies. The script does not restrict or test it.
-- **Risk levels come from the catalog.** A mutating tool that is classified `read` is not blocked. The script reports the names that look mutating and exits 3.
+- **Risk levels come from the catalog.** The catalog classifies an unrecognized verb as `read`. The script also blocks tools whose names look mutating, and the proof fails if one stays open. A mutating tool with an innocent name is still open, so `--dry-run` lists every read-classified tool for a person to check.
+- **`git` and `gh` depend on the read connection's credential.** A grant with both `oauth.access_token` and GitHub metadata can export a token. The script refuses to narrow while one exists. Whether `gh` really fails for a C-level agent is not proven by the script: it needs a real run.
+- **New agents:** the installs are explicit agent lists, so a new agent has no GitHub access and C-level policies do not cover a new executive. Run the script again after each hire. An agent with no install can fall back to `GH_TOKEN` or `GITHUB_TOKEN` company secrets, so the script reports those secrets.
+- **Approved requests in flight:** an ask-first request that was created before the script ran can still execute if it is approved. Accepted risk. Owner: Salil. Trigger: each apply. Decline open requests from C-level agents before you run the script, or wait for the 60-minute approval window to end.
+- **Agent classification:** C-level means role `ceo`, `cto`, `cmo` or `cfo`, a title of `Chief ... Officer`, or a name like `COO`. Engineering means a role with `engineer` or `devops`, or `qa`. Check both lists in the `--dry-run` output before you apply.
 - **Board reporting:** if C-level agents post to Slack through a tool connection, the block stops it until `BOARD_REPORT_TOOLS` names those tools. Use the dry-run output to find them.
 - **Routines assigned to C-level agents** can fail after the block. The script lists them but does not reassign them.
 - **Gmail and Calendar writes** are blocked for C-level agents. "Write only to Google Drive" is read literally.
