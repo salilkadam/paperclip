@@ -2058,6 +2058,11 @@ function connectorEnrollmentPrincipal(req: Request): string {
     if (!connection) return;
     res.json(await svc.refreshAggregatorApps(connection.id, req.body.toolkits, { actorType: "user", actorId: req.actor.userId ?? "board" }));
   });
+  router.post("/tool-connections/:connectionId/aggregator/apps/:toolkit/setup", validate(composioAppSetupSchema), async (req, res) => {
+    const connection = await composioAppManager(req, res);
+    if (!connection) return;
+    res.json(await svc.setupAggregatorApp(connection.id, req.params.toolkit as string, req.body, { actorType: "user", actorId: req.actor.userId ?? "board" }));
+  });
   router.put("/tool-connections/:connectionId/aggregator/discovery", validate(arcadeDiscoverySetupSchema), async (req, res) => {
     const connection = await composioAppManager(req, res);
     if (!connection) return;

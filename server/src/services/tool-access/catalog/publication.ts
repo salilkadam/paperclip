@@ -8,6 +8,7 @@ import { nativeProviderCatalogFor } from "../../native-provider-catalogs.js";
 import { googleWorkspaceToolTarget, googleWorkspaceGrantedScopes, isGoogleWorkspaceToolGranted } from "@paperclipai/shared";
 import { retainMcpConnectionFailure } from "../../mcp-connection-failure.js";
 import { isRemoteMcpConnectorMethod } from "@paperclipai/shared";
+import { isConnectHubToolCatalog } from "@paperclipai/shared/aggregator-apps";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { connectionGrants, toolApplications, toolCatalogEntries, toolConnections, toolRuntimeSlots } from "@paperclipai/db";
@@ -155,10 +156,16 @@ export function createToolCatalogPublication(db: Db, { now, audit, getConnection
     }
     const catalogValues: Array<typeof toolCatalogEntries.$inferInsert> = [];
     let quarantinedCount = 0;
-    const sourceTemplateKey =
-      typeof asRecord(connection.config).sourceTemplateKey === "string"
+    const configuredSourceTemplateKey =
+      typeof asRecord(connection.config).sourceTemplateKey === "string" && String(asRecord(connection.config).sourceTemplateKey).trim()
         ? String(asRecord(connection.config).sourceTemplateKey)
         : null;
+    // A custom remote MCP connection whose own catalog exposes Connect Hub's
+    // discovery tools is a Connect Hub server; record it so app-level setup applies.
+    // Only unbranded custom connections are reclassified; a provider template is never replaced.
+    const detectedConnectHub = (!configuredSourceTemplateKey || configuredSourceTemplateKey === "custom") && connection.transport === "mcp_remote"
+      && isConnectHubToolCatalog(descriptors.map(descriptor => descriptor.name));
+    const sourceTemplateKey = detectedConnectHub ? "connecthub" : configuredSourceTemplateKey;
     const sourceApp = sourceTemplateKey
       ? getConnectableAppDefinition(sourceTemplateKey)
       : null;
@@ -190,6 +197,7 @@ export function createToolCatalogPublication(db: Db, { now, audit, getConnection
     const safeDefault = asRecord(connection.config).safeDefault === true;
     for (const descriptor of descriptors) {
       const riskLevel = classifyRisk(descriptor, connectorPolicy.sourceTemplateKey);
+      const reviewRequired = connectorPolicy.quarantineTool?.(descriptor) === true;
       const hash = descriptorHash(descriptor, riskLevel);
       const schemaHash = stableHash(descriptor.inputSchema ?? {});
       const existing = existingByName.get(descriptor.name);
@@ -197,10 +205,10 @@ export function createToolCatalogPublication(db: Db, { now, audit, getConnection
         existing &&
         (existing.versionHash !== hash || existing.schemaHash !== schemaHash);
       const shouldQuarantine =
-        quarantineOnRefresh &&
+        (quarantineOnRefresh || reviewRequired) &&
         (!existing || changed) &&
         existing?.status !== "disabled" &&
-        (!safeDefault || riskLevel !== "read" || nativeProvider);
+        (!safeDefault || riskLevel !== "read" || nativeProvider || reviewRequired);
       const providerPermanentlyBlocked = Boolean(
         googleProfile &&
         !isGoogleWorkspaceToolAllowed(googleProfile, descriptor),
@@ -211,7 +219,7 @@ export function createToolCatalogPublication(db: Db, { now, audit, getConnection
           ? "quarantined"
           : existing?.status === "disabled" && existing.quarantineReason !== "mcp_tool_removed"
             ? "disabled"
-            : quarantineOnRefresh && existing?.status === "quarantined"
+            : (quarantineOnRefresh || reviewRequired) && existing?.status === "quarantined"
               ? "quarantined"
               : "active";
       if (shouldQuarantine && !providerPermanentlyBlocked) quarantinedCount += 1;
@@ -257,16 +265,17 @@ export function createToolCatalogPublication(db: Db, { now, audit, getConnection
     const updatedEntries = descriptors.map(descriptor => toCatalogEntry(catalogByName.get(descriptor.name)!));
 
     const preserveQuarantine = connectorPolicy.quarantineNewEntries;
+    const detectedSource = detectedConnectHub ? { sourceTemplateKey } : {};
     const normalizedConfig = preserveQuarantine
-      ? { ...connection.config, quarantineNewEntries: true }
+      ? { ...connection.config, ...detectedSource, quarantineNewEntries: true }
       : refreshOptions.enableAllByDefault
-      ? { ...connection.config, quarantineNewEntries: false }
-      : connection.config;
+      ? { ...connection.config, ...detectedSource, quarantineNewEntries: false }
+      : { ...connection.config, ...detectedSource };
     const normalizedTransportConfig = preserveQuarantine
-      ? { ...connection.transportConfig, quarantineNewEntries: true }
+      ? { ...connection.transportConfig, ...detectedSource, quarantineNewEntries: true }
       : refreshOptions.enableAllByDefault
-      ? { ...connection.transportConfig, quarantineNewEntries: false }
-      : connection.transportConfig;
+      ? { ...connection.transportConfig, ...detectedSource, quarantineNewEntries: false }
+      : { ...connection.transportConfig, ...detectedSource };
     const [updatedConnection] = await db
       .update(toolConnections)
       .set({
@@ -323,7 +332,7 @@ export function createToolCatalogPublication(db: Db, { now, audit, getConnection
       connectionId: connection.id,
       action: "tool_connection.catalog_refresh",
       outcome: "success",
-      details: { discoveredCount: descriptors.length, quarantinedCount },
+      details: { discoveredCount: descriptors.length, quarantinedCount, ...(detectedConnectHub ? { detectedProvider: "connecthub" } : {}) },
       actor,
     });
 

@@ -12,6 +12,23 @@ describe("remote MCP provider handoffs", () => {
     expect(extractRemoteMcpPending({ url: "https://example.com/article", execution_id: "completed" }, "executor")).toBeNull();
     expect(extractRemoteMcpPending({ redirect_url: "https://example.com/article" }, "unrelated")).toBeNull();
   });
+  it("recognizes Connect Hub hub_connect links only on the connection's configured hub origin", () => {
+    const hubConnect = (url: string) => ({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ connect_url: url, expires_at: "2026-11-02T12:00:00.000Z" }) }] } });
+    expect(extractRemoteMcpPending(hubConnect("https://hub.example/connect/ln_1?sig=abc"), "connecthub", "hub_connect", { endpoint: "https://hub.example/mcp" }))
+      .toEqual({ kind: "authorization", links: [{ url: "https://hub.example/connect/ln_1?sig=abc", host: "hub.example" }], expiresAt: "2026-11-02T12:00:00.000Z" });
+    // A foreign host is never trusted, even with the hub's path shape.
+    expect(extractRemoteMcpPending(hubConnect("https://attacker.example/connect/ln_1?sig=abc"), "connecthub", "hub_connect", { endpoint: "https://hub.example/mcp" })).toBeNull();
+    expect(extractRemoteMcpPending(hubConnect("https://hub.example:8443/connect/ln_1"), "connecthub", "hub_connect", { endpoint: "https://hub.example/mcp" })).toBeNull();
+    // No configured endpoint, a non-https hub, another tool or another provider: no handoff.
+    expect(extractRemoteMcpPending(hubConnect("https://hub.example/connect/ln_1"), "connecthub", "hub_connect")).toBeNull();
+    expect(extractRemoteMcpPending(hubConnect("https://hub.example/connect/ln_1"), "connecthub", "hub_connect", { endpoint: "http://hub.example/mcp" })).toBeNull();
+    expect(extractRemoteMcpPending(hubConnect("https://hub.example/connect/ln_1"), "connecthub", "github__github_get_issue", { endpoint: "https://hub.example/mcp" })).toBeNull();
+    expect(extractRemoteMcpPending(hubConnect("https://hub.example/connect/ln_1"), "composio", "hub_connect", { endpoint: "https://hub.example/mcp" })).toBeNull();
+  });
+  it("keeps Connect Hub's -32042 URL elicitation on the generic protocol path", () => {
+    const pending = extractRemoteMcpPending({ jsonrpc: "2.0", id: 1, error: { code: -32042, message: "connect", data: { elicitations: [{ mode: "url", elicitationId: "ln_9", url: "https://hub.example/connect/ln_9?sig=x", message: "Connect GitHub" }] } } }, "connecthub", "github__github_get_issue", { endpoint: "https://hub.example/mcp" });
+    expect(pending).toMatchObject({ kind: "authorization", elicitationId: "ln_9", links: [{ host: "hub.example", elicitationId: "ln_9" }] });
+  });
   it("preserves URL elicitation identities and drops unsafe navigation targets", () => {
     const elicitations = [
       { mode: "url", elicitationId: "consent-1", url: "https://provider.example/approve" },
@@ -33,6 +50,17 @@ describe("remote MCP provider handoffs", () => {
       }
       expect(extractRemoteMcpPending({ result: { structuredContent: { mode: "url", elicitationId: "app-field", url: "https://example.com" } } }, provider)).toBeNull();
     }
+  });
+  it("classifies Connect Hub meta tools by review and app tools by their annotations", () => {
+    expect(classifyRisk({ name: "hub_execute" }, "connecthub")).toBe("destructive");
+    expect(classifyRisk({ name: "hub_execute", annotations: { readOnlyHint: true, destructiveHint: false } }, "connecthub")).toBe("destructive");
+    for (const name of ["hub_list_connections", "hub_list_options", "hub_search_tools", "hub_get_tool_schema"]) expect(classifyRisk({ name, annotations: { readOnlyHint: true } }, "connecthub")).toBe("read");
+    expect(classifyRisk({ name: "hub_connect", annotations: { readOnlyHint: false, destructiveHint: false } }, "connecthub")).toBe("write");
+    expect(classifyRisk({ name: "google-drive__drive_list_permissions", annotations: { readOnlyHint: true } }, "connecthub")).toBe("read");
+    expect(classifyRisk({ name: "gmail__gmail_send_email", annotations: { readOnlyHint: false, destructiveHint: false } }, "connecthub")).toBe("write");
+    expect(classifyRisk({ name: "github__github_delete_repo", annotations: { readOnlyHint: false, destructiveHint: true } }, "connecthub")).toBe("destructive");
+    expect(classifyRisk({ name: "github__github_delete_repo", annotations: { readOnlyHint: true } }, "connecthub")).toBe("destructive");
+    expect(classifyRisk({ name: "acme__do_something" }, "connecthub")).toBe("write");
   });
   it("classifies broad execution and resume as writes even without annotations", () => {
     for (const name of ["execute", "resume", "edit-artifact"]) expect(classifyRisk({ name }, "executor")).toBe("write");

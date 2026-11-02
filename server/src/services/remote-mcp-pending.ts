@@ -1,13 +1,19 @@
 import { redactEventPayload, redactSensitiveText } from "../redaction.js";
 import { checkOAuthEndpointUrl, type ToolUpstreamPending } from "@paperclipai/shared";
+import { connectHubOrigin } from "@paperclipai/shared/aggregator-apps";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+export interface RemoteMcpPendingOptions {
+  /** The connection's configured endpoint. Connect Hub links are trusted only on its origin. */
+  endpoint?: string | URL | null;
+}
+
 /** Recognize protocol/provider envelopes, never generic app-data statuses.
  * Links are navigation targets kept outside durable result/audit storage. */
-export function extractRemoteMcpPending(value: unknown, provider?: string | null, toolName?: string): ToolUpstreamPending | null {
+export function extractRemoteMcpPending(value: unknown, provider?: string | null, toolName?: string, options: RemoteMcpPendingOptions = {}): ToolUpstreamPending | null {
   const root = record(value);
   if (!root) return null;
   const links = new Map<string, { url: string; host: string; elicitationId?: string }>();
@@ -56,6 +62,17 @@ export function extractRemoteMcpPending(value: unknown, provider?: string | null
       && typeof payload.authorization_url === "string") {
       addLink(payload.authorization_url);
       pending ??= { kind: "authorization", links: [] };
+    }
+    // hub_connect returns {connect_url, expires_at}. The hub is self-hosted, so
+    // its link is trusted only on the connection's own configured origin.
+    if (provider === "connecthub" && toolName === "hub_connect" && typeof payload.connect_url === "string") {
+      const origin = connectHubOrigin(options.endpoint);
+      const checked = checkOAuthEndpointUrl(payload.connect_url);
+      if (origin && checked.ok && new URL(checked.url).origin === origin) {
+        addLink(checked.url);
+        pending ??= { kind: "authorization", links: [] };
+        if (typeof payload.expires_at === "string" && Number.isFinite(Date.parse(payload.expires_at))) pending.expiresAt = payload.expires_at;
+      }
     }
     // This tool returns connection handoffs keyed by app. Other Composio tools
     // may return arbitrary application data with redirect_url/status fields.

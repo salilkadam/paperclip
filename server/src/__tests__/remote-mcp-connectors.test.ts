@@ -104,13 +104,15 @@ describe("remote connector lifecycle", () => {
     app.use("/api", toolAccessRoutes(db, { paperclipCloudConnector: null }));
     const gallery = await request(app).get(`/api/companies/${org.id}/tools/gallery`);
     expect(gallery.status).toBe(200);
-    expect(gallery.body.apps.map((entry: { slug: string }) => entry.slug)).toEqual(expect.arrayContaining(["zapier", "arcade", "composio", "executor", "notion"]));
+    expect(gallery.body.apps.map((entry: { slug: string }) => entry.slug)).toEqual(expect.arrayContaining(["zapier", "arcade", "composio", "executor", "connecthub", "notion"]));
     expect(gallery.body.apps.some((entry: { slug: string }) => entry.slug === "mem0")).toBe(false);
     for (const [galleryKey, connectionMethodKey, link] of [
       ["zapier", "generated-url", "https://mcp.zapier.com/api/v1/connect?token=fixture-secret"],
       ["arcade", "mcp", "https://api.arcade.dev/mcp/fixture"],
       ["composio", "mcp", "https://connect.composio.dev/mcp"],
       ["executor", "mcp", "https://example.com/mcp"],
+      // Self-hosted: any operator hub address, never a fixed host.
+      ["connecthub", "mcp", "https://hub.example.org/mcp"],
     ]) {
       const connected = await remote.service.connectGalleryApp(org.id, { galleryKey, connectionMethodKey, link, authMode: "none" }, actor);
       expect(connected.catalog).toHaveLength(3);

@@ -6638,7 +6638,7 @@ export function createToolGatewayService(
       }
       const payloadRecord = asRecord(payload);
       if (!payloadRecord) throw malformedRemoteMcpResponse();
-      const upstreamPending = extractRemoteMcpPending(payloadRecord, String(connection.config.sourceTemplateKey ?? ""), entry.toolName);
+      const upstreamPending = extractRemoteMcpPending(payloadRecord, String(connection.config.sourceTemplateKey ?? ""), entry.toolName, { endpoint });
       if (upstreamPending) {
         await retainUpstreamHandoff(invocationId, upstreamPending);
         throw new ToolGatewayHttpError(409, "Complete the provider's authorization or approval before continuing. The original call has not been replayed.", "provider_interaction_required", { upstreamPending, invocationId });

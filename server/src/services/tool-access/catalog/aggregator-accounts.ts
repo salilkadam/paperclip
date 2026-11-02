@@ -1,15 +1,16 @@
 import { actorForSecret } from "../oauth/credential-store.js";
 import type { ActorInfo } from "../types.js";
 import { remoteEndpoint, projectedConnectionHeaders } from "../connection-methods.js";
-import { AGGREGATOR_NAMES, isAppAggregator, type AggregatorAppsResponse, type ArcadeDiscoverySetupInput } from "@paperclipai/shared/aggregator-apps";
+import { AGGREGATOR_NAMES, CONNECT_HUB_DISCOVERY_TOOLS, aggregatorManagementUrl, isAppAggregator, type AggregatorAppsResponse, type ArcadeDiscoverySetupInput } from "@paperclipai/shared/aggregator-apps";
 import { resolveAggregatorApp, type AppCatalogAggregator } from "@paperclipai/shared/aggregator-app-catalog";
-import { AggregatorDiscoveryUnavailableError, discoverArcadeApps, discoverExecutorApps, type DiscoveredApp } from "../../aggregator-app-discovery.js";
+import { AggregatorDiscoveryUnavailableError, connectHubConnectLink, discoverArcadeApps, discoverConnectHubApps, discoverExecutorApps, type DiscoveredApp, type McpCall } from "../../aggregator-app-discovery.js";
 import { COMPOSIO_APP_TOOLKITS, findComposioCatalogApp } from "@paperclipai/shared/aggregator-app-catalog";
 import type { ComposioAppAccount, ComposioAppAccountInput, ComposioAppSetupInput, ComposioAppSetupResult, ComposioAppSnapshot, ComposioAppsResponse } from "@paperclipai/shared";
 import { composioAppAccounts, composioAppSetupResult } from "../../composio-app-setup.js";
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import type { ToolAccessMutationDb } from "../types.js";
 import { companySecrets, toolAccessAuditEvents, toolCatalogEntries, toolConnectionAppSnapshots, toolConnectionAppSyncs, toolConnections } from "@paperclipai/db";
 import { conflict, forbidden, HttpError, notFound, unprocessable } from "../../../errors.js";
 import { logActivity } from "../../activity-log.js";
@@ -47,7 +48,7 @@ export function createAggregatorAccounts(db: Db, { options, secrets, audit, cred
   const composioSyncLeaseMs = 4 * 60_000;
 
   async function composioCredentialKey(connection: typeof toolConnections.$inferSelect, actor: ActorInfo) {
-    const usesConnectionRefs = ["arcade", "executor"].includes(String(connection.config.sourceTemplateKey)) && connection.authKind !== "oauth" && connection.credentialPolicy === "shared";
+    const usesConnectionRefs = ["arcade", "executor", "connecthub"].includes(String(connection.config.sourceTemplateKey)) && connection.authKind !== "oauth" && connection.credentialPolicy === "shared";
     const grant = usesConnectionRefs ? null : await vaultGrantForConnection(connection, actor);
     const refs = grant?.credentialSecretRefs ?? connection.credentialSecretRefs;
     const discovery = asRecord(asRecord(connection.config.aggregatorDiscovery)[actor.actorId!]);
@@ -56,7 +57,7 @@ export function createAggregatorAccounts(db: Db, { options, secrets, audit, cred
       .where(and(eq(companySecrets.companyId, connection.companyId), inArray(companySecrets.id, ids))).orderBy(asc(companySecrets.id)) : [];
     return createHash("sha256").update(JSON.stringify({ grant: grant?.id, refs, versions,
       ...(Object.keys(discovery).length ? { discovery } : {}),
-      ...(connection.config.sourceTemplateKey === "arcade" || connection.config.sourceTemplateKey === "executor"
+      ...(["arcade", "executor", "connecthub"].includes(String(connection.config.sourceTemplateKey))
         ? { headers: projectedConnectionHeaders(connection), managementUrl: connection.config.managementUrl } : {}), endpoint: remoteEndpoint(connection.config), policy: connection.credentialPolicy, connectedAt: asRecord(connection.config.oauth)?.connectedAt })).digest("hex");
   }
 
@@ -247,7 +248,8 @@ export function createAggregatorAccounts(db: Db, { options, secrets, audit, cred
       eq(toolCatalogEntries.companyId, connection.companyId), eq(toolCatalogEntries.connectionId, connection.id), eq(toolCatalogEntries.status, "active"),
     ));
     if ((provider === "executor" && !catalog.some(tool => ["integrations", "execute"].includes(tool.name)))
-      || (provider === "composio" && !catalog.some(tool => tool.name === "COMPOSIO_MANAGE_CONNECTIONS"))) {
+      || (provider === "composio" && !catalog.some(tool => tool.name === "COMPOSIO_MANAGE_CONNECTIONS"))
+      || (provider === "connecthub" && !catalog.some(tool => tool.name === "hub_list_connections"))) {
       return { availability: "unsupported", message: `${AGGREGATOR_NAMES[provider]} account discovery is unavailable on this gateway. Refresh its actions or check its setup.` };
     }
     if (!retryUnsupported && provider === "executor") {
@@ -269,7 +271,7 @@ export function createAggregatorAccounts(db: Db, { options, secrets, audit, cred
     return { provider, discovery, apps: result.apps.map(snapshot => {
       const app = resolveAggregatorApp(provider, snapshot.toolkit, snapshot.accounts[0]?.appName);
       return { ...snapshot, provider, freshness: discovery.availability !== "available" || snapshot.errorAt || result.sync.status === "error" || connection.status !== "active" || !connection.enabled || Date.now() - new Date(snapshot.checkedAt).getTime() > composioSyncTtlMs ? "stale" as const : "fresh" as const, appSlug: app.slug.startsWith(`${provider}:`) ? `${provider}:${connection.id}:${snapshot.toolkit}` : snapshot.accounts[0]?.appSlug ?? app.slug, appName: snapshot.accounts[0]?.appName ?? app.name };
-    }), sync: { ...result.sync, coverage: provider === "composio" ? "supported_catalog" : provider === "arcade" ? "gateway_tools" : "visible_accounts",
+    }), sync: { ...result.sync, coverage: provider === "composio" ? "supported_catalog" : provider === "arcade" || provider === "connecthub" ? "gateway_tools" : "visible_accounts",
       error: result.sync.error ? `Couldn’t finish checking ${AGGREGATOR_NAMES[provider]} apps. Refresh to try again.` : null,
     } };
   }
@@ -305,20 +307,96 @@ export function createAggregatorAccounts(db: Db, { options, secrets, audit, cred
         return response.json();
       } });
     }
+    const call = mcpToolCaller(connection, actor, endpoint, headers, "inventory", `${AGGREGATOR_NAMES[provider]} could not list your accounts. Reconnect if sign-in expired.`);
+    const toolNames = tools.map(tool => tool.name);
+    if (provider === "connecthub") {
+      return discoverConnectHubApps({ call, toolNames, managementUrl: aggregatorManagementUrl("connecthub", typeof connection.config.managementUrl === "string" ? connection.config.managementUrl : null, endpoint) });
+    }
+    return discoverExecutorApps({ toolNames, managementUrl: typeof connection.config.managementUrl === "string" ? connection.config.managementUrl : null, call });
+  }
+
+  /** One MCP tools/call channel on the caller's own credentials. Reads may re-open an expired session once. */
+  function mcpToolCaller(connection: typeof toolConnections.$inferSelect, actor: ActorInfo, endpoint: URL, headers: Record<string, string>, purpose: string, failure: string): McpCall {
     const send = (init: RequestInit) => requestRemoteHttpEndpoint(endpoint, { ...init, signal: AbortSignal.timeout(30_000) });
-    let sessionHeaders = connection.config.mcpSessionRequired === true ? await getMcpHttpSession({ send, headers, scope: `${connection.id}:inventory:${actor.actorId}`, requestId: "paperclip-account-inventory" }) : headers;
-    return discoverExecutorApps({ toolNames: tools.map(tool => tool.name), managementUrl: typeof connection.config.managementUrl === "string" ? connection.config.managementUrl : null,
-      call: async (name, args) => {
-        const id = `paperclip-account-inventory-${randomUUID()}`;
-        const request = () => send({ method: "POST", headers: mcpHttpRequestHeaders(sessionHeaders), body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) });
-        let response = await request();
-        if (response.status === 400 || response.status === 404) {
-          await response.body?.cancel(); sessionHeaders = await initializeMcpHttpSession({ send, headers, requestId: id }); response = await request();
-        }
-        if (!response.ok) { await response.body?.cancel(); throw new HttpError(502, "Executor could not list your accounts. Reconnect if sign-in expired."); }
-        return readMcpHttpResponse(response, id);
-      },
+    let sessionHeaders: Promise<Record<string, string>> | Record<string, string> = connection.config.mcpSessionRequired === true
+      ? getMcpHttpSession({ send, headers, scope: `${connection.id}:${purpose}:${actor.actorId}`, requestId: `paperclip-account-${purpose}` }) : headers;
+    return async (name, args, options: { retry?: boolean } = {}) => {
+      const id = `paperclip-account-${purpose}-${randomUUID()}`;
+      const request = async () => send({ method: "POST", headers: mcpHttpRequestHeaders(await sessionHeaders), body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) });
+      let response = await request();
+      if (options.retry !== false && (response.status === 400 || response.status === 404)) {
+        await response.body?.cancel(); sessionHeaders = await initializeMcpHttpSession({ send, headers, requestId: id }); response = await request();
+      }
+      if (!response.ok) { await response.body?.cancel(); throw new HttpError(502, failure); }
+      return readMcpHttpResponse(response, id);
+    };
+  }
+
+  /** Commit one complete enumeration; a failed later read cannot delete accounts. */
+  async function writeInventorySnapshots(tx: ToolAccessMutationDb, connection: typeof toolConnections.$inferSelect, actor: ActorInfo, credentialKey: string, apps: DiscoveredApp[], checkedAt: Date) {
+    await tx.update(toolConnectionAppSnapshots).set({ accounts: [], status: "not_connected", checkedAt, errorAt: null }).where(and(
+      eq(toolConnectionAppSnapshots.companyId, connection.companyId), eq(toolConnectionAppSnapshots.connectionId, connection.id), eq(toolConnectionAppSnapshots.userId, actor.actorId!), eq(toolConnectionAppSnapshots.credentialKey, credentialKey),
+    ));
+    for (const app of apps) await tx.insert(toolConnectionAppSnapshots).values({ companyId: connection.companyId, connectionId: connection.id, userId: actor.actorId!, credentialKey,
+      toolkit: app.toolkit, accounts: app.accounts, status: app.accounts.some(account => account.status === "ACTIVE") ? "connected" : "not_connected", checkedAt,
+    }).onConflictDoUpdate({ target: [toolConnectionAppSnapshots.companyId, toolConnectionAppSnapshots.connectionId, toolConnectionAppSnapshots.userId, toolConnectionAppSnapshots.toolkit],
+      set: { accounts: app.accounts, status: app.accounts.some(account => account.status === "ACTIVE") ? "connected" : "not_connected", checkedAt, errorAt: null, credentialKey },
     });
+  }
+
+  /** Connect Hub's own hub_connect tool hands the person a link on the hub; Paperclip never sees the credential. */
+  async function setupConnectHubApp(connectionId: string, toolkit: string, input: ComposioAppSetupInput, actor: ActorInfo): Promise<ComposioAppSetupResult> {
+    if (actor.actorType !== "user" || !actor.actorId) throw forbidden("A human connection manager must configure this app");
+    await resolveCredentialHeaders(await getConnectionRow(connectionId), actor);
+    const connection = await getConnectionRow(connectionId);
+    if (aggregatorProvider(connection) !== "connecthub" || connection.status !== "active" || !connection.enabled) throw unprocessable("Connect your Connect Hub server first");
+    const catalog = await db.select({ name: toolCatalogEntries.toolName }).from(toolCatalogEntries).where(and(
+      eq(toolCatalogEntries.companyId, connection.companyId), eq(toolCatalogEntries.connectionId, connection.id), eq(toolCatalogEntries.status, "active"),
+    ));
+    if (!CONNECT_HUB_DISCOVERY_TOOLS.every(name => catalog.some(tool => tool.name === name))) throw unprocessable("Refresh your Connect Hub server's actions before configuring this app");
+    const endpoint = new URL(await resolvedRemoteEndpoint(connection, actor));
+    const headers = { ...projectedConnectionHeaders(connection), ...(await resolveCredentialHeaders(connection, actor)) };
+    const credentialKey = await composioCredentialKey(connection, actor);
+    const call = mcpToolCaller(connection, actor, endpoint, headers, "app-setup", "Connect Hub could not check this app. Reconnect the server if its token expired.");
+    const managementUrl = aggregatorManagementUrl("connecthub", typeof connection.config.managementUrl === "string" ? connection.config.managementUrl : null, endpoint);
+    let apps: DiscoveredApp[];
+    try {
+      apps = await discoverConnectHubApps({ call, toolNames: catalog.map(tool => tool.name), managementUrl });
+    } catch (error) {
+      // Keep prior observations, but never present a failed read as current authorization.
+      await db.update(toolConnectionAppSnapshots).set({ errorAt: new Date() }).where(and(
+        eq(toolConnectionAppSnapshots.companyId, connection.companyId), eq(toolConnectionAppSnapshots.connectionId, connection.id),
+        eq(toolConnectionAppSnapshots.userId, actor.actorId), eq(toolConnectionAppSnapshots.credentialKey, credentialKey),
+      ));
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(502, "Connect Hub did not return a complete app list. Refresh the accounts before trying again.", { code: "connecthub_app_setup_failed" });
+    }
+    const app = apps.find(candidate => candidate.toolkit === toolkit);
+    if (!app) throw notFound("This app is not on your Connect Hub server");
+    await db.transaction(async tx => {
+      if (await composioCredentialKey(await getConnectionRow(connectionId), actor) !== credentialKey) throw conflict("The Connect Hub server changed while checking apps. Refresh to check the current account.");
+      await writeInventorySnapshots(tx, connection, actor, credentialKey, apps, new Date());
+    });
+    const connected = app.accounts.some(account => account.status === "ACTIVE");
+    let result: ComposioAppSetupResult = { status: connected ? "connected" : "not_connected" };
+    if (input.action === "start" && !connected) {
+      // Creating a link is not idempotent, so a failed call is never retried automatically.
+      let link: string | null;
+      try { link = connectHubConnectLink(await call("hub_connect", { toolkit }, { retry: false }), endpoint); } catch (error) {
+        if (error instanceof HttpError) throw error;
+        throw unprocessable("Connect Hub could not create a sign-in link for this app. Check the app in Connect Hub.");
+      }
+      if (!link) throw unprocessable("Connect Hub did not return a sign-in link on its own address. Check the hub's public URL.");
+      result = { status: "authorization_required", authorizationUrl: link };
+    }
+    if (input.action === "complete") {
+      if (!connected) throw conflict("Finish connecting this app in Connect Hub, then check again");
+      const current = await getConnectionRow(connectionId);
+      if (current.status !== "active" || !current.enabled) throw conflict("The server is no longer active. Restore it before connecting this app.");
+    }
+    await audit({ companyId: connection.companyId, connectionId, action: "tool_connection.upstream_app_setup", outcome: "success", actor,
+      details: { provider: "connecthub", toolkit, action: input.action, status: result.status } });
+    return result;
   }
 
   async function syncAggregatorApps(connectionId: string, force: boolean, actor: ActorInfo): Promise<AggregatorAppsResponse> {
@@ -354,14 +432,7 @@ export function createAggregatorAccounts(db: Db, { options, secrets, audit, cred
               || await composioCredentialKey(current, actor) !== credentialKey) throw conflict("The gateway changed during account discovery");
             const checkedAt = new Date();
             // Commit the entire enumeration at once; a failed later page cannot delete accounts.
-            await tx.update(toolConnectionAppSnapshots).set({ accounts: [], status: "not_connected", checkedAt, errorAt: null }).where(and(
-              eq(toolConnectionAppSnapshots.companyId, connection.companyId), eq(toolConnectionAppSnapshots.connectionId, connectionId), eq(toolConnectionAppSnapshots.userId, actor.actorId!), eq(toolConnectionAppSnapshots.credentialKey, credentialKey),
-            ));
-            for (const app of apps) await tx.insert(toolConnectionAppSnapshots).values({ companyId: connection.companyId, connectionId, userId: actor.actorId!, credentialKey,
-              toolkit: app.toolkit, accounts: app.accounts, status: app.accounts.some(account => account.status === "ACTIVE") ? "connected" : "not_connected", checkedAt,
-            }).onConflictDoUpdate({ target: [toolConnectionAppSnapshots.companyId, toolConnectionAppSnapshots.connectionId, toolConnectionAppSnapshots.userId, toolConnectionAppSnapshots.toolkit],
-              set: { accounts: app.accounts, status: app.accounts.some(account => account.status === "ACTIVE") ? "connected" : "not_connected", checkedAt, errorAt: null, credentialKey },
-            });
+            await writeInventorySnapshots(tx, connection, actor, credentialKey, apps, checkedAt);
             await tx.update(toolConnectionAppSyncs).set({ status: "ready", checked: apps.length, total: apps.length, failed: 0, updatedAt: checkedAt, lastCompletedAt: checkedAt }).where(eq(toolConnectionAppSyncs.id, lease.id));
           });
         } catch (error) {
@@ -399,27 +470,36 @@ export function createAggregatorAccounts(db: Db, { options, secrets, audit, cred
     await logActivity(db, { companyId, actorType: "user", actorId: actor.actorId!, action: "tool_connection.account_sync_configured", entityType: "tool_connection", entityId: connectionId, details: { provider: "arcade" } });
     return syncAggregatorApps(connectionId, true, actor);
   }
+  async function setupComposioApp(connectionId: string, toolkit: string, input: ComposioAppSetupInput, actor: ActorInfo): Promise<ComposioAppSetupResult> {
+    if (!findComposioCatalogApp(toolkit)) throw notFound("This Composio app is not in the catalog");
+    const { connection, manage } = await openComposioGateway(connectionId, actor);
+    let result = composioAppSetupResult(await manage([{ name: toolkit, action: "list" }]), toolkit);
+    if (input.action === "start" && result.status !== "connected") {
+      result = composioAppSetupResult(await manage([{ name: toolkit, action: "add" }]), toolkit);
+      if (result.status === "not_connected") throw unprocessable("Composio did not return a sign-in link for this app. Manage it in Composio to check its setup requirements.");
+    }
+    if (input.action === "complete") {
+      if (result.status !== "connected") throw conflict("Finish connecting this app in Composio, then check again");
+      const currentConnection = await getConnectionRow(connectionId);
+      if (currentConnection.status !== "active" || !currentConnection.enabled) {
+        throw conflict("The gateway is no longer active. Restore it before connecting this app.");
+      }
+    }
+    await audit({ companyId: connection.companyId, connectionId, action: "tool_connection.upstream_app_setup", outcome: "success", actor,
+      details: { toolkit, action: input.action, status: result.status } });
+    return result;
+  }
+
   return {
     syncAggregatorApps, configureArcadeDiscovery,
-    async setupComposioApp(connectionId: string, toolkit: string, input: ComposioAppSetupInput, actor: ActorInfo): Promise<ComposioAppSetupResult> {
-      if (!findComposioCatalogApp(toolkit)) throw notFound("This Composio app is not in the catalog");
-      const { connection, manage } = await openComposioGateway(connectionId, actor);
-      let result = composioAppSetupResult(await manage([{ name: toolkit, action: "list" }]), toolkit);
-      if (input.action === "start" && result.status !== "connected") {
-        result = composioAppSetupResult(await manage([{ name: toolkit, action: "add" }]), toolkit);
-        if (result.status === "not_connected") throw unprocessable("Composio did not return a sign-in link for this app. Manage it in Composio to check its setup requirements.");
-      }
-      if (input.action === "complete") {
-        if (result.status !== "connected") throw conflict("Finish connecting this app in Composio, then check again");
-        const currentConnection = await getConnectionRow(connectionId);
-        if (currentConnection.status !== "active" || !currentConnection.enabled) {
-          throw conflict("The gateway is no longer active. Restore it before connecting this app.");
-        }
-      }
-      await audit({ companyId: connection.companyId, connectionId, action: "tool_connection.upstream_app_setup", outcome: "success", actor,
-        details: { toolkit, action: input.action, status: result.status } });
-      return result;
+    /** Provider-neutral app setup. Composio and Connect Hub can start an authorization handoff. */
+    async setupAggregatorApp(connectionId: string, toolkit: string, input: ComposioAppSetupInput, actor: ActorInfo): Promise<ComposioAppSetupResult> {
+      const provider = aggregatorProvider(await getConnectionRow(connectionId));
+      if (provider === "connecthub") return setupConnectHubApp(connectionId, toolkit, input, actor);
+      if (provider === "composio") return setupComposioApp(connectionId, toolkit, input, actor);
+      throw unprocessable(`${AGGREGATOR_NAMES[provider]} apps are connected in ${AGGREGATOR_NAMES[provider]}. Open it to manage this app.`);
     },
+    setupComposioApp,
     listAggregatorApps: async (connectionId: string, actor: ActorInfo) => aggregatorAppsResponse(await getConnectionRow(connectionId), actor),
     refreshAggregatorApps: async (connectionId: string, requested: string[], actor: ActorInfo) => {
       const connection = await getConnectionRow(connectionId);

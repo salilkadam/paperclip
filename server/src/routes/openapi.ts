@@ -1537,6 +1537,7 @@ const BOARD_ONLY_OPERATIONS = new Set([
   "GET /api/tool-connections/{connectionId}/aggregator/apps",
   "POST /api/tool-connections/{connectionId}/aggregator/apps/sync",
   "POST /api/tool-connections/{connectionId}/aggregator/apps/refresh",
+  "POST /api/tool-connections/{connectionId}/aggregator/apps/{toolkit}/setup",
   "PUT /api/tool-connections/{connectionId}/aggregator/discovery",
   "GET /api/tool-connections/{connectionId}/composio/apps",
   "POST /api/tool-connections/{connectionId}/composio/apps/sync",
@@ -11620,6 +11621,11 @@ registerCurrentRoute({
   method: "put", path: "/api/tool-connections/{connectionId}/aggregator/discovery", tags: ["tool-access"],
   summary: "Save manager-owned optional Arcade account discovery credentials",
   body: arcadeDiscoverySetupSchema,
+});
+registerCurrentRoute({
+  method: "post", path: "/api/tool-connections/{connectionId}/aggregator/apps/{toolkit}/setup", tags: ["tool-access"],
+  summary: "Start or verify app authorization through a saved Composio or Connect Hub connection",
+  body: composioAppSetupSchema,
 });
 registerCurrentRoute({
   method: "post", path: "/api/tool-connections/{connectionId}/composio/apps/{toolkit}/setup", tags: ["tool-access"],
