@@ -162,24 +162,6 @@ export function createBoardCardDecisions(db: Db, deps: BoardCardDecisionDeps) {
             const [owned] = await tx.update(chatActions).set({ status: "processed", principalId: click.principalId, result: { decidedByUserId: click.userId, interactionStatus: resolved.status }, updatedAt: new Date() })
               .where(and(eq(chatActions.id, token.id), eq(chatActions.status, "issued"))).returning({ id: chatActions.id });
             if (!owned) throw new Refused("this button was already used");
-            // Wake whoever holds the task now: accepting can hand it back to the creating agent.
-            const [current] = await tx.select({ assigneeAgentId: issues.assigneeAgentId }).from(issues).where(eq(issues.id, issue.id));
-            const wakeAgentId = current?.assigneeAgentId ?? null;
-            const policy = interaction.continuationPolicy;
-            const shouldWake = policy !== "none" && !(policy === "wake_assignee_on_accept" && resolved.status !== "accepted");
-            if (wakeAgentId && shouldWake) {
-              await tx.insert(chatActions).values({
-                companyId: issue.companyId, endpointId: click.endpoint.id, conversationId: null, principalId: click.principalId,
-                kind: "interaction_wakeup", providerActionId: `interaction_wakeup:${resolved.id}`,
-                payload: {
-                  version: 1, interactionId: resolved.id, interactionKind: interaction.kind, interactionStatus: resolved.status,
-                  issueId: issue.id, agentId: wakeAgentId, sourceCommentId: interaction.sourceCommentId ?? null,
-                  sourceRunId: interaction.sourceRunId ?? null, requestedByUserId: click.userId,
-                  requestedByActorType: "user", requestedByActorId: click.userId,
-                },
-                status: "issued",
-              }).onConflictDoNothing();
-            }
             // The same activity the UI writes, so the timeline, wake throttle and participation see it.
             await logActivity(tx as unknown as Db, {
               companyId: issue.companyId, actorType: "user", actorId: click.userId,
@@ -193,6 +175,29 @@ export function createBoardCardDecisions(db: Db, deps: BoardCardDecisionDeps) {
           await svc.acceptInteraction(issue, interaction.id, {}, { userId: click.userId }, hooks as never);
         } else {
           await svc.rejectInteraction(issue, interaction.id, {}, { userId: click.userId }, hooks as never);
+        }
+        // Wake after the service returns: accepting can hand the task back to the
+        // creating agent, which happens after the in-transaction hook (as in the UI,
+        // which wakes the continuation issue's assignee after the transaction).
+        const [resolvedRow] = await db.select({ status: issueThreadInteractions.status }).from(issueThreadInteractions).where(eq(issueThreadInteractions.id, interaction.id));
+        const [current] = await db.select({ assigneeAgentId: issues.assigneeAgentId }).from(issues).where(eq(issues.id, issue.id));
+        const resolvedStatus = resolvedRow?.status ?? "unknown";
+        const policy = interaction.continuationPolicy;
+        const shouldWake = policy !== "none" && !(policy === "wake_assignee_on_accept" && resolvedStatus !== "accepted");
+        if (current?.assigneeAgentId && shouldWake && ["accepted", "rejected"].includes(resolvedStatus)) {
+          await db.transaction(async (tx) => {
+            await tx.insert(chatActions).values({
+              companyId: issue.companyId, endpointId: click.endpoint.id, conversationId: null, principalId: click.principalId,
+              kind: "interaction_wakeup", providerActionId: `interaction_wakeup:${interaction.id}`,
+              payload: {
+                version: 1, interactionId: interaction.id, interactionKind: interaction.kind, interactionStatus: resolvedStatus,
+                issueId: issue.id, agentId: current.assigneeAgentId, sourceCommentId: interaction.sourceCommentId ?? null,
+                sourceRunId: interaction.sourceRunId ?? null, requestedByUserId: click.userId,
+                requestedByActorType: "user", requestedByActorId: click.userId,
+              },
+              status: "issued",
+            }).onConflictDoNothing();
+          });
         }
       }
     } catch (error) {
