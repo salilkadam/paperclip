@@ -111,6 +111,13 @@ fi
 DSH_LOG=/tmp/dsh-events.jsonl
 : > "$DSH_LOG"
 DSH_STARTED_AT="$(date +%s)"
+# Read by record_run and the trap, some of which now run before the session
+# has set them. These scripts run under `set -u`, and an unset read there kills
+# the record silently.
+DSH_RC=
+DSH_PID=
+DSH_TAIL=
+DSH_HB=
 
 # Evidence must outlive the pod. On a deadline kill the Job controller deletes
 # the pod in the same second, so `kubectl logs` is unreadable afterwards and
