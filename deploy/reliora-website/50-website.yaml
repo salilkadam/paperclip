@@ -1,0 +1,60 @@
+# reliora.ai served from the release volume (cutover step 5). One fixed nginx
+# image; no site files in it. The pod holds no token and no Secret, mounts the
+# releases read-only, and has no egress (NetworkPolicy site-web).
+# Rollback of the cutover: apply the previous Deployment from
+# Reliora-Inc/reliora-website k8s/50-website-deployment.yaml (image 0.20.0-f8c6502).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: site-nginx-bootstrap
+  namespace: reliora-website
+data:
+  default.conf: |
+    include /srv/site/current/default.conf;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reliora-website
+  namespace: reliora-website
+  labels: {app.kubernetes.io/name: reliora-website, app.kubernetes.io/component: web, app.kubernetes.io/part-of: reliora}
+  annotations:
+    reliora.ai/serving: release-volume   # the deployer smoke-tests and rolls back only when this is set
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels: {app.kubernetes.io/name: reliora-website}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: reliora-website, app.kubernetes.io/component: web, app.kubernetes.io/part-of: reliora}
+      annotations:
+        reliora.ai/config-hash: "set-by-the-deployer"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: {runAsUser: 101, runAsGroup: 101, fsGroup: 101, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions: [{key: kubernetes.io/hostname, operator: NotIn, values: [cp1]}]
+      containers:
+        - name: nginx
+          image: nginxinc/nginx-unprivileged:1.30.5-alpine@sha256:56b8272e43a0525f67aed68d1e0794a712d10e3e45a563e118e9a77c817e6f86
+          ports: [{name: http, containerPort: 8080, protocol: TCP}]
+          readinessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 2, periodSeconds: 10, timeoutSeconds: 1}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 5, periodSeconds: 20, timeoutSeconds: 1}
+          resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 200m, memory: 96Mi}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          volumeMounts:
+            - {name: releases, mountPath: /srv/site, readOnly: true}
+            - {name: bootstrap, mountPath: /etc/nginx/conf.d, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: releases, persistentVolumeClaim: {claimName: site-releases, readOnly: true}}
+        - {name: bootstrap, configMap: {name: site-nginx-bootstrap}}
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}

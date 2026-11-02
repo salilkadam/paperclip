@@ -40,9 +40,10 @@ can-i() {
 }
 
 echo "=== Website agent (paperclip-agent-web-sa) ==="
-# May patch the two pinned marketing deployments.
+# May patch the Bionic marketing deployment. reliora.ai is deployed by the site
+# deployer only.
 can-i yes patch deployments/baisoln-web "${WEB_NS}" "${AGENT}"
-can-i yes patch deployments/reliora-website "${WEBSITE_NS}" "${AGENT}"
+can-i no patch deployments/reliora-website "${WEBSITE_NS}" "${AGENT}"
 # May observe its own namespace and the website namespaces.
 can-i yes get pods "${PAPERCLIP_NS}" "${AGENT}"
 can-i yes get pods/log "${PAPERCLIP_NS}" "${AGENT}"
@@ -64,7 +65,14 @@ can-i yes delete pods "${PAPERCLIP_NS}" "${HARNESS}"
 can-i yes create pods/exec "${PAPERCLIP_NS}" "${HARNESS}"
 can-i yes get secrets "${PAPERCLIP_NS}" "${HARNESS}"
 can-i yes create secrets "${WEB_NS}" "${HARNESS}"
-can-i yes delete deployments/reliora-website "${WEBSITE_NS}" "${HARNESS}"
+# Watch only in the Reliora website namespace (the site deployer's keys live there).
+can-i yes get deployments/reliora-website "${WEBSITE_NS}" "${HARNESS}"
+can-i yes get configmaps/site-deploy-state "${WEBSITE_NS}" "${HARNESS}"
+can-i no delete deployments/reliora-website "${WEBSITE_NS}" "${HARNESS}"
+can-i no get secrets "${WEBSITE_NS}" "${HARNESS}"
+can-i no create pods "${WEBSITE_NS}" "${HARNESS}"
+can-i no create jobs "${WEBSITE_NS}" "${HARNESS}"
+can-i no create pods/exec "${WEBSITE_NS}" "${HARNESS}"
 can-i yes patch deployments/baisoln-web "${WEB_NS}" "${HARNESS}"
 can-i yes delete pods "${DEMO_NS}" "${HARNESS}"
 # May NOT reach outside the monitored namespaces or go cluster-scoped.

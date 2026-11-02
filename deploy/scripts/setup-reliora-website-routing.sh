@@ -54,7 +54,8 @@ You build and ship pages on reliora.ai. The repository is https://github.com/Rel
 - Follow `docs/adding-a-page.md` in that repository, and read `docs/brand/BRAND-GUIDE.md` first. A page must match the existing site: use the existing classes and tokens, not new colours, fonts or layouts.
 - `npm run build` must pass. Put desktop and phone screenshots of the new page and the page you modelled it on in the pull request.
 - Blog posts go through Ghost, not this repository.
-- You cannot deploy yet: you have no cluster access. When the pull request is merged, say "merged, not deployed" and ask the board for the deploy. Do not call a page done until it is live on reliora.ai and you have checked it there.
+- A merge to `main` deploys the site within a few minutes. The deployer runs the site check and a smoke test, and puts the previous version back if the smoke test fails. You do not deploy by hand and have no cluster access.
+- After the merge, open the page on https://reliora.ai and check it. If it is not live after 15 minutes, report it to the board with the commit. Do not call a page done until you have seen it live.
 EOF
 cat > "$WORK/marketer.md" <<'EOF'
 ## Reliora website (reliora.ai)

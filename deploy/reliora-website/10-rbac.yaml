@@ -1,0 +1,62 @@
+# The deployer's identity. Every rule is limited by name where Kubernetes allows
+# it (top-level `create` cannot be, so the Lease is created here, not by the Job).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: site-deployer
+  namespace: reliora-website
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: site-deployer
+  namespace: reliora-website
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [site-deployer]
+    verbs: [get, update, patch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [site-deploy-state]
+    verbs: [get, patch]
+  # list and watch with resourceNames work because `kubectl rollout status`
+  # sends a metadata.name field selector
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [reliora-website]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: site-deployer
+  namespace: reliora-website
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: site-deployer}
+subjects:
+  - {kind: ServiceAccount, name: site-deployer, namespace: reliora-website}
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: site-deployer
+  namespace: reliora-website
+spec:
+  holderIdentity: ""
+  leaseDurationSeconds: 900
+---
+# Written by the deployer's report step; read by the SRE harness watchdog.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: site-deploy-state
+  namespace: reliora-website
+data:
+  state: "not_started"

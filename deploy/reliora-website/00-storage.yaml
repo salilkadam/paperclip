@@ -1,0 +1,12 @@
+# Release directories for reliora.ai. Written by the deployer only; the website
+# pods mount it read-only. cephfs-with-secrets: plain `cephfs` cannot provision.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: site-releases
+  namespace: reliora-website
+  labels: {app.kubernetes.io/part-of: reliora, app.kubernetes.io/component: site-deployer}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: cephfs-with-secrets
+  resources: {requests: {storage: 2Gi}}
