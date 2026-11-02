@@ -21,6 +21,7 @@ import {
   issueThreadInteractions,
   issues,
 } from "@paperclipai/db";
+import { HttpError } from "../../errors.js";
 import { logActivity } from "../activity-log.js";
 import { issueReadSqlCondition, type AuthorizationActor } from "../authorization.js";
 import { issueThreadInteractionService } from "../issue-thread-interactions.js";
@@ -131,44 +132,61 @@ export function createBoardCardDecisions(db: Db, deps: BoardCardDecisionDeps) {
       return { outcome: "already_decided" };
     }
 
+    let claimedByThisCall = false;
+    let gatewayCalled = false;
     try {
       if (payload.toolAction) {
-        // The gateway path the UI uses. Claim the token durably first: the
-        // gateway runs the approved action inline and may take a while.
+        // The gateway path the UI uses. Claim the token first; only the call
+        // that made the claim may ever hand it back.
         await db.transaction(async (tx) => {
           await assertBoardAuthority(tx, click, issue.id);
           const [claimed] = await tx.update(chatActions).set({ status: "processing", principalId: click.principalId, updatedAt: new Date() })
             .where(and(eq(chatActions.id, token.id), eq(chatActions.status, "issued"))).returning({ id: chatActions.id });
           if (!claimed) throw new Refused("this button was already used");
         });
+        claimedByThisCall = true;
         const decide = payload.decision === "accept" ? deps.approveToolAction : deps.declineToolAction;
         if (!decide || !payload.actionRequestId) throw new Refused("tool decisions are unavailable here; open it in Paperclip");
+        gatewayCalled = true;
         await decide({
           companyId: issue.companyId, issueId: issue.id, interactionId: interaction.id,
           actionRequestId: payload.actionRequestId, actor: { agentId: null, userId: click.userId },
         });
-        await db.update(chatActions).set({ status: "processed", result: { decidedByUserId: click.userId }, updatedAt: new Date() }).where(eq(chatActions.id, token.id));
+        await db.update(chatActions).set({ status: "processed", result: { decidedByUserId: click.userId }, updatedAt: new Date() })
+          .where(and(eq(chatActions.id, token.id), eq(chatActions.status, "processing")));
       } else {
         const svc = issueThreadInteractionService(db);
         const hooks = {
           beforeResolveInTransaction: async (tx: DbOrTransaction) => { await assertBoardAuthority(tx, click, issue.id); },
-          afterResolveInTransaction: async (tx: DbOrTransaction, resolved: { id: string; status: string; kind: string; sourceCommentId?: string | null; sourceRunId?: string | null; continuationPolicy?: string }) => {
+          afterResolveInTransaction: async (tx: DbOrTransaction, resolved: { id: string; status: string; kind: string }) => {
             const [owned] = await tx.update(chatActions).set({ status: "processed", principalId: click.principalId, result: { decidedByUserId: click.userId, interactionStatus: resolved.status }, updatedAt: new Date() })
               .where(and(eq(chatActions.id, token.id), eq(chatActions.status, "issued"))).returning({ id: chatActions.id });
             if (!owned) throw new Refused("this button was already used");
-            if (issue.assigneeAgentId && interaction.continuationPolicy !== "none") {
+            // Wake whoever holds the task now: accepting can hand it back to the creating agent.
+            const [current] = await tx.select({ assigneeAgentId: issues.assigneeAgentId }).from(issues).where(eq(issues.id, issue.id));
+            const wakeAgentId = current?.assigneeAgentId ?? null;
+            const policy = interaction.continuationPolicy;
+            const shouldWake = policy !== "none" && !(policy === "wake_assignee_on_accept" && resolved.status !== "accepted");
+            if (wakeAgentId && shouldWake) {
               await tx.insert(chatActions).values({
                 companyId: issue.companyId, endpointId: click.endpoint.id, conversationId: null, principalId: click.principalId,
                 kind: "interaction_wakeup", providerActionId: `interaction_wakeup:${resolved.id}`,
                 payload: {
                   version: 1, interactionId: resolved.id, interactionKind: interaction.kind, interactionStatus: resolved.status,
-                  issueId: issue.id, agentId: issue.assigneeAgentId, sourceCommentId: interaction.sourceCommentId ?? null,
+                  issueId: issue.id, agentId: wakeAgentId, sourceCommentId: interaction.sourceCommentId ?? null,
                   sourceRunId: interaction.sourceRunId ?? null, requestedByUserId: click.userId,
                   requestedByActorType: "user", requestedByActorId: click.userId,
                 },
                 status: "issued",
               }).onConflictDoNothing();
             }
+            // The same activity the UI writes, so the timeline, wake throttle and participation see it.
+            await logActivity(tx as unknown as Db, {
+              companyId: issue.companyId, actorType: "user", actorId: click.userId,
+              action: resolved.status === "accepted" ? "issue.thread_interaction_accepted" : "issue.thread_interaction_rejected",
+              entityType: "issue", entityId: issue.id,
+              details: { interactionId: resolved.id, interactionKind: interaction.kind, interactionStatus: resolved.status, resolutionActorKind: "user", source: "slack_board_card" },
+            });
           },
         };
         if (payload.decision === "accept") {
@@ -178,17 +196,39 @@ export function createBoardCardDecisions(db: Db, deps: BoardCardDecisionDeps) {
         }
       }
     } catch (error) {
-      if (error instanceof Refused) {
-        // A refused tool decision never reached the gateway: give the token back.
+      if (claimedByThisCall && !gatewayCalled) {
+        // This call claimed the token and never reached the gateway: hand it back.
         await db.update(chatActions).set({ status: "issued", updatedAt: new Date() })
-          .where(and(eq(chatActions.id, token.id), eq(chatActions.status, "processing"), sql`${chatActions.result} is null`));
+          .where(and(eq(chatActions.id, token.id), eq(chatActions.status, "processing")));
+      }
+      const [current] = await db.select({ status: issueThreadInteractions.status }).from(issueThreadInteractions).where(eq(issueThreadInteractions.id, interaction.id));
+      if (claimedByThisCall && gatewayCalled) {
+        // The gateway was asked and failed. Never leave the button stuck: record the
+        // failure and make it visible; the board can decide in Paperclip.
+        const message = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
+        await db.update(chatActions).set({ status: current && current.status !== "pending" ? "processed" : "failed", result: { error: message, decidedByUserId: click.userId }, updatedAt: new Date() })
+          .where(and(eq(chatActions.id, token.id), eq(chatActions.status, "processing")));
+        if (!current || current.status === "pending") {
+          await logActivity(db, {
+            companyId: issue.companyId, actorType: "user", actorId: click.userId, action: "chat.board_card_decision_failed",
+            entityType: "issue", entityId: issue.id,
+            details: { interactionId: interaction.id, decision: payload.decision, error: message },
+          });
+          return { outcome: "refused", reason: "the decision could not be carried out; open it in Paperclip" };
+        }
+      }
+      if (current && current.status !== "pending") {
+        await expireToken(token.id);
+        if (!(error instanceof Refused)) return { outcome: "already_decided" };
+      }
+      if (error instanceof Refused) {
         await logRefusal(click, payload, error.message);
         return { outcome: "refused", reason: error.message };
       }
-      const [current] = await db.select({ status: issueThreadInteractions.status }).from(issueThreadInteractions).where(eq(issueThreadInteractions.id, interaction.id));
-      if (current && current.status !== "pending") {
-        await expireToken(token.id);
-        return { outcome: "already_decided" };
+      if (error instanceof HttpError && [403, 404, 409, 422].includes(error.status)) {
+        // The service refused this person (e.g. a prompt addressed to someone else).
+        await logRefusal(click, payload, error.message);
+        return { outcome: "refused", reason: error.message };
       }
       throw error;
     }

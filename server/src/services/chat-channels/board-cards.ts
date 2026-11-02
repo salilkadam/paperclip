@@ -66,10 +66,13 @@ export type BoardCardDecisionToken = {
  */
 export function boardCardDecisionLabels(row: {
   kind: string;
+  addresseeUserId?: string | null;
   payload: Record<string, unknown>;
   issueVisibility: string;
 }, formalApproval: boolean): { accept: string; reject: string; toolAction: boolean; actionRequestId: string | null; expiresAt: string | null } | null {
   if (row.kind !== "request_confirmation" || row.issueVisibility === "private") return null;
+  // A prompt addressed to one person is theirs to answer, not the board channel's.
+  if (row.addresseeUserId) return null;
   const p = row.payload ?? {};
   const toolAction = p.toolAction as Record<string, unknown> | undefined;
   if (toolAction) {
@@ -179,6 +182,7 @@ type InteractionRow = {
   payload: Record<string, unknown>;
   createdByAgentId: string | null;
   addresseeAgentId: string | null;
+  addresseeUserId?: string | null;
   issueIdentifier: string | null;
   issueTitle: string;
   issueVisibility: string;
@@ -395,7 +399,7 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
     await db.update(chatActions).set({ status: "expired", updatedAt: new Date() }).where(and(
       eq(chatActions.companyId, post.companyId),
       eq(chatActions.kind, BOARD_CARD_DECISION_KIND),
-      eq(chatActions.status, "issued"),
+      inArray(chatActions.status, ["issued", "failed"]),
       sql`${chatActions.payload}->>'postProviderActionId' = ${post.providerActionId}`,
     ));
     const payload: BoardCardSettle = {
@@ -451,6 +455,7 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
           payload: issueThreadInteractions.payload,
           createdByAgentId: issueThreadInteractions.createdByAgentId,
           addresseeAgentId: issueThreadInteractions.addresseeAgentId,
+          addresseeUserId: issueThreadInteractions.addresseeUserId,
           issueIdentifier: issues.identifier,
           issueTitle: issues.title,
           issueVisibility: issues.visibility,

@@ -38,7 +38,7 @@ describeDatabase("board-channel card decisions (Slack buttons)", () => {
   });
   afterAll(async () => { await database?.cleanup(); });
 
-  async function fixture(role = "owner") {
+  async function fixture(role = "owner", gw: { approve?: (input: ToolActionDecisionInput) => Promise<unknown> } = {}) {
     const prefix = `BD${randomUUID().slice(0, 6).toUpperCase()}`;
     const [company] = await db.insert(companies).values({ name: `Board ${randomUUID()}`, issuePrefix: prefix }).returning();
     companyIds.push(company.id);
@@ -67,14 +67,19 @@ describeDatabase("board-channel card decisions (Slack buttons)", () => {
     });
     const toolCalls: Array<{ op: string; input: ToolActionDecisionInput }> = [];
     const decisions = createBoardCardDecisions(db, {
-      approveToolAction: async (input) => { toolCalls.push({ op: "approve", input }); await db.update(issueThreadInteractions).set({ status: "accepted" }).where(eq(issueThreadInteractions.id, input.interactionId)); return { status: "succeeded" }; },
+      approveToolAction: async (input) => {
+        toolCalls.push({ op: "approve", input });
+        if (gw.approve) return gw.approve(input);
+        await db.update(issueThreadInteractions).set({ status: "accepted" }).where(eq(issueThreadInteractions.id, input.interactionId));
+        return { status: "succeeded" };
+      },
       declineToolAction: async (input) => { toolCalls.push({ op: "decline", input }); return { status: "declined" }; },
     });
     const post = async () => { clock += 30_000; await cards.processPendingBoardCards(); };
-    const interaction = async (payload: Record<string, unknown>) => {
+    const interaction = async (payload: Record<string, unknown>, extra: Partial<typeof issueThreadInteractions.$inferInsert> = {}) => {
       const [row] = await db.insert(issueThreadInteractions).values({
         companyId: company.id, issueId: issue.id, kind: "request_confirmation", status: "pending", createdByAgentId: agent.id,
-        continuationPolicy: "wake_assignee", payload,
+        continuationPolicy: "wake_assignee", payload, ...extra,
       } as typeof issueThreadInteractions.$inferInsert).returning();
       return row;
     };
@@ -176,4 +181,57 @@ describeDatabase("board-channel card decisions (Slack buttons)", () => {
     const accept = await a.tokenFor("accept");
     expect(await b.click(accept.providerActionId)).toMatchObject({ outcome: "refused" });
   });
+
+  it("two simultaneous clicks reach the gateway once and the button stays used", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const f = await fixture("owner", { approve: async () => { await gate; return { status: "succeeded" }; } });
+    await f.interaction(toolPayload("write"));
+    await f.post();
+    const accept = await f.tokenFor("accept");
+    // Both clicks read the token as issued before either claims it.
+    const both = Promise.all([f.click(accept.providerActionId), f.click(accept.providerActionId)]);
+    await new Promise((r) => setTimeout(r, 1500));
+    const third = await f.click(accept.providerActionId);
+    expect(third.outcome).not.toBe("decided");
+    release();
+    const results = await both;
+    expect(f.toolCalls).toHaveLength(1);
+    expect(results.filter((r) => r.outcome === "decided")).toHaveLength(1);
+  });
+
+  it("records a gateway failure, refuses visibly, and never leaves the button stuck", async () => {
+    const f = await fixture("owner", { approve: async () => { throw Object.assign(new Error("action_expired"), { status: 409 }); } });
+    await f.interaction(toolPayload("write"));
+    await f.post();
+    const accept = await f.tokenFor("accept");
+    expect(await f.click(accept.providerActionId)).toMatchObject({ outcome: "refused" });
+    expect((await f.tokens()).find((t) => t.id === accept.id)?.status).toBe("failed");
+    const logged = await db.select().from(activityLog).where(and(eq(activityLog.companyId, f.company.id), eq(activityLog.action, "chat.board_card_decision_failed")));
+    expect(logged).toHaveLength(1);
+  });
+
+  it("puts no buttons on a prompt addressed to one person", async () => {
+    const f = await fixture();
+    await f.interaction(plain, { addresseeUserId: "someone-else" });
+    await f.post();
+    expect(await f.tokens()).toHaveLength(0);
+  });
+
+  it("logs the UI's accepted activity and wakes nobody on reject for accept-only continuations", async () => {
+    const f = await fixture();
+    const accepted = await f.interaction(plain);
+    await f.post();
+    await f.click((await f.tokenFor("accept")).providerActionId);
+    const acts = await db.select().from(activityLog).where(and(eq(activityLog.companyId, f.company.id), eq(activityLog.action, "issue.thread_interaction_accepted")));
+    expect(acts.map((a) => (a.details as Record<string, unknown>).interactionId)).toContain(accepted.id);
+
+    const g = await fixture();
+    const rejected = await g.interaction(plain, { continuationPolicy: "wake_assignee_on_accept" });
+    await g.post();
+    expect(await g.click((await g.tokenFor("reject")).providerActionId)).toMatchObject({ outcome: "decided", status: "rejected" });
+    const wakes = await db.select().from(chatActions).where(and(eq(chatActions.companyId, g.company.id), eq(chatActions.kind, "interaction_wakeup")));
+    expect(wakes.filter((w) => (w.payload as Record<string, unknown>).interactionId === rejected.id)).toHaveLength(0);
+  });
 });
+
