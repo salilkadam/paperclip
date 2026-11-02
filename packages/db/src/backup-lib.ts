@@ -1,7 +1,7 @@
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { open as openFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
@@ -321,30 +321,102 @@ async function waitForChildExit(child: ReturnType<typeof spawn>, label: string):
   }
 }
 
+type ExternalCompressor = { command: string; args: string[] };
+
+let cachedExternalCompressor: { key: string; compressor: ExternalCompressor | null } | undefined;
+
+/**
+ * The hourly backup runs inside the request-serving process. Piping pg_dump
+ * through the zlib stream compresses on the serving event loop, which stalls
+ * health probes and traffic for the duration of the dump (observed as probe
+ * blackouts during the scheduled window). When an external gzip is available
+ * we hand it the dump stream and lower its CPU priority, so deflation never
+ * lands on the loop. Returns null when none can be probed and the caller
+ * falls back to the in-process pipeline.
+ */
+function resolveExternalCompressor(): ExternalCompressor | null {
+  const gzipBin = process.env.PAPERCLIP_GZIP_PATH || "gzip";
+  const key = `${process.platform}|${gzipBin}`;
+  if (cachedExternalCompressor?.key === key) return cachedExternalCompressor.compressor;
+  const candidates: ExternalCompressor[] = process.platform === "win32"
+    ? []
+    : [
+        { command: "nice", args: ["-n", "19", "ionice", "-c", "3", gzipBin] },
+        { command: "nice", args: ["-n", "19", gzipBin] },
+        { command: gzipBin, args: [] },
+      ];
+  let compressor: ExternalCompressor | null = null;
+  for (const candidate of candidates) {
+    try {
+      if (spawnSync(candidate.command, [...candidate.args, "--version"], { stdio: "ignore" }).status === 0) {
+        compressor = candidate;
+        break;
+      }
+    } catch {
+      // Probe failure just means this candidate is unavailable.
+    }
+  }
+  cachedExternalCompressor = { key, compressor };
+  return compressor;
+}
+
 async function runPgDumpBackup(opts: {
   connectionString: string;
   backupFile: string;
   connectTimeout: number;
 }): Promise<void> {
   const pgDumpBin = process.env.PAPERCLIP_PG_DUMP_PATH || "pg_dump";
-  const child = spawn(
-    pgDumpBin,
-    [
-      `--dbname=${opts.connectionString}`,
-      "--format=plain",
-      "--clean",
-      "--if-exists",
-      "--no-owner",
-      "--no-privileges",
-    ],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        PGCONNECT_TIMEOUT: String(opts.connectTimeout),
-      },
-    },
-  );
+  const pgDumpArgs = [
+    `--dbname=${opts.connectionString}`,
+    "--format=plain",
+    "--clean",
+    "--if-exists",
+    "--no-owner",
+    "--no-privileges",
+  ];
+  const env = {
+    ...process.env,
+    PGCONNECT_TIMEOUT: String(opts.connectTimeout),
+  };
+
+  const compressor = resolveExternalCompressor();
+  if (compressor) {
+    const gzipBin = process.env.PAPERCLIP_GZIP_PATH || "gzip";
+    const dump = spawn(pgDumpBin, pgDumpArgs, { stdio: ["ignore", "pipe", "pipe"], env });
+    const outFile = openSync(opts.backupFile, "w");
+    try {
+      const gzip = spawn(compressor.command, compressor.args, { stdio: ["pipe", outFile, "pipe"] });
+      // A compressor that exits early surfaces via its own exit code below;
+      // the write side may then reject with EPIPE, which must stay silent.
+      gzip.stdin?.on("error", () => { /* reported by exit code */ });
+      if (!dump.stdout || !gzip.stdin) {
+        throw new Error("pg_dump and gzip must expose connected stdio pipes");
+      }
+      dump.stdout.on("error", () => { /* reported by exit code */ });
+      dump.stdout.pipe(gzip.stdin);
+      // If pg_dump's stdout never reaches EOF (spawn failure, destroyed
+      // stream), the compressor must still see EOF instead of waiting on the
+      // pipe forever. "close" fires only after the stream is fully consumed,
+      // so ending gzip's input there cannot truncate the archive.
+      const endGzipInput = () => { gzip.stdin?.end(); };
+      dump.stdout.once("close", endGzipInput);
+      dump.once("error", endGzipInput);
+      const results = await Promise.allSettled([
+        waitForChildExit(dump, pgDumpBin),
+        waitForChildExit(gzip, `${basename(gzipBin)} compressor`),
+      ]);
+      if (results[0]!.status === "rejected") throw results[0]!.reason;
+      if (results[1]!.status === "rejected") throw results[1]!.reason;
+    } finally {
+      closeSync(outFile);
+    }
+    return;
+  }
+
+  const child = spawn(pgDumpBin, pgDumpArgs, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env,
+  });
 
   if (!child.stdout) {
     throw new Error("pg_dump did not expose stdout");
