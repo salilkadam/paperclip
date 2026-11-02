@@ -1,7 +1,9 @@
 # Reliora website: automatic deploys with release directories (plan, round 3)
 
 Date: 2026-11-02
-Status: plan, round 4 (round-3 review changes are at the end and override the text above). Round 1 (image per release, Reliora-Inc/reliora-website#37) and round 2 (this file, first version) were refuted by different-model reviews. This version answers both. Scope is not cut because of the extra rounds (owner, 2026-11-02).
+**Superseded, 2026-11-02 (owner's decision): not built into production.** The site is deployed by the self-hosted GitHub Actions CI/CD in `Reliora-Inc/reliora-website` (`.github/workflows/ci-cd.yml`): a merged pull request builds and deploys, and the workflow reverts a failed rollout. The SRE harness watches the site. The deployer code was removed from `deploy/reliora-website/`; this document stays as the record of the design and its reviews.
+
+Status (historical): plan, round 4 (round-3 review changes are at the end and override the text above). Round 1 (image per release, Reliora-Inc/reliora-website#37) and round 2 (this file, first version) were refuted by different-model reviews. This version answers both. Scope is not cut because of the extra rounds (owner, 2026-11-02).
 
 ## Owner's requirements
 
