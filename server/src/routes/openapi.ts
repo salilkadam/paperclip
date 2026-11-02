@@ -912,6 +912,7 @@ const chatEndpointResourceResponseSchema = z
     availability: chatResourceAvailabilitySchema,
     enabled: z.boolean(),
     boardTrusted: z.boolean(),
+    boardCards: z.boolean().optional(),
     boardTrustBlockedReason: z.string().nullable(),
     metadata: z.record(z.string(), z.unknown()),
     participants: z.array(z.string()).optional(),

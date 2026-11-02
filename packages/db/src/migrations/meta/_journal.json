@@ -2626,6 +2626,13 @@
       "when": 1793471489285,
       "tag": "0376_violet_stellaris",
       "breakpoints": true
+    },
+    {
+      "idx": 377,
+      "version": "7",
+      "when": 1793649615227,
+      "tag": "0377_slow_tyger_tiger",
+      "breakpoints": true
     }
   ]
 }

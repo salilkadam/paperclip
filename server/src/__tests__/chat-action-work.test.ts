@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDatabaseWorkSignals } from "../../../packages/db/src/work-signals.js";
 import { createDeliveryWorkCoordinator } from "../services/delivery-work-coordinator.js";
 import { registerChatActionWork } from "../services/chat-action-work.js";
-import { CHAT_ACTION_QUEUES, notifyChatActionWork, notifyChatEndpointWork, notifyChatVerificationWork } from "../services/chat-work-notifications.js";
+import { CHAT_ACTION_QUEUES, notifyBoardCardWork, notifyChatActionWork, notifyChatEndpointWork, notifyChatVerificationWork } from "../services/chat-work-notifications.js";
 
 const coordinators: ReturnType<typeof createDeliveryWorkCoordinator>[] = [];
 afterEach(async () => {
@@ -28,6 +28,8 @@ function setup() {
     processPendingGitHubWebhookIngress: vi.fn(async () => {}),
     processPendingSlackSessionSyncs: vi.fn(async () => {}),
     processPendingSlackBoardMessages: vi.fn(async () => {}),
+    processPendingBoardCards: vi.fn(async () => {}),
+    nextBoardCardAt: vi.fn(async (): Promise<number | null> => null),
     processPendingSlackTaskStarts: vi.fn(async () => {}),
     processPendingReceiptReactions: vi.fn(async () => {}),
     processPendingSlackSessionStops: vi.fn(async () => {}),
@@ -91,6 +93,11 @@ describe("chat action scheduling", () => {
     await vi.advanceTimersByTimeAsync(1);
     for (const run of s.runs) expect(run).toHaveBeenCalledTimes(3);
     expect(s.service.processTelegramSubscriptionDiscovery).toHaveBeenCalledTimes(2);
+    // Board cards run on their own queue: startup, then each endpoint change.
+    expect(s.service.processPendingBoardCards).toHaveBeenCalledTimes(2);
+    await s.owner.transaction(tx => notifyBoardCardWork(tx));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(s.service.processPendingBoardCards).toHaveBeenCalledTimes(3);
     expect(vi.getTimerCount()).toBe(0);
   });
   it("restores durable deadlines and reschedules when a foreground send moves a retry earlier", async () => {

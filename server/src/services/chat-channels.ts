@@ -27,6 +27,7 @@ import { createSlackWebhookCallbacks } from "./chat-channels/slack/webhook-callb
 import { createGitHubWebhookEvents } from "./chat-channels/github/webhook-events.js";
 import { createSlackTaskStartResolution } from "./chat-channels/slack/task-start-resolution.js";
 import { createSlackBoardMessages } from "./chat-channels/slack/board-messages.js";
+import { createBoardCards } from "./chat-channels/board-cards.js";
 import { PROVIDER_LABELS, CAPABILITIES } from "./chat-channels/provider-catalog.js";
 import { createMessageResourceAdmission } from "./chat-channels/inbound/resource-admission.js";
 import type { DiscordGatewayOwnership } from "./chat-channels/runtime-types.js";
@@ -838,11 +839,17 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     endpointRecord, CAPABILITIES, PROVIDER_LABELS, withCredentialMutationLease,
     getPublicBaseUrl, getWebhookPublicBaseUrl,
     get slackRegistration() { return slackRegistration; },
-    inspectSlackBoardChannel: async (endpoint, channelId) => {
-      const credentials = await resolveCredentials(endpoint);
-      const channel = await getSlackBotChannel({ botToken: credentials.botToken, channelId: channelId.replace(/^slack:/, ""), fetch: fetchImpl });
-      return channel?.metadata ?? null;
-    },
+    inspectSlackBoardChannel: (endpoint, channelId) => inspectSlackBoardChannel(endpoint, channelId),
+  });
+  async function inspectSlackBoardChannel(endpoint: EndpointRow, channelId: string) {
+    const credentials = await resolveCredentials(endpoint);
+    const channel = await getSlackBotChannel({ botToken: credentials.botToken, channelId: channelId.replace(/^slack:/, ""), fetch: fetchImpl });
+    return channel?.metadata ?? null;
+  }
+  const { processPendingBoardCards, nextBoardCardAt } = createBoardCards(db, {
+    runtimeFor: (endpoint) => runtimeFor(endpoint),
+    inspectSlackBoardChannel,
+    publicBaseUrl: () => getTaskBaseUrl(),
   });
   const { generateSetupSecret } = createGitHubSetupSecret(db, {
     endpointRecord, withCredentialMutationLease, resolveCredentials, persistCredentials,
@@ -3776,6 +3783,8 @@ return {
     scheduleTelegramSubscriptionDiscovery,
     hasPendingTelegramSubscriptionDiscovery,
     processPendingSlackBoardMessages,
+    processPendingBoardCards,
+    nextBoardCardAt,
     processPendingSlackTaskStarts,
     processPendingVerificationMessages: slackRegistration.processPendingVerificationMessages,
     nextVerificationMessageAt: slackRegistration.nextVerificationMessageAt,
