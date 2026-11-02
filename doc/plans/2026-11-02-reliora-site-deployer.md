@@ -1,7 +1,7 @@
 # Reliora website: automatic deploys with release directories (plan, round 3)
 
 Date: 2026-11-02
-Status: plan. Round 1 (image per release, Reliora-Inc/reliora-website#37) and round 2 (this file, first version) were refuted by different-model reviews. This version answers both. Scope is not cut because of the extra rounds (owner, 2026-11-02).
+Status: plan, round 4 (round-3 review changes are at the end and override the text above). Round 1 (image per release, Reliora-Inc/reliora-website#37) and round 2 (this file, first version) were refuted by different-model reviews. This version answers both. Scope is not cut because of the extra rounds (owner, 2026-11-02).
 
 ## Owner's requirements
 
@@ -17,19 +17,19 @@ Status: plan. Round 1 (image per release, Reliora-Inc/reliora-website#37) and ro
 
 ## Serving
 
-- PVC `site-releases`, StorageClass `cephfs`, ReadWriteMany, 2 GiB, namespace `reliora-website`. Layout:
+- PVC `site-releases`, StorageClass `cephfs-with-secrets`, ReadWriteMany, 2 GiB, namespace `reliora-website`. Layout:
   - `releases/<sha>/html/` (the commit's `public/`), `releases/<sha>/default.conf`, `releases/<sha>/security-headers.conf`;
   - `current`, a symlink to one release;
   - `state.json`, written only by trusted steps.
 - Website Deployment: `nginxinc/nginx-unprivileged:1.30.5-alpine@sha256:<digest>`, uid and gid 101, no site files in the image. It mounts the PVC **read-only** at `/srv/site`, and emptyDirs for nginx's temporary files and pid. ConfigMap `conf.d/default.conf` holds one line: `include /srv/site/current/default.conf;`. Pod annotation `reliora.ai/config-hash` holds the hash of the live config.
   - No ServiceAccount token (`automountServiceAccountToken: false`), no Secret, no `imagePullSecrets`: the base image is public.
-  - `nodeSelector` keeps the pods off `cp1`. Per the workspace notes, cp1 masquerades pod egress, which defeats NetworkPolicies.
+  - Node affinity `kubernetes.io/hostname NotIn [cp1]` keeps the pods off `cp1`, whose orphaned rules break NetworkPolicy matching for traffic from its pods (workspace notes).
 - NetworkPolicy `site-web`: ingress on 8080 only; **egress denied completely**. A static site needs no outbound traffic, so a commit's config cannot turn reliora.ai into a proxy into the cluster or the LAN.
 - Content changes when the symlink changes: nginx opens files per request (verified in the pinned image). A config change needs new pods. The deployer triggers that by patching `reliora.ai/config-hash` on the pod template.
 
 ## Deployer
 
-CronJob `site-deployer`, every 2 minutes, `concurrencyPolicy: Forbid`, `startingDeadlineSeconds: 120`. The Job has `backoffLimit: 0` and `activeDeadlineSeconds: 900`. The pod has `restartPolicy: Never`, `automountServiceAccountToken: false`, `shareProcessNamespace: false`, a `nodeSelector` that avoids `cp1`, uid 101, and pinned image digests. All scripts come from a ConfigMap in this repository.
+CronJob `site-deployer`, every 2 minutes, `concurrencyPolicy: Forbid`, `startingDeadlineSeconds: 120`. The Job has `backoffLimit: 0` and `activeDeadlineSeconds: 900`. The pod has `restartPolicy: Never`, `automountServiceAccountToken: false`, `shareProcessNamespace: false`, node affinity `kubernetes.io/hostname NotIn [cp1]`, uid 101, and pinned image digests. All scripts come from a ConfigMap in this repository.
 
 ### Volumes, and who may write them
 
@@ -100,7 +100,7 @@ Pruning: step 4 keeps the last 10 releases plus `current` and the previous relea
 
 There is no registry credential.
 
-- **NetworkPolicy `site-deployer`.** Egress to GitHub (443), the Kubernetes API, the website pods (8080), Slack (443) and DNS. Kubernetes cannot narrow this per container, so step 2 shares the pod's network. It holds no secret to send.
+- **NetworkPolicy `site-deployer`.** Egress to `github.com` on SSH port 22 (a deploy key is an SSH key), the Kubernetes API, the website pods (8080), Slack (443) and DNS. Kubernetes cannot narrow this per container, so step 2 shares the pod's network. It holds no secret to send.
 - **Other principals:**
   - `sre-harness-full` in `reliora-website` is replaced by `sre-harness-watch`: get, list and watch on deployments, pods, pods/log, jobs, cronjobs, events and configmaps. No secrets, no exec, no write.
   - `paperclip-agent-website-publisher` is removed.
@@ -153,3 +153,60 @@ This plan does not depend on a pull-request check and does not add one. A check 
 - **Readiness is a static `/healthz`.** A broken switch is live for at most about one smoke-test cycle (under a minute) before the rollback.
 - **CephFS is a dependency of the live site.** If CephFS is down, the site is down. The blackbox alert detects it. Owner: Salil. Trigger: a CephFS incident.
 - **Symlink visibility across nodes after the rename** is expected to be immediate (CephFS metadata caps), but is unverified until the cutover's per-pod smoke test.
+
+## Changes after the round-3 review (these override the text above)
+
+The round-3 review confirmed the privilege split by running the pinned image: the read-only volume in step 3b, the refusal of `load_module`, and the symlink switch. It also passed the smoke test against the real site files. The following changes answer its findings.
+
+**Every step is time-bounded, and a commit cannot hang the deployer (blocker F1).**
+- Time limits per step, enforced with `timeout`: fetch 120 s, check 300 s, copy 120 s, stage 240 s, switch 720 s, report 60 s. The Job's `activeDeadlineSeconds` is 1800, above their sum, so step 5 always runs unless the node fails.
+- `smoke.sh` uses `curl --max-time 10 --max-filesize 60000000` per request, with one retry.
+- **Attempt record before any untrusted work.** A new step 1b (`alpine/k8s`, token) reads `trusted/sha` and increments `attempts` for that commit in `site-deploy-state`. On a third attempt without a terminal state, it writes `failed_timeout`, alerts through step 5, and skips the commit until a new commit or a new deployer version lands.
+
+**State machine.**
+- State is keyed on the commit **and** the deployer ConfigMap's hash. A deployer-side fix re-tries a pinned commit with no site commit needed (F8).
+- Failures are classified by cause, not by step:
+  - `failed_check`: the check said fail, `nginx -t` rejected the staging config, or the copy rejected the content;
+  - `failed_smoke`: the smoke test failed against good infrastructure;
+  - `infra_error`: an I/O error, a git or API error, or a timeout in a trusted step, retried with backoff;
+  - `failed_timeout`: an untrusted step timed out.
+- Recovery table, read from (state, `current`, the pod template's config hash) (F9):
+
+| Found | Action |
+|---|---|
+| `staging` for X, `current` not X | Remove `.tmp-*` and `releases/X` if incomplete. Count it as an attempt. Re-stage, bounded by the attempt record. |
+| `switching` for X, `current` = previous | The swap never happened. Re-stage and switch normally. |
+| `switching` for X, `current` = X | Smoke-test each pod. Pass: `ok`. Fail: roll back. |
+| `restarting` for X | Set the config hash for `current`, wait for the rollout, smoke-test each pod. Pass: `ok`. Fail: roll back. |
+| `rolling_back` for X | Finish the rollback to the recorded previous release, smoke-test it, write `failed_smoke` or `broken`. |
+
+  Recovery never writes `ok` for a commit that `current` does not point at.
+- `state.json` is written to a temporary file and renamed.
+
+**Check gate (F2, F3).** Step 3a starts by reading `checkout/result`. It must be a regular file, not a symlink, read with `head -c 8`, and exactly `pass`. Otherwise the run is `failed_check`, and nothing is copied. Step 4 requires the check and the stage test to have passed. The content of `checkout/result` is never copied into the state, the ConfigMap or Slack.
+
+**Lease (F4).** A background loop renews the Lease every 30 seconds while step 4 waits. Before every write to `current`, `state.json` or the Deployment, the step re-reads the Lease and stops if it is no longer the holder. Staleness stays at 5 minutes.
+
+**Cutover order (F5).** First replace `sre-harness-full` in `reliora-website` with `sre-harness-watch`, both in the cluster and in `deploy/rbac/sre-harness.yaml` (which `apply.sh` re-applies). Only then create the deploy key Secret and the `site-deployer` ServiceAccount.
+
+**Per-pod smoke (F10).** Only endpoints with `serving: true` and `terminating: false` are tested.
+
+**Stage config (F11).** Step 3b's top-level config sets `pid`, `error_log`, `client_body_temp_path`, `proxy_temp_path`, `fastcgi_temp_path`, `uwsgi_temp_path` and `scgi_temp_path` inside `stagetmp`.
+
+**Copy checks.** The symlink and device check covers `deploy/nginx.conf` and `deploy/security-headers.conf` as well as `public/`.
+
+**Smoke test additions.**
+- Exact title prefixes: `Srenix` alone is not accepted, because the meta-refresh fallback `public/index.html` has that title.
+- One asset fetch: the logo.
+- Three fixed redirects from the map in `deploy/nginx.conf`, held in `smoke.sh`.
+
+**Verification additions:**
+- a slow-transfer location (`limit_rate`): `failed_timeout` after at most three attempts, with an alert;
+- a non-terminating check script: `failed_timeout`;
+- a WebDAV `PUT` in the staging config: refused by the read-only volume;
+- a symlinked `deploy/nginx.conf`: `failed_check`;
+- a kill at each row of the recovery table.
+
+**Accepted or corrected:**
+- A commit's config can list the release volume over HTTP. Nothing secret is on it. **Accepted risk.** Owner: Salil. Trigger: anything secret ever placed on the volume.
+- The window during which a broken switch is live is up to one rollout and one smoke test: up to about 5 minutes when the config changes, under a minute when it does not. During a config-change rollout, pods with the old config serve the new content.
