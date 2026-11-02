@@ -9,6 +9,7 @@ import {
 } from "./remote-mcp-connectors.js";
 import composioCatalog from "./composio-search-catalog.json" with { type: "json" };
 import arcadeCatalog from "./arcade-app-catalog.json" with { type: "json" };
+import connecthubCatalog from "./connecthub-app-catalog.json" with { type: "json" };
 import { aggregatorAppIdentity } from "./aggregator-app-catalog.js";
 import { prepareConnectionSearch, scoreConnectionSearch } from "./connection-search.js";
 
@@ -29,7 +30,7 @@ export const AGGREGATOR_NAMES: Record<RemoteMcpConnectorId, string> = {
 
 /** Reviewed public catalog snapshot, not a claim that an account has authorized an app.
  * Add only services confirmed in the cited official catalog. No provider credentials.
- * Executor and Connect Hub have no universal app catalog: use the authorized server's indexed tools.
+ * Executor has no universal app catalog: use the authorized server's indexed tools.
  */
 const REVIEWED_AGGREGATOR_SUPPORT = [
   {
@@ -229,6 +230,20 @@ for (const app of arcadeCatalog.apps) {
   } else {
     AGGREGATOR_SUPPORT_INDEX.push({ slug: app.slug, name: app.name, aliases: app.aliases,
       providers: { arcade: arcadeCatalog.verifiedAt }, evidenceUrls: { arcade: app.docsUrl } });
+  }
+}
+
+// Connect Hub ships a fixed app list (its own catalog); a given hub server may expose fewer, checked at connect time.
+for (const app of connecthubCatalog.apps) {
+  const existing = AGGREGATOR_SUPPORT_INDEX.find((entry) =>
+    entry.slug === app.slug || aggregatorAppIdentity(entry.name) === aggregatorAppIdentity(app.name));
+  if (existing) {
+    existing.aliases = [...new Set([...existing.aliases, app.slug, ...app.aliases])];
+    existing.providers = { ...existing.providers, connecthub: connecthubCatalog.verifiedAt };
+    existing.evidenceUrls = { ...existing.evidenceUrls, connecthub: connecthubCatalog.source };
+  } else {
+    AGGREGATOR_SUPPORT_INDEX.push({ slug: app.slug, name: app.name, aliases: app.aliases,
+      providers: { connecthub: connecthubCatalog.verifiedAt }, evidenceUrls: { connecthub: connecthubCatalog.source } });
   }
 }
 

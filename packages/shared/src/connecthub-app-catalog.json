@@ -1,0 +1,277 @@
+{
+  "source": "https://github.com/Bionic-AI-Solutions/connect-hub-composio",
+  "verifiedAt": "2026-11-02",
+  "apps": [
+    {
+      "slug": "apify",
+      "toolkit": "apify",
+      "name": "Apify",
+      "logoUrl": "https://cdn.activepieces.com/pieces/apify.png",
+      "aliases": [
+        "Apify",
+        "apify"
+      ]
+    },
+    {
+      "slug": "atlassian",
+      "toolkit": "atlassian",
+      "name": "Atlassian",
+      "logoUrl": "https://wac-cdn.atlassian.com/assets/img/favicons/atlassian/favicon.png",
+      "aliases": [
+        "Atlassian (Jira + Confluence, OAuth)",
+        "atlassian"
+      ]
+    },
+    {
+      "slug": "cloudflare",
+      "toolkit": "cloudflare",
+      "name": "Cloudflare",
+      "logoUrl": "https://www.cloudflare.com/favicon.ico",
+      "aliases": [
+        "Cloudflare",
+        "cloudflare"
+      ]
+    },
+    {
+      "slug": "facebook-pages",
+      "toolkit": "facebook-pages",
+      "name": "Facebook",
+      "logoUrl": "https://cdn.activepieces.com/pieces/facebook.png",
+      "aliases": [
+        "Facebook Pages",
+        "facebook-pages"
+      ]
+    },
+    {
+      "slug": "github",
+      "toolkit": "github",
+      "name": "GitHub",
+      "logoUrl": "https://cdn.activepieces.com/pieces/github.png",
+      "aliases": [
+        "GitHub",
+        "github"
+      ]
+    },
+    {
+      "slug": "gmail",
+      "toolkit": "gmail",
+      "name": "Gmail",
+      "logoUrl": "https://cdn.activepieces.com/pieces/gmail.png",
+      "aliases": [
+        "Gmail",
+        "gmail"
+      ]
+    },
+    {
+      "slug": "google-analytics",
+      "toolkit": "google-analytics",
+      "name": "Google Analytics",
+      "logoUrl": "https://www.gstatic.com/analytics-suite/header/suite/v2/ic_analytics.svg",
+      "aliases": [
+        "Google Analytics (GA4)",
+        "google-analytics"
+      ]
+    },
+    {
+      "slug": "google-calendar",
+      "toolkit": "google-calendar",
+      "name": "Google Calendar",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-calendar.png",
+      "aliases": [
+        "Google Calendar",
+        "google-calendar"
+      ]
+    },
+    {
+      "slug": "google-contacts",
+      "toolkit": "google-contacts",
+      "name": "Google Contacts",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-contacts.png",
+      "aliases": [
+        "Google Contacts",
+        "google-contacts"
+      ]
+    },
+    {
+      "slug": "google-docs",
+      "toolkit": "google-docs",
+      "name": "Google Docs",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-docs.png",
+      "aliases": [
+        "Google Docs",
+        "google-docs"
+      ]
+    },
+    {
+      "slug": "google-drive",
+      "toolkit": "google-drive",
+      "name": "Google Drive",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-drive.png",
+      "aliases": [
+        "Google Drive",
+        "google-drive"
+      ]
+    },
+    {
+      "slug": "google-forms",
+      "toolkit": "google-forms",
+      "name": "Google Forms",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-forms.png",
+      "aliases": [
+        "Google Forms",
+        "google-forms"
+      ]
+    },
+    {
+      "slug": "google-my-business",
+      "toolkit": "google-my-business",
+      "name": "Google My Business",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-business.png",
+      "aliases": [
+        "Google My Business",
+        "google-my-business"
+      ]
+    },
+    {
+      "slug": "google-search-console",
+      "toolkit": "google-search-console",
+      "name": "Google Search Console",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-search-console.png",
+      "aliases": [
+        "Google Search Console",
+        "google-search-console"
+      ]
+    },
+    {
+      "slug": "google-sheets",
+      "toolkit": "google-sheets",
+      "name": "Google Sheets",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-sheets.png",
+      "aliases": [
+        "Google Sheets",
+        "google-sheets"
+      ]
+    },
+    {
+      "slug": "google-slides",
+      "toolkit": "google-slides",
+      "name": "Google Slides",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-slides.png",
+      "aliases": [
+        "Google Slides",
+        "google-slides"
+      ]
+    },
+    {
+      "slug": "google-tasks",
+      "toolkit": "google-tasks",
+      "name": "Google Tasks",
+      "logoUrl": "https://cdn.activepieces.com/pieces/google-tasks.png",
+      "aliases": [
+        "Google Tasks",
+        "google-tasks"
+      ]
+    },
+    {
+      "slug": "instagram-business",
+      "toolkit": "instagram-business",
+      "name": "Instagram",
+      "logoUrl": "https://cdn.activepieces.com/pieces/instagram.png",
+      "aliases": [
+        "Instagram for Business",
+        "instagram-business"
+      ]
+    },
+    {
+      "slug": "linkedin",
+      "toolkit": "linkedin",
+      "name": "LinkedIn",
+      "logoUrl": "https://cdn.activepieces.com/pieces/linkedin.png",
+      "aliases": [
+        "LinkedIn",
+        "linkedin"
+      ]
+    },
+    {
+      "slug": "reddit",
+      "toolkit": "reddit",
+      "name": "Reddit",
+      "logoUrl": "https://cdn.activepieces.com/pieces/reddit.png",
+      "aliases": [
+        "Reddit",
+        "reddit"
+      ]
+    },
+    {
+      "slug": "slack",
+      "toolkit": "slack",
+      "name": "Slack",
+      "logoUrl": "https://cdn.activepieces.com/pieces/slack.png",
+      "aliases": [
+        "Slack",
+        "slack"
+      ]
+    },
+    {
+      "slug": "stackexchange",
+      "toolkit": "stackexchange",
+      "name": "Stack Exchange",
+      "logoUrl": "https://cdn.sstatic.net/Sites/stackoverflow/Img/apple-touch-icon.png",
+      "aliases": [
+        "Stack Exchange (incl. Stack Overflow)",
+        "Stack Overflow",
+        "stackexchange"
+      ]
+    },
+    {
+      "slug": "todoist",
+      "toolkit": "todoist",
+      "name": "Todoist",
+      "logoUrl": "https://cdn.activepieces.com/pieces/todoist.png",
+      "aliases": [
+        "Todoist",
+        "todoist"
+      ]
+    },
+    {
+      "slug": "youtube",
+      "toolkit": "youtube",
+      "name": "YouTube",
+      "logoUrl": "https://cdn.activepieces.com/pieces/youtube.png",
+      "aliases": [
+        "YouTube",
+        "youtube"
+      ]
+    },
+    {
+      "slug": "zoom",
+      "toolkit": "zoom",
+      "name": "Zoom",
+      "logoUrl": "https://cdn.activepieces.com/pieces/zoom.png",
+      "aliases": [
+        "Zoom",
+        "zoom"
+      ]
+    },
+    {
+      "slug": "jira",
+      "toolkit": "atlassian",
+      "name": "Jira",
+      "logoUrl": "https://cdn.activepieces.com/pieces/jira.png",
+      "aliases": [
+        "Jira",
+        "Jira Cloud",
+        "jira-cloud"
+      ]
+    },
+    {
+      "slug": "confluence",
+      "toolkit": "atlassian",
+      "name": "Confluence",
+      "logoUrl": "https://cdn.activepieces.com/pieces/confluence.png",
+      "aliases": [
+        "Confluence"
+      ]
+    }
+  ]
+}

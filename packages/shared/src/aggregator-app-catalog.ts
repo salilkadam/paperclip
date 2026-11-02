@@ -1,5 +1,6 @@
 import composio from "./composio-search-catalog.json" with { type: "json" };
 import arcade from "./arcade-app-catalog.json" with { type: "json" };
+import connecthub from "./connecthub-app-catalog.json" with { type: "json" };
 
 export type AppCatalogAggregator = "composio" | "arcade" | "executor" | "connecthub";
 
@@ -62,6 +63,14 @@ for (const app of arcade.apps) {
   });
 }
 
+// Connect Hub is self-hosted; this lists the apps the hub ships with (generated from its catalog). Whether a given
+// hub server exposes an app is still checked at connect time by hub_connect.
+for (const app of connecthub.apps) {
+  add(app.name, app.slug, app.aliases, {
+    provider: "connecthub", toolkit: app.toolkit, logoUrl: app.logoUrl, docsUrl: connecthub.source,
+  });
+}
+
 export const AGGREGATOR_APP_CATALOG = [...entries.values()].sort((a, b) =>
   a.name.localeCompare(b.name, "en", { sensitivity: "base" }) || a.slug.localeCompare(b.slug));
 
@@ -80,7 +89,7 @@ export function findAggregatorApp(provider: string, toolkit: string | null | und
       && (app.routes.some(route => route.provider === provider && route.toolkit === toolkit) || app.aliases.includes(toolkit)));
 }
 
-/** Executor and Connect Hub have no public catalog. Only exact known service identities share branding. */
+/** Executor has no public catalog. Only exact known service identities share branding. */
 export function resolveAggregatorApp(provider: AppCatalogAggregator, toolkit: string, name?: string) {
   const known = provider === "composio" ? findComposioCatalogApp(toolkit) : findAggregatorApp(provider, toolkit)
     ?? AGGREGATOR_APP_CATALOG.find(app => app.routes.some(route => route.provider === provider)

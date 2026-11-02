@@ -6,7 +6,7 @@
   "categories": [
     "productivity"
   ],
-  "featured": false,
+  "featured": true,
   "branding": {
     "logoUrl": "/brands/apps/connecthub.svg"
   },
@@ -20,9 +20,9 @@
         "dcr",
         "customer"
       ],
-      "whenToUse": "Use the provider-hosted connection for the quickest setup.",
+      "whenToUse": "Use your self-hosted Connect Hub to reach the apps it manages.",
       "defaults": {},
-      "guidanceMd": "Paste your Connect Hub MCP URL (it ends in /mcp). Under Advanced authentication, choose Bearer token and paste the hub MCP token issued for this server.",
+      "guidanceMd": "Paste your Connect Hub MCP server URL (it ends in /mcp/s/<server id>) and sign in with your organization account when prompted. For a service setup, choose Bearer token under Advanced authentication and paste an MCP token issued by the hub.",
       "riskTier": "S3",
       "label": "Connect MCP server"
     }
