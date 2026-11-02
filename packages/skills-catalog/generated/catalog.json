@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "packageName": "@paperclipai/skills-catalog",
   "packageVersion": "0.3.1",
-  "generatedAt": "2026-11-02T06:46:01.872Z",
+  "generatedAt": "2026-11-02T07:05:43.606Z",
   "skills": [
     {
       "id": "paperclipai:bundled:docs:doc-maintenance",
@@ -1969,8 +1969,8 @@
         {
           "path": "SKILL.md",
           "kind": "skill",
-          "sizeBytes": 12955,
-          "sha256": "bfdae719a7048c54108b1666e35b66cff836559431339c541e5036d853e8862b"
+          "sizeBytes": 13087,
+          "sha256": "d7c2fbf31d52984fed4b7a42049a727312b8dc1acb76459603af3e9c86543dca"
         },
         {
           "path": "assets/icon.svg",
@@ -2011,8 +2011,8 @@
         {
           "path": "references/mcp-read-layer.md",
           "kind": "reference",
-          "sizeBytes": 8549,
-          "sha256": "56213899c1131453b0bc89213a15071c68a00a7bdd8540b9739f29b663880a49"
+          "sizeBytes": 8594,
+          "sha256": "28eabf5d119c7e705587ed4ba9df907938236db6318820f99e67084012ec73d8"
         },
         {
           "path": "references/precedence.md",
@@ -2051,7 +2051,7 @@
           "sha256": "d7d555e9f213c7d63b6ab380dfbea3b33d788a94d20d4005b2f67d2124c26930"
         }
       ],
-      "contentHash": "sha256:29418dc6fdd504c527a65e1882867691f74304483c701059dfdb9065a1bcced9"
+      "contentHash": "sha256:697416ad55be8d5bd5070381151e239e684f780dab9bb31992fad079acfae0bc"
     },
     {
       "id": "paperclipai:optional:linkedin:linkedin-personal-account",
@@ -2084,11 +2084,11 @@
         {
           "path": "SKILL.md",
           "kind": "skill",
-          "sizeBytes": 7831,
-          "sha256": "90246bbbf4aeff25b1ef630362c938d659046bfe741ccb802dc7aebe28086cee"
+          "sizeBytes": 8017,
+          "sha256": "f4998d7a5b6da5da0f4e4b2ba5a920f3015848627ee9feface2a1f923397a512"
         }
       ],
-      "contentHash": "sha256:57e9ea4611a0d842ec9f9fdbf58125c7a15b03479eb060b150966e0537231443"
+      "contentHash": "sha256:99bc747a3336736ea2febf2ee986792eebf946483f222011921938ddd7fee051"
     },
     {
       "id": "paperclipai:optional:linkedin:linkedin-post-writer",
@@ -2941,11 +2941,11 @@
         {
           "path": "SKILL.md",
           "kind": "skill",
-          "sizeBytes": 10031,
-          "sha256": "45c30c265a7b1cb1072eb354a23213df075610cd38f1173323c6cb0f870cc996"
+          "sizeBytes": 11308,
+          "sha256": "999245d02205b430071c8250b0fb0ac4de347ddd05de6bfacba00e1397edb0a8"
         }
       ],
-      "contentHash": "sha256:ae4dbed2bca2d80543bb1b3973942cf61b000f87e7489a38c44c0e258f194321"
+      "contentHash": "sha256:df78e0e6f435211a7b20e1317e402c022c9428c0d7118870951cc55374d5fb3f"
     },
     {
       "id": "paperclipai:optional:software-development:prepare-mcp-integration",

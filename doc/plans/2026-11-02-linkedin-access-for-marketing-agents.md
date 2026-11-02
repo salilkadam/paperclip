@@ -20,8 +20,14 @@ conversation. Trust is **off** until the pre-enable gate in that plan is run.
 
 Two preconditions found while checking this:
 
-- **Both board channels are public.** Slack reports `#reliora-board`
-  (`C0CC0J8NB5G`) and `#bionic-board` (`C0CC0J4LW8J`) as `public_channel`. The
+- **Both board channels are public.** Slack's channel search (claude.ai Slack
+  connector, 2026-11-01) reports `#reliora-board` (`C0CC0J8NB5G`) and
+  `#bionic-board` (`C0CC0J4LW8J`) as `public_channel`. The board-channel trust
+  plan (2026-10-31, line "The board channels are private") assumed the opposite;
+  one of the two is wrong, and the server's `conversations.info` check at
+  trust-enable time is the arbiter. If they are public, the earlier plan's
+  premise that board-channel reads record a `slack_private_source` boundary
+  does not hold for these two channels either. The
   server refuses to trust a public channel (by design, from the safety review), so
   trust cannot be switched on until each is converted to a private channel in
   Slack (channel details → Settings → *Change to a private channel*; irreversible)
@@ -31,14 +37,15 @@ Two preconditions found while checking this:
   failed. This PR pins `apimaestro/linkedin-profile-posts` (no-cookies, $5 per
   1,000 results) and documents its mapping.
 
-## 2. What this PR ships (no Paperclip server code changed)
+## 2. What this PR ships (one guard change in server code; otherwise catalog, scripts and docs)
 
 | Change | Where |
 |---|---|
 | Apify card pins `apimaestro/linkedin-profile-posts`; governance allowlist and offline gate updated (16 actor tools) | `packages/shared/src/app-definitions/apify.json`, `self-serve-mcp-research.json`, `deploy/scripts/setup-apify-governance.sh`, `test-apify-governance-local.sh` |
 | LinkedIn read layer documents the new actor ("A profile's recent posts") | `linkedin-marketing/references/mcp-read-layer.md`, hub actor table |
 | **New skill `linkedin-personal-account`**: act as a board member's own LinkedIn account through the company's **Composio** connection (LinkedIn toolkit, OAuth with the member's login): member-only reads; posts, comments, replies and media **ask-first**; deletes never | `packages/skills-catalog/catalog/optional/linkedin/linkedin-personal-account/SKILL.md`; hub routing; `social-core` tool table; catalog manifest + test |
-| Composio governance: block `LINKEDIN_DELETE_*` (priority 0), `require_approval` for every other non-read `LINKEDIN_*` slug (priority 1), probes for both | `deploy/scripts/setup-composio-governance.sh` |
+| Composio governance: block `LINKEDIN_DELETE_*` (priority 0), `require_approval` for every other non-read `LINKEDIN_*` slug (priority 1), probes for both and for the ordering case [CREATE, DELETE] → off | `deploy/scripts/setup-composio-governance.sh` |
+| **Guard in server code**: `LINKEDIN_DELETE_*` is refused for every Composio connection from the moment it exists, directly or inside multi-execute, independent of policies (the same reason the Reddit guard exists: policies cover only governed connections and can be edited) | `server/src/services/connectors/composio-guard.ts` + test |
 | **New setup script `setup-linkedin-personal.sh`**: per company with a Composio connection — reports whether LinkedIn is connected, grants the CMO and content/growth marketer access to the Composio connection, syncs the three skills, runs the Composio governance, proves read=allowed / write=ask-first / delete=off as the CMO | `deploy/scripts/setup-linkedin-personal.sh` |
 
 Why Composio and not a LinkedIn MCP connector: LinkedIn publishes no MCP server
@@ -79,7 +86,27 @@ comments per post (Apify) → draft → post the reply via
    created in Paperclip — the CEO's own suggestion — or the agents will keep being
    refused on Slack-started tasks.
 
-## 5. Not changed
+## 5. Review record (round 1, Opus 5.5 — the different-model round)
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Setup script sent `{mode, keys}` to skills sync; the validator wants `desiredSkills` | Fixed |
+| 2 | Setup script POSTed `/installs`; only GET/PUT exist and PUT replaces the whole set | Fixed: GET, add the two agents, PUT the full list |
+| 3 | Access granted before governance ran | Fixed: governance first, then access and skills, then probes |
+| 4 | "Deletes never" held only by policy on governed connections | Fixed in code: guard refuses `LINKEDIN_DELETE_*` on every Composio connection. The **approval** for other writes remains a policy and applies only to connections the governance script has governed (`connect.composio.dev/mcp`); a connection on another `*.composio.dev` URL, or a board edit disabling the policy, reopens it. Accepted risk, owner: the operator who connects Composio; trigger: any Composio connection created without running the script (`setup-linkedin-personal.sh` and `setup-composio-governance.sh` both fail loudly when the URL is not the governed one). |
+| 5 | New skill contradicted `social-core` ("TryPost only", "never any other route"), which wins conflicts | Fixed: `social-core` description, §1, §2, §6, §7 and the hub carry an explicit, narrow Composio-LinkedIn exception |
+| 6 | Skill said the arguments cannot choose the account; the `account` item key can | Fixed: never pass `account`; WHO_AM_I first and in the approval text |
+| 7 | Agent selection by name regex could drop the marketer silently | Fixed: CMO by name, marketer = its one direct report, both required |
+| 8 | LinkedIn-connected report read a cached per-user view and could 404 | Fixed: refresh first; informational; never fatal |
+| 9 | Missing [CREATE, DELETE] ordering probe; reason code cannot tell guard from policy | Fixed: probe added in both scripts; the second point is pre-existing and recorded here |
+| 10 | Stale "15 pinned actors" in `doc/connections/tool-method-permission-reviews.json` | Fixed |
+| 11 | Unverified claim that a company page URL works for the profile-posts actor | Fixed: removed |
+| 12 | This plan and the board-trust plan disagree on channel privacy | Recorded above; the server check decides |
+
+Dissent noted: future LinkedIn read slugs with verbs other than GET/LIST/WHO/SEARCH
+would be ask-first (fails safe); accepted.
+
+## 6. Not changed
 
 - Apify stays bound to the CMO and the marketer, not the CEO (owner, 2026-10-27).
   The CEO delegates; the restriction that broke delegation is the chat provenance

@@ -2925,7 +2925,7 @@
       "policy": "provider-key",
       "requestedScopes": [],
       "capability": "write",
-      "supportedActions": "Run the 15 pinned social-reading actors (LinkedIn, X, Instagram, Threads, TikTok, Facebook, YouTube posts, comments, engagers and profile/channel stats) and read their results with get-actor-run, get-dataset-items, get-key-value-store-record and abort-actor-run. Every actor run bills the company's Apify account per result. search-actors, call-actor and all other actors are not exposed.",
+      "supportedActions": "Run the 16 pinned social-reading actors (LinkedIn, X, Instagram, Threads, TikTok, Facebook, YouTube posts, comments, engagers and profile/channel stats) and read their results with get-actor-run, get-dataset-items, get-key-value-store-record and abort-actor-run. Every actor run bills the company's Apify account per result. search-actors, call-actor and all other actors are not exposed.",
       "evidence": [
         "https://docs.apify.com/platform/integrations/mcp",
         "https://docs.apify.com/platform/integrations/api",

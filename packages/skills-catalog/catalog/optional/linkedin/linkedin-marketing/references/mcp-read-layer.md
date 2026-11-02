@@ -127,7 +127,8 @@ pass through unchanged.
 
 Tool `apimaestro--linkedin-profile-posts`, input
 `{"username": "<handle or profile URL>", "limit": 20}`. The handle is the last
-path segment of a personal profile URL; a company page's URL works as well.
+path segment of a personal profile URL (the actor's schema documents profile
+usernames; a company page is not promised).
 
 - `limit` is per page, 1–100. `total_posts` turns on automatic pagination and
   bills every page; leave it out unless the task asks for more than one page.

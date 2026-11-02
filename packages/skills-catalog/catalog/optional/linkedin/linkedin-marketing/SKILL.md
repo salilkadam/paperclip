@@ -20,7 +20,7 @@ tags:
 
 > Read `social-core` first.
 
-A bundle of 13 focused skills for LinkedIn content ops in 2026. Each skill is single-purpose, follows the draft → approval → publish pattern, and publishes only through TryPost with the board's approval card (`social-core` section 2). This hub carries the references every `linkedin-*` skill shares; a leaf skill cites them as "the `linkedin-marketing` skill's `references/X.md`".
+A bundle of 13 focused skills for LinkedIn content ops in 2026. Each skill is single-purpose, follows the draft → approval → publish pattern, and publishes only through TryPost with the board's approval card (`social-core` section 2) — or, for a board member's own account, through the Composio LinkedIn app after a per-call approval (`linkedin-personal-account`). This hub carries the references every `linkedin-*` skill shares; a leaf skill cites them as "the `linkedin-marketing` skill's `references/X.md`".
 
 ## When to use this bundle
 

@@ -219,6 +219,8 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
         "$(t '[{"tool_slug":"LINKEDIN_DELETE_POST","arguments":{"post_urn":"urn:li:share:governanceprobe"}}]')" off deny_policy_block
       probe "$cid" "$conn" "$agent" "LinkedIn post in tool 2 (ask first)" COMPOSIO_MULTI_EXECUTE_TOOL \
         "$(t '[{"tool_slug":"LINKEDIN_WHO_AM_I","arguments":{}},{"tool_slug":"LINKEDIN_CREATE_LINKED_IN_POST","arguments":{"text":"governance probe; never meant to run"}}]')" ask_first
+      probe "$cid" "$conn" "$agent" "LinkedIn create then delete: block beats ask" COMPOSIO_MULTI_EXECUTE_TOOL \
+        "$(t '[{"tool_slug":"LINKEDIN_CREATE_LINKED_IN_POST","arguments":{"text":"probe"}},{"tool_slug":"LINKEDIN_DELETE_POST","arguments":{"post_urn":"urn:li:share:governanceprobe"}}]')" off deny_policy_block
       probe "$cid" "$conn" "$agent" "read-only Reddit search" COMPOSIO_MULTI_EXECUTE_TOOL \
         "$(t '[{"tool_slug":"REDDIT_SEARCH_ACROSS_SUBREDDITS","arguments":{"search_query":"subreddit:kubernetes","time_filter":"day","limit":1}}]')" allowed
     fi

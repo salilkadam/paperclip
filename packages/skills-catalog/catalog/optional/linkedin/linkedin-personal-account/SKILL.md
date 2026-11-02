@@ -53,9 +53,11 @@ login). `COMPOSIO_MANAGE_CONNECTIONS` is ask-first; use it only when the board
 asked you to start the connection flow, and never for a toolkit the board did
 not name.
 
-Which account acts is decided by the LinkedIn app connected in Composio, not by
-your arguments. Say in the task whose account the connection is (`LINKEDIN_WHO_AM_I`)
-before the first write of a task, so nobody posts as the wrong person.
+Which account acts is the LinkedIn account connected in Composio. **Never pass an
+`account` field** in a multi-execute item: with more than one LinkedIn account
+connected, that field would choose. Run `LINKEDIN_WHO_AM_I` first in any task that
+writes, state the name in the task and in the approval request, so nobody posts
+as the wrong person.
 
 ## 2. Reads (allowed)
 
@@ -97,8 +99,9 @@ accordingly:
    account. An approved call that then fails (rate limit, 403 role) is reported as
    failed with the provider's message — never retried with different arguments
    without a new approval.
-4. **Never delete.** `LINKEDIN_DELETE_*` is blocked by policy. If something posted
-   must come down, tell the board; a person removes it in LinkedIn.
+4. **Never delete.** `LINKEDIN_DELETE_*` is refused by the gateway for every
+   Composio connection (server code) and by the company policy. If something
+   posted must come down, tell the board; a person removes it in LinkedIn.
 
 Comment and reply text keeps following `linkedin-comment-drafter` /
 `linkedin-reply-handler`: the copy-paste block in the task stays the default
