@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { aggregatorManagementUrl } from "@paperclipai/shared/aggregator-apps";
 import { Label } from "@/components/ui/label";
 import { ExternalLink } from "lucide-react";
 import type { AggregatorAppCatalogEntry, AggregatorAppRoute } from "@paperclipai/shared/aggregator-app-catalog";
-import { isToolConnectionAttentionHealth, type ToolConnection } from "@paperclipai/shared";
+import { isToolConnectionAttentionHealth, type ComposioAppSetupResult, type ToolConnection } from "@paperclipai/shared";
+import { toolsApi } from "@/api/tools";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AppLogo } from "./AppLogo";
@@ -31,6 +33,7 @@ export function AggregatorConnectDialog({ app, connections, initialProvider, onC
   const account = existing.find(connection => connection.id === selectedAccountId) ?? usableConnection ?? existing[0];
   const managementUrl = selected ? aggregatorManagementUrl(selected.provider, typeof account?.config?.managementUrl === "string" ? account.config.managementUrl : null, typeof account?.config?.url === "string" ? account.config.url : null) : null;
   const provider = selected ? remoteMcpProviders[selected.provider] : null;
+  const hubHandoff = selected?.provider === "connecthub" && account?.status === "active" && account.enabled && !isToolConnectionAttentionHealth(account.healthStatus);
   function choose(route: AggregatorAppRoute) {
     const accounts = connections[route.provider] ?? [];
     if (accounts.length === 0) { onNavigate(aggregatorAppConnectHref(route)); onClose(); }
@@ -63,6 +66,7 @@ export function AggregatorConnectDialog({ app, connections, initialProvider, onC
             {existing.map(connection => <option key={connection.id} value={connection.id}>{connection.name}</option>)}
           </select>
         </div> : null}
+        {hubHandoff && account ? <ConnectHubAppSetup key={account.id} name={app.name} toolkit={selected.toolkit} connection={account} /> : null}
         {selected.provider === "composio" ? <ComposioAppSetup name={app.name} toolkit={selected.toolkit} connections={existing.filter(connection => connection.status === "active" && connection.enabled && !isToolConnectionAttentionHealth(connection.healthStatus))} onClose={onClose}
           onBack={canChooseProvider ? () => setSelected(null) : undefined} onConnectNew={() => { onNavigate(`${aggregatorAppConnectHref(selected)}&new=1`); onClose(); }} /> : null}
 
@@ -70,10 +74,32 @@ export function AggregatorConnectDialog({ app, connections, initialProvider, onC
       {selected?.provider !== "composio" ? <DialogFooter className="sm:items-center sm:justify-between">
         <Button variant="ghost" onClick={selected && canChooseProvider ? () => setSelected(null) : onClose}>{selected && canChooseProvider ? "Back" : "Cancel"}</Button>
         {selected ? <div className="flex flex-wrap items-center gap-3">
-          {managementUrl ? <Button asChild><a href={managementUrl} target="_blank" rel="noopener noreferrer" onClick={onClose}>Continue<ExternalLink className="size-4" /></a></Button> : null}
+          {selected.provider === "connecthub" && account && !hubHandoff ? <Button onClick={() => { onNavigate(aggregatorAppConnectHref(selected, account)); onClose(); }}>{account.status === "draft" ? "Finish setup" : "Reconnect"}</Button> : null}
+          {managementUrl && selected.provider !== "connecthub" ? <Button asChild><a href={managementUrl} target="_blank" rel="noopener noreferrer" onClick={onClose}>Continue<ExternalLink className="size-4" /></a></Button> : null}
           <Button variant="link" size="sm" className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground" onClick={() => { onNavigate(`${aggregatorAppConnectHref(selected)}&new=1`); onClose(); }}>Connect a new account</Button>
         </div> : null}
       </DialogFooter> : null}
     </DialogContent>
   </Dialog>;
+}
+
+/** Connect Hub: ask the hub (hub_connect) for a one-time link for this app; the hub stores the credential. */
+function ConnectHubAppSetup({ name, toolkit, connection }: { name: string; toolkit: string; connection: ToolConnection }) {
+  const queries = useQueryClient();
+  const [result, setResult] = useState<ComposioAppSetupResult | null>(null);
+  const setup = useMutation({ mutationFn: async (action: "start" | "complete") => {
+    const next = await toolsApi.setupAggregatorApp(connection.id, toolkit, { action });
+    setResult(next);
+    void queries.invalidateQueries({ queryKey: ["tools", "aggregator-apps"] });
+    return next;
+  } });
+  if (result?.status === "connected") return <p role="status" className="text-sm text-muted-foreground">{name} is connected in Connect Hub. Agents can use it now.</p>;
+  return <div className="space-y-2">
+    {setup.isError ? <p role="alert" className="text-sm text-destructive">{setup.error instanceof Error ? setup.error.message : `Couldn’t connect ${name}. Try again.`}</p> : null}
+    {result?.authorizationUrl ? <>
+      <p role="status" className="text-sm text-muted-foreground">Finish connecting {name} in Connect Hub, then come back here.</p>
+      <Button asChild variant="outline" className="w-full"><a href={result.authorizationUrl} target="_blank" rel="noopener noreferrer">Connect {name} in Connect Hub<ExternalLink className="size-4" /></a></Button>
+      <Button variant="ghost" className="w-full" disabled={setup.isPending} onClick={() => setup.mutate("complete")}>{setup.isPending ? "Checking…" : "I’ve connected it"}</Button>
+    </> : <Button className="w-full" disabled={setup.isPending} onClick={() => setup.mutate("start")}>{setup.isPending ? "Starting…" : `Connect ${name}`}</Button>}
+  </div>;
 }

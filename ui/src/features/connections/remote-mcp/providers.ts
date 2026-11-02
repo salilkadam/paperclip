@@ -60,13 +60,14 @@ export const remoteMcpProviders: Record<RemoteMcpProviderId, RemoteMcpProvider> 
     authHelp: "Keep any options in the copied URL. If using an API key, use a user key; workspace and organization keys cannot open an MCP session.",
   },
   connecthub: {
-    id: "connecthub", name: "Connect Hub", supportsBrowserAuth: false, defaultAuth: "bearer",
-    description: "Use the apps connected through your self-hosted Connect Hub.",
-    instructions: ["Create an MCP server in your Connect Hub for the apps agents should use.", "Issue an MCP token for that server.", "Paste the hub's MCP URL and the token here."],
+    id: "connecthub", name: "Connect Hub", supportsBrowserAuth: true,
+    description: "Use the apps connected through your Connect Hub.",
+    instructions: ["Copy the MCP server URL from your Connect Hub dashboard (MCP servers).", "Paste it here, then sign in with your organization account when prompted.", "Connect each app in Connect Hub when an agent first needs it."],
     // Self-hosted: there is no fixed hub address or public guide.
     setupUrl: "", dashboardUrl: "",
-    defaultUrl: "", placeholder: "https://your-hub.example.com/mcp",
-    urlHelp: "Use your hub's MCP endpoint (it ends in /mcp). App connect links are trusted only on this address.",
-    authHelp: "Paste the MCP token issued for this hub server. Paperclip sends it as a Bearer token.",
+    defaultUrl: "", placeholder: "https://connect.example.com/mcp/s/your-server-id",
+    urlHelp: "Use the hub's MCP server URL (it ends in /mcp/s/<server id>). App connect links are trusted only on this address.",
+    authHelp: "Signing in is the default. For a service setup, use Bearer token with an MCP token issued by the hub for this server.",
   },
+
 };

@@ -408,10 +408,10 @@ describe("Connectors landing page", () => {
     return document.querySelector<HTMLElement>('[role="menu"]')!;
   }
 
-  it("defaults to Paperclip with five chips, expands search to All, and retains explicit source scope", async () => {
+  it("defaults to Paperclip with six chips, expands search to All, and retains explicit source scope", async () => {
     aggregatorCatalogMock.push(indexedApp("Remote App", ["composio"]));
     await renderBrowse(false);
-    expect(container.querySelector('[aria-label="App filters"]')?.textContent).toBe("PaperclipComposioArcadeInstalledAll");
+    expect(container.querySelector('[aria-label="App filters"]')?.textContent).toBe("PaperclipComposioArcadeConnect HubInstalledAll");
     expect(container.querySelector('[data-app-slug="remote-app"]')).toBeNull();
     await search("Remote App");
     expect(container.querySelector('[aria-checked="true"]')?.textContent).toBe("All");

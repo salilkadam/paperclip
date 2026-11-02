@@ -9,6 +9,7 @@ import {
 } from "./remote-mcp-connectors.js";
 import composioCatalog from "./composio-search-catalog.json" with { type: "json" };
 import arcadeCatalog from "./arcade-app-catalog.json" with { type: "json" };
+import connecthubCatalog from "./connecthub-app-catalog.json" with { type: "json" };
 import { aggregatorAppIdentity } from "./aggregator-app-catalog.js";
 import { prepareConnectionSearch, scoreConnectionSearch } from "./connection-search.js";
 
@@ -29,7 +30,7 @@ export const AGGREGATOR_NAMES: Record<RemoteMcpConnectorId, string> = {
 
 /** Reviewed public catalog snapshot, not a claim that an account has authorized an app.
  * Add only services confirmed in the cited official catalog. No provider credentials.
- * Executor and Connect Hub have no universal app catalog: use the authorized server's indexed tools.
+ * Executor has no universal app catalog: use the authorized server's indexed tools.
  */
 const REVIEWED_AGGREGATOR_SUPPORT = [
   {
@@ -232,6 +233,20 @@ for (const app of arcadeCatalog.apps) {
   }
 }
 
+// Connect Hub ships a fixed app list (its own catalog); a given hub server may expose fewer, checked at connect time.
+for (const app of connecthubCatalog.apps) {
+  const existing = AGGREGATOR_SUPPORT_INDEX.find((entry) =>
+    entry.slug === app.slug || aggregatorAppIdentity(entry.name) === aggregatorAppIdentity(app.name));
+  if (existing) {
+    existing.aliases = [...new Set([...existing.aliases, app.slug, ...app.aliases])];
+    existing.providers = { ...existing.providers, connecthub: connecthubCatalog.verifiedAt };
+    existing.evidenceUrls = { ...existing.evidenceUrls, connecthub: connecthubCatalog.source };
+  } else {
+    AGGREGATOR_SUPPORT_INDEX.push({ slug: app.slug, name: app.name, aliases: app.aliases,
+      providers: { connecthub: connecthubCatalog.verifiedAt }, evidenceUrls: { connecthub: connecthubCatalog.source } });
+  }
+}
+
 export function searchAggregatorServices(query: string | ReturnType<typeof prepareConnectionSearch>) {
   const prepared = typeof query === "string" ? prepareConnectionSearch(query) : query;
   return AGGREGATOR_SUPPORT_INDEX.map(service => ({ service,
@@ -375,5 +390,8 @@ export function aggregatorContinuationInstruction(
     zapier:
       "In Agentic mode, use discover_zapier_actions and the documented app connection flow. In Managed mode, ask the user to add the required actions in Zapier and refresh the catalog.",
   }[provider];
-  return `${name} is an external service. Its connection is available to this agent, but ${targetName} access is not yet verified. ${discovery} Use only the requested capability and effective permissions. If support is absent, explain that result and ask before switching providers. Claim success only after verifying the underlying app; never repeat an uncertain write.`;
+  const hubToolkit = provider === "connecthub" ? connecthubCatalog.apps.find(app =>
+    aggregatorAppIdentity(app.name) === aggregatorAppIdentity(targetName) || app.slug === targetName.toLowerCase())?.toolkit : undefined;
+  const toolkitHint = hubToolkit ? ` The hub toolkit for ${targetName} is usually ${hubToolkit}; use the slug the server lists.` : "";
+  return `${name} is an external service. Its connection is available to this agent, but ${targetName} access is not yet verified. ${discovery}${toolkitHint} Use only the requested capability and effective permissions. If support is absent, explain that result and ask before switching providers. Claim success only after verifying the underlying app; never repeat an uncertain write.`;
 }

@@ -1,6 +1,6 @@
 import { TabFilters } from "@/components/TabBar";
 
-export const CATALOG_SOURCES = ["paperclip", "composio", "arcade", "installed", "all"] as const;
+export const CATALOG_SOURCES = ["paperclip", "composio", "arcade", "connecthub", "installed", "all"] as const;
 export type CatalogSource = typeof CATALOG_SOURCES[number];
 export const CATALOG_SOURCE_NAMES = { paperclip: "Paperclip", composio: "Composio", arcade: "Arcade", executor: "Executor", connecthub: "Connect Hub", installed: "Installed", all: "All" };
 

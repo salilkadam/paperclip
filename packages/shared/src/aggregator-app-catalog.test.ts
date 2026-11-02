@@ -28,7 +28,8 @@ describe("public aggregator app catalog", () => {
       expect(new Set(app.routes.map((route) => route.provider)).size).toBe(app.routes.length);
       for (const route of app.routes) {
         expect(new URL(route.logoUrl).protocol).toBe("https:");
-        expect(new URL(route.docsUrl).hostname).toBe(`docs.${route.provider}.dev`);
+        // Connect Hub is self-hosted: its routes cite the hub's own catalog source.
+        expect(new URL(route.docsUrl).hostname).toBe(route.provider === "connecthub" ? "github.com" : `docs.${route.provider}.dev`);
       }
     }
   });
@@ -46,7 +47,16 @@ describe("public aggregator app catalog", () => {
     expect(app.routes.map((route) => route.provider)).toEqual(["composio", "arcade"]);
   });
   it("brands Connect Hub toolkits only by exact known identities and keeps custom toolkits separate", () => {
-    expect(AGGREGATOR_APP_CATALOG.some(app => app.routes.some(route => route.provider === "connecthub"))).toBe(false);
+    // The hub's shipped apps are listed as a choice next to the other aggregators, merged into the same app.
+    const github = findAggregatorApp("connecthub", "github")!;
+    expect(github.routes.map(route => route.provider)).toEqual(expect.arrayContaining(["composio", "connecthub"]));
+    expect(github.routes.find(route => route.provider === "connecthub")?.toolkit).toBe("github");
+    // Each hub toolkit keeps its own tile, so discovery tags its accounts on the right app.
+    const toolkitFor = (slug: string) => AGGREGATOR_APP_CATALOG.find(app => app.slug === slug)?.routes.find(route => route.provider === "connecthub")?.toolkit;
+    expect(toolkitFor("jira")).toBe("jira-cloud");
+    expect(toolkitFor("confluence")).toBe("confluence");
+    expect(resolveAggregatorApp("connecthub", "jira-cloud").slug).toBe("jira");
+    expect(resolveAggregatorApp("connecthub", "confluence").slug).toBe("confluence");
     expect(resolveAggregatorApp("connecthub", "google-drive")).toMatchObject({ name: "Google Drive" });
     expect(resolveAggregatorApp("connecthub", "github").slug).toBe("github");
     expect(resolveAggregatorApp("connecthub", "acme-internal")).toEqual({ slug: "connecthub:acme-internal", name: "acme-internal" });
