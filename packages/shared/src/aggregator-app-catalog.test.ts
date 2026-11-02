@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGGREGATOR_APP_CATALOG, COMPOSIO_APP_TOOLKITS, findComposioCatalogApp, findAggregatorApp } from "./aggregator-app-catalog.js";
+import { AGGREGATOR_APP_CATALOG, COMPOSIO_APP_TOOLKITS, findComposioCatalogApp, findAggregatorApp, resolveAggregatorApp } from "./aggregator-app-catalog.js";
 
 describe("public aggregator app catalog", () => {
   it("indexes the full snapshots and merges provider routes for the same app", () => {
@@ -44,5 +44,11 @@ describe("public aggregator app catalog", () => {
     const app = findAggregatorApp("composio", composioToolkit)!;
     expect(findAggregatorApp("arcade", arcadeToolkit)).toBe(app);
     expect(app.routes.map((route) => route.provider)).toEqual(["composio", "arcade"]);
+  });
+  it("brands Connect Hub toolkits only by exact known identities and keeps custom toolkits separate", () => {
+    expect(AGGREGATOR_APP_CATALOG.some(app => app.routes.some(route => route.provider === "connecthub"))).toBe(false);
+    expect(resolveAggregatorApp("connecthub", "google-drive")).toMatchObject({ name: "Google Drive" });
+    expect(resolveAggregatorApp("connecthub", "github").slug).toBe("github");
+    expect(resolveAggregatorApp("connecthub", "acme-internal")).toEqual({ slug: "connecthub:acme-internal", name: "acme-internal" });
   });
 });

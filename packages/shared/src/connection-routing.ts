@@ -16,18 +16,20 @@ export const AGGREGATOR_PRIORITY = [
   "composio",
   "arcade",
   "executor",
+  "connecthub",
   "zapier",
 ] as const;
 export const AGGREGATOR_NAMES: Record<RemoteMcpConnectorId, string> = {
   composio: "Composio",
   arcade: "Arcade",
   executor: "Executor",
+  connecthub: "Connect Hub",
   zapier: "Zapier",
 };
 
 /** Reviewed public catalog snapshot, not a claim that an account has authorized an app.
  * Add only services confirmed in the cited official catalog. No provider credentials.
- * Executor has no universal app catalog: use the authorized workspace's indexed tools.
+ * Executor and Connect Hub have no universal app catalog: use the authorized server's indexed tools.
  */
 const REVIEWED_AGGREGATOR_SUPPORT = [
   {
@@ -276,23 +278,26 @@ export function findAggregatorService(query: string, rankedMatches?: ReturnType<
 export function explicitAggregatorQuery(query: string) {
   // A trailing exclusion is not a second proposed provider. Keep this grammar
   // narrow; alternatives and contradictory choices still require confirmation.
-  const exclusion = query.match(/\s*,?\s+not\s+(composio|arcade|executor|zapier)[.!]?\s*$/i);
+  // "Connect Hub" is written with or without a space; both name the connecthub provider.
+  const providerKey = (name: string) => name.toLowerCase().replace(/[\s-]+/g, "");
+  const exclusion = query.match(/\s*,?\s+not\s+(composio|arcade|executor|connect[\s-]?hub|zapier)[.!]?\s*$/i);
   if (exclusion) query = query.slice(0, exclusion.index).trim();
   const matches = [
     ...query.matchAll(
-      /\b(?:through|via|using)\s+(composio|arcade|executor|zapier)\b/gi,
+      /\b(?:through|via|using)\s+(composio|arcade|executor|connect[\s-]?hub|zapier)\b/gi,
     ),
   ];
-  const namedProviders = new Set(
-    (query.match(/\b(?:composio|arcade|executor|zapier)\b/gi) ?? []).map(
-      (name) => name.toLowerCase(),
-    ),
-  );
+  // A bare "connect hub" also reads as "connect HubSpot"/"connect hub spot"; only
+  // the joined spelling or an explicit "through Connect Hub" names the provider.
+  const namedProviders = new Set([
+    ...(query.match(/\b(?:composio|arcade|executor|connect-?hub|zapier)\b/gi) ?? []),
+    ...matches.map(match => match[1]!),
+  ].map(providerKey));
   if (matches.length !== 1 || namedProviders.size !== 1) return null;
   const match = matches[0]!;
-  if (exclusion?.[1]?.toLowerCase() === match[1]!.toLowerCase()) return null;
+  if (exclusion?.[1] && providerKey(exclusion[1]) === providerKey(match[1]!)) return null;
   return {
-    provider: match[1]!.toLowerCase() as RemoteMcpConnectorId,
+    provider: providerKey(match[1]!) as RemoteMcpConnectorId,
     serviceQuery: (
       query.slice(0, match.index) + query.slice(match.index! + match[0].length)
     ).trim(),
@@ -365,6 +370,8 @@ export function aggregatorContinuationInstruction(
       "Inspect the gateway tools for the requested app. If absent, ask the user to add the app's tools in the Arcade gateway and refresh the connection. Follow tool authorization links when required.",
     executor:
       "Inspect the Executor workspace's actual integrations using its documented discovery tools. Do not assume arbitrary apps exist or register integrations merely to search. Follow provider authorization and resume instructions when needed.",
+    connecthub:
+      "Call hub_list_connections to see which of the server's toolkits are connected. If the requested app is not connected, call hub_connect with its toolkit and give the user the returned link; never invent a toolkit the server does not list. App actions are named <toolkit>__<action>.",
     zapier:
       "In Agentic mode, use discover_zapier_actions and the documented app connection flow. In Managed mode, ask the user to add the required actions in Zapier and refresh the catalog.",
   }[provider];

@@ -4,6 +4,7 @@ export const REMOTE_MCP_CONNECTOR_METHODS = {
   arcade: "mcp",
   composio: "mcp",
   executor: "mcp",
+  connecthub: "mcp",
 } as const;
 
 export type RemoteMcpConnectorId = keyof typeof REMOTE_MCP_CONNECTOR_METHODS;

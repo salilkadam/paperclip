@@ -1,7 +1,7 @@
 import composio from "./composio-search-catalog.json" with { type: "json" };
 import arcade from "./arcade-app-catalog.json" with { type: "json" };
 
-export type AppCatalogAggregator = "composio" | "arcade" | "executor";
+export type AppCatalogAggregator = "composio" | "arcade" | "executor" | "connecthub";
 
 export interface AggregatorAppRoute {
   provider: AppCatalogAggregator;
@@ -80,13 +80,13 @@ export function findAggregatorApp(provider: string, toolkit: string | null | und
       && (app.routes.some(route => route.provider === provider && route.toolkit === toolkit) || app.aliases.includes(toolkit)));
 }
 
-/** Executor supports custom integrations. Only exact known service identities share branding. */
+/** Executor and Connect Hub have no public catalog. Only exact known service identities share branding. */
 export function resolveAggregatorApp(provider: AppCatalogAggregator, toolkit: string, name?: string) {
   const known = provider === "composio" ? findComposioCatalogApp(toolkit) : findAggregatorApp(provider, toolkit)
     ?? AGGREGATOR_APP_CATALOG.find(app => app.routes.some(route => route.provider === provider)
       && [app.slug, ...app.aliases].some(alias => aggregatorAppIdentity(alias) === aggregatorAppIdentity(toolkit)));
   if (known) return { slug: known.slug, name: known.name };
-  if (provider === "executor") {
+  if (provider === "executor" || provider === "connecthub") {
     const identity = aggregatorAppIdentity(toolkit);
     const match = AGGREGATOR_APP_CATALOG.find(app => [app.slug, ...app.aliases].some(alias => aggregatorAppIdentity(alias) === identity));
     if (match) return { slug: match.slug, name: match.name };

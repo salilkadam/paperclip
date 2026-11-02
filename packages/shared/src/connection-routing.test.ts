@@ -16,6 +16,7 @@ describe("aggregator routing contract", () => {
       "composio",
       "arcade",
       "executor",
+      "connecthub",
       "zapier",
     ]);
     expect(findAggregatorService("  Hub Spot ")?.slug).toBe("hubspot");
@@ -96,4 +97,17 @@ it("keeps dates per app/provider claim and parses only an unambiguous explicit p
     serviceQuery: "Jira",
   });
   expect(explicitAggregatorQuery("Jira via Arcade, not Arcade")).toBeNull();
+});
+
+it("parses Connect Hub with or without a space, and never from a bare connect-HubSpot phrase", () => {
+  for (const query of ["GitHub through Connect Hub", "GitHub via connecthub", "GitHub using Connect-Hub"]) {
+    expect(explicitAggregatorQuery(query)).toEqual({ provider: "connecthub", serviceQuery: "GitHub" });
+  }
+  expect(explicitAggregatorQuery("Connect HubSpot through Composio")).toEqual({ provider: "composio", serviceQuery: "Connect HubSpot" });
+  expect(explicitAggregatorQuery("Connect hub spot through Composio")).toEqual({ provider: "composio", serviceQuery: "Connect hub spot" });
+  expect(explicitAggregatorQuery("GitHub via Connect Hub or via Composio")).toBeNull();
+  expect(explicitAggregatorQuery("Jira via Connect Hub, not Composio")).toEqual({ provider: "connecthub", serviceQuery: "Jira" });
+  expect(explicitAggregatorQuery("Jira via Connect Hub, not connecthub")).toBeNull();
+  expect(parseAggregatorRoute("via:connecthub:github")).toEqual({ provider: "connecthub", targetService: "github" });
+  expect(aggregatorContinuationInstruction("connecthub", "GitHub")).toContain("hub_list_connections");
 });

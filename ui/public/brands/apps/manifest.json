@@ -110,6 +110,12 @@
       "darkAsset": "/brands/apps/composio-dark.svg"
     },
     {
+      "slug": "connecthub",
+      "provider": "Connect Hub",
+      "catalogVisible": true,
+      "localAsset": "/brands/apps/connecthub.svg"
+    },
+    {
       "slug": "context7",
       "provider": "Context7",
       "catalogVisible": true,

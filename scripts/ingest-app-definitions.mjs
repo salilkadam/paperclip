@@ -2176,6 +2176,21 @@ apps.push({
     }
   ]
 });
+// Connect Hub is self-hosted, so no hub address is assumed. Its app-level UX
+// keys off the connection's own endpoint and its hub_* MCP tools.
+apps.push({
+  schemaVersion: 1,
+  slug: "connecthub",
+  name: "Connect Hub",
+  description: "Use the apps connected through your Connect Hub MCP server.",
+  categories: ["productivity"],
+  featured: false,
+  branding: brandingFor("connecthub"),
+  urlPatterns: [],
+  methods: [method("mcp", "mcp_remote", "none", {}, "S3", "Paste your Connect Hub MCP URL (it ends in /mcp). Under Advanced authentication, choose Bearer token and paste the hub MCP token issued for this server.", {
+    label: "Connect MCP server", ownershipModes: ["dcr", "customer"],
+  })],
+});
 const captureFiles = definitionsOnly ? [] : fs
   .readdirSync(corpus)
   .filter((fileName) => fileName.endsWith(".md") && fileName !== "INDEX.md")

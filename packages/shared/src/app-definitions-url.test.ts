@@ -47,7 +47,10 @@ describe("tool app gallery URL matching", () => {
   });
 
   it("keeps tool gallery entries reachable through at least one pattern", () => {
-    for (const app of CONNECTABLE_APP_DEFINITIONS.filter((app) => app.methods.some((method) => method.purpose !== "channel" && method.purpose !== "ai"))) {
+    // Connect Hub is self-hosted: no hub address may be assumed, so no URL can claim it.
+    const selfHosted = new Set(["connecthub"]);
+    for (const slug of selfHosted) expect(CONNECTABLE_APP_DEFINITIONS.find((app) => app.slug === slug)?.urlPatterns).toEqual([]);
+    for (const app of CONNECTABLE_APP_DEFINITIONS.filter((app) => !selfHosted.has(app.slug) && app.methods.some((method) => method.purpose !== "channel" && method.purpose !== "ai"))) {
       const example = app.urlPatterns[0]?.replace("*", "example");
       expect(example, `${app.slug} has a pattern`).toBeTruthy();
       expect(getAppDefinitionForUrl(example!)?.slug).toBe(app.slug);
