@@ -1,6 +1,9 @@
 # The deployer. Each step is an initContainer, so they run in order; each holds
 # only the mounts in the plan's table. Every step exits 0 and records its
 # outcome; the main container (report) sets the Job's exit code.
+# Each command is `sh -c 'timeout -s KILL N ...; exit $?'`: BusyBox timeout as
+# PID 1 (or with the script as PID 1) bounds nothing, because PID 1 ignores the
+# signal; this shape was verified to kill on time.
 # Plan: doc/plans/2026-11-02-reliora-site-deployer.md
 apiVersion: batch/v1
 kind: CronJob
@@ -38,7 +41,7 @@ spec:
           initContainers:
             - name: lock
               image: alpine/k8s:1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
-              command: [timeout, "60", sh, /scripts/deployer.sh, lock]
+              command: [sh, -c, 'timeout -s KILL 60 sh /scripts/deployer.sh lock; exit $?']
               env: &env
                 - {name: POD_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
                 - {name: NAMESPACE, valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}
@@ -51,7 +54,7 @@ spec:
               resources: &small {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 200m, memory: 128Mi}}
             - name: fetch
               image: alpine/git:2.47.2@sha256:062a01ad7a0eb17cff382bc5e26086b4d710e56dfdfdf001109a49b6d9bd378c
-              command: [timeout, "180", sh, /scripts/deployer.sh, fetch]
+              command: [sh, -c, 'timeout -s KILL 180 sh /scripts/deployer.sh fetch; exit $?']
               env: *env
               volumeMounts:
                 - {name: scripts, mountPath: /scripts, readOnly: true}
@@ -59,22 +62,25 @@ spec:
                 - {name: releases, mountPath: /srv/site, readOnly: true}
                 - {name: trusted, mountPath: /trusted}
                 - {name: checkin, mountPath: /checkin}
-              securityContext: *csc
+              # ssh refuses to run as a uid with no passwd entry; 65534 (nobody)
+              # exists in this image. Group 101 (fsGroup) reads the key.
+              securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsUser: 65534, runAsGroup: 101}
               resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: "1", memory: 512Mi}}
             - name: attempt
               image: alpine/k8s:1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
-              command: [timeout, "60", sh, /scripts/deployer.sh, attempt]
+              command: [sh, -c, 'timeout -s KILL 60 sh /scripts/deployer.sh attempt; exit $?']
               env: *env
               volumeMounts:
                 - {name: scripts, mountPath: /scripts, readOnly: true}
                 - {name: sa-token, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
                 - {name: trusted, mountPath: /trusted}
+                - {name: checkin, mountPath: /checkin}    # removed when attempts are exceeded
               securityContext: *csc
               resources: *small
             # commit code: no secret, no token, no release volume
             - name: check
               image: node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
-              command: [timeout, "330", sh, /scripts/deployer.sh, check]
+              command: [sh, -c, 'timeout -s KILL 330 sh /scripts/deployer.sh check; exit $?']
               env: [{name: HOME, value: /tmp}]
               volumeMounts:
                 - {name: scripts, mountPath: /scripts, readOnly: true}
@@ -84,7 +90,7 @@ spec:
               resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}
             - name: copy
               image: nginxinc/nginx-unprivileged:1.30.5-alpine@sha256:56b8272e43a0525f67aed68d1e0794a712d10e3e45a563e118e9a77c817e6f86
-              command: [timeout, "150", sh, /scripts/deployer.sh, copy]
+              command: [sh, -c, 'timeout -s KILL 150 sh /scripts/deployer.sh copy; exit $?']
               env: *env
               volumeMounts:
                 - {name: scripts, mountPath: /scripts, readOnly: true}
@@ -96,7 +102,7 @@ spec:
             # the commit's nginx config: release volume read-only, writes only to stagetmp
             - name: stage
               image: nginxinc/nginx-unprivileged:1.30.5-alpine@sha256:56b8272e43a0525f67aed68d1e0794a712d10e3e45a563e118e9a77c817e6f86
-              command: [timeout, "270", sh, /scripts/deployer.sh, stage]
+              command: [sh, -c, 'timeout -s KILL 270 sh /scripts/deployer.sh stage; exit $?']
               env: *env
               volumeMounts:
                 - {name: scripts, mountPath: /scripts, readOnly: true}
@@ -108,7 +114,7 @@ spec:
               resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: "1", memory: 256Mi}}
             - name: switch
               image: alpine/k8s:1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
-              command: [timeout, "780", sh, /scripts/deployer.sh, switch]
+              command: [sh, -c, 'timeout -s KILL 780 sh /scripts/deployer.sh switch; exit $?']
               env: *env
               volumeMounts:
                 - {name: scripts, mountPath: /scripts, readOnly: true}
@@ -121,7 +127,7 @@ spec:
           containers:
             - name: report
               image: alpine/k8s:1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
-              command: [timeout, "90", sh, /scripts/deployer.sh, report]
+              command: [sh, -c, 'timeout -s KILL 90 sh /scripts/deployer.sh report; exit $?']
               env: *env
               volumeMounts:
                 - {name: scripts, mountPath: /scripts, readOnly: true}
@@ -139,7 +145,7 @@ spec:
                   - configMap: {name: kube-root-ca.crt, items: [{key: ca.crt, path: ca.crt}]}
                   - downwardAPI: {items: [{path: namespace, fieldRef: {fieldPath: metadata.namespace}}]}
             - {name: git-key, secret: {secretName: site-deployer-git, defaultMode: 0440}}
-            - {name: slack, secret: {secretName: site-deployer-slack, optional: true, defaultMode: 0440}}
+            - {name: slack, secret: {secretName: site-deployer-slack, defaultMode: 0440}}   # required: no silent alerts
             - {name: releases, persistentVolumeClaim: {claimName: site-releases}}
             - {name: trusted, emptyDir: {sizeLimit: 600Mi}}
             - {name: checkin, emptyDir: {sizeLimit: 600Mi}}

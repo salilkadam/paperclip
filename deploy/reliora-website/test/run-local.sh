@@ -38,6 +38,9 @@ D_LOG=$(mk hostilelog "sed -i 's#location = /healthz {#location = /x { access_lo
 E_SLOW=$(mk slow "sed -i 's#location = /healthz {#location = /_site-pricing.html { limit_rate 50; }\n    location = /healthz {#' deploy/nginx.conf")
 F_LINK=$(mk symlink "ln -s /etc/passwd public/leak.html")
 G_DAV=$(mk dav "sed -i 's#location = /healthz {#location /dav/ { alias /srv/site/current/html/; dav_methods PUT DELETE; }\n    location = /healthz {#' deploy/nginx.conf")
+I_HANG=$(mk hang "sed -i '1a process.on(\"SIGTERM\", () => {}); setInterval(() => {}, 1000); return;' site-src/build.cjs")
+J_FORGE=$(mk forge "sed -i '1a require(\"fs\").writeFileSync(\"/checkout/result\", \"pass\"); require(\"fs\").chmodSync(\"/checkout/result\", 0o444); process.exit(1);' site-src/build.cjs")
+K_NEXT=$(mk next "sed -i 's/Pricing/Pricing/' site-src/pages/pricing.html; echo '<!-- k -->' >> deploy/security-headers.conf")
 H_CONF=$(mk confchange "sed -i 's#location = /healthz {#location = /extra { return 204; }\n    location = /healthz {#' deploy/nginx.conf")
 git checkout -q main; rm -rf /tmp/$P-repo; git clone -q --bare $W /tmp/$P-repo; load repo /tmp/$P-repo
 cd - >/dev/null
@@ -57,11 +60,16 @@ docker run -d --name $P-live --network $NET --user 101 -v "$(v releases)":/srv/s
 sleep 2; LIVE_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" $P-live)
 root "echo $LIVE_IP > /fake/live-ip; chown 101 /fake/live-ip"
 
+# Each step runs exactly as in 40-cronjob.yaml: its command shape and time limit,
+# and its uid (fetch is 65534, the rest 101; all group 101).
+limit() { sed -n "s/.*timeout -s KILL \([0-9]*\) sh \/scripts\/deployer.sh $1;.*/\1/p" "$HERE/40-cronjob.yaml"; }
 step() { # step NAME IMAGE MOUNTS...
   n=$1 img=$2; shift 2
-  docker run --rm --network $NET --user 101:101 -e POD_NAME=pod1 -e REPO_URL=/repo -e NAMESPACE=reliora-website \
+  u=101; [ "$n" = fetch ] && u=65534
+  docker run --rm --network $NET --user $u:101 -e POD_NAME=pod1 -e REPO_URL=/repo -e NAMESPACE=reliora-website \
+    -e CHECK_TIMEOUT="${CHECK_TIMEOUT:-300}" \
     -e PATH=/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin -e HOME=/tmp \
-    -v "$(v scripts)":/scripts:ro "$@" --entrypoint sh "$img" /scripts/deployer.sh "$n" 2>&1 | sed "s/^/    /"
+    -v "$(v scripts)":/scripts:ro "$@" --entrypoint sh "$img" -c "timeout -s KILL $(limit "$n") sh /scripts/deployer.sh $n; exit \$?" 2>&1 | sed "s/^/    /"
   return "${PIPESTATUS[0]}"
 }
 run() { # one deployer run, exactly the CronJob's mounts
@@ -109,4 +117,20 @@ root "printf 'state=switching\nreason=switching\ncommit=$A\ndeployer=x\nprevious
 run; expect recover-switch "ok" $A 0
 echo "== 13 the Lease held by a live pod: skip"; root "touch /fake/pod-other; jq '.spec.holderIdentity=\"other\" | .spec.renewTime=\"$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)\"' /fake/lease.json > /fake/l && mv /fake/l /fake/lease.json; chown 101 /fake/lease.json" 2>/dev/null
 setmain $B_500; run; expect locked "ok" $A 0
+root "jq '.spec.holderIdentity=\"\"' /fake/lease.json > /fake/l && mv /fake/l /fake/lease.json; rm -f /fake/pod-other; chown 101 /fake/lease.json"
+echo "== 14 a check that ignores TERM and never exits"; setmain $I_HANG; s0=$(date +%s); CHECK_TIMEOUT=20 run; t=$(( $(date +%s) - s0 ))
+expect hang "failed_timeout" $A 1; [ "$t" -lt 240 ] && { echo "PASS hang bounded (${t}s)"; pass=$((pass+1)); } || { echo "FAIL hang took ${t}s"; fail=$((fail+1)); }
+echo "== 15 a check that writes its own pass, read-only, then fails"; setmain $J_FORGE; run; expect forged-pass "failed_check" $A 1
+echo "== 16 attempts exceeded: stop, pin, no untrusted code"
+dv="$(docker run --rm -v "$(v scripts)":/s:ro --entrypoint sh "$IMG_K8S" -c 'cat /s/deployer.sh /s/smoke.sh /s/stage-top.conf | sha256sum | cut -c1-12')"
+setmain $K_NEXT; root "jq --arg k \"$K_NEXT-$dv\" '.data[\"attempt-key\"]=\$k | .data[\"attempt-count\"]=\"3\"' /fake/cm.json > /fake/c && mv /fake/c /fake/cm.json; chown 101 /fake/cm.json"
+run; expect overflow "failed_timeout" $A 1
+grep -A8 '== 16' /tmp/sdtest.log 2>/dev/null | grep -q '\[check\]' && { echo "FAIL check ran after attempts were exceeded"; fail=$((fail+1)); } || { echo "PASS no check run after attempts were exceeded"; pass=$((pass+1)); }
+echo "== 17 the API is down during the switch: infra_error, nothing switched"
+root "printf 'state=ok\nreason=live\ncommit=$A\ndeployer=x\nprevious=none\nprevhash=none\ntries=0\ntime=0\n' > /srv/site/state; chown 101 /srv/site/state; jq '.data[\"attempt-count\"]=\"0\"' /fake/cm.json > /fake/c && mv /fake/c /fake/cm.json; touch /fake/api-down; chown 101 /fake/cm.json /fake/api-down"
+setmain $H_CONF; run; expect api-down "infra_error|staging" $A 1
+root 'rm -f /fake/api-down'; echo "== 18 the API is back: the next run deploys"; run; expect api-back "ok" $H_CONF 0
+echo "== 19 real ssh to GitHub as uid 65534 (a dummy key must be refused by GitHub, not by ssh)"
+out="$(docker run --rm --user 65534:101 -e HOME=/tmp -v "$(v scripts)":/scripts:ro --entrypoint sh "$IMG_GIT" -c 'ssh-keygen -q -t ed25519 -N "" -f /tmp/k >/dev/null && timeout -s KILL 30 ssh -i /tmp/k -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=/scripts/known_hosts -o StrictHostKeyChecking=yes -T git@github.com 2>&1')"
+echo "$out" | grep -q 'Permission denied (publickey)' && { echo "PASS ssh reached GitHub with the pinned host key and was refused for the key"; pass=$((pass+1)); } || { echo "FAIL ssh: $out"; fail=$((fail+1)); }
 echo; echo "passed $pass, failed $fail"; [ "$fail" -eq 0 ]

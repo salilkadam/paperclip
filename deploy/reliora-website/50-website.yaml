@@ -2,7 +2,8 @@
 # image; no site files in it. The pod holds no token and no Secret, mounts the
 # releases read-only, and has no egress (NetworkPolicy site-web).
 # Rollback of the cutover: apply the previous Deployment from
-# Reliora-Inc/reliora-website k8s/50-website-deployment.yaml (image 0.20.0-f8c6502).
+# Reliora-Inc/reliora-website k8s/50-website-deployment.yaml with the image that
+# is live just before the cutover (0.21.0-69e3678 on 2026-11-02; check again then).
 apiVersion: v1
 kind: ConfigMap
 metadata:

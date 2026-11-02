@@ -10,6 +10,7 @@
 #   in /checkout/result and /stageout/result, read with read_word.
 # - Every value written to a file, the ConfigMap or Slack is validated first.
 set -u
+umask 002   # steps run as uid 101 or 65534, always group 101 (fsGroup)
 STEP="${1:?step}"
 SITE=/srv/site
 TRUSTED=/trusted
@@ -18,7 +19,7 @@ REPO_URL="${REPO_URL:-git@github.com:Reliora-Inc/reliora-website.git}"
 ME="${POD_NAME:-local}"
 HEX40='^[0-9a-f]\{40\}$'
 HEX64='^[0-9a-f]\{64\}$'
-LEASE_STALE=900          # seconds; above the longest gap between renewals
+LEASE_STALE=1800         # seconds: the Job deadline; a Running holder is never taken over
 now() { date +%s; }
 log() { echo "[$STEP] $*"; }
 
@@ -84,10 +85,13 @@ step_lock() {
   age=999999
   if [ -n "$renew" ]; then age=$(( $(now) - $(date -d "$(echo "$renew" | cut -c1-19 | tr T ' ')" +%s 2>/dev/null || echo 0) )); fi
   takeable=no
-  if [ -z "$holder" ] || [ "$holder" = "$ME" ] || [ "$age" -gt "$LEASE_STALE" ]; then takeable=yes
+  if [ -z "$holder" ] || [ "$holder" = "$ME" ]; then takeable=yes
   else
     phase="$(kubectl -n "$NS" get pod "$holder" -o jsonpath='{.status.phase}' 2>/dev/null || echo gone)"
-    case "$phase" in Running|Pending) ;; *) takeable=yes ;; esac
+    case "$phase" in
+      Running|Pending) [ "$age" -gt "$LEASE_STALE" ] && takeable=yes ;;  # past any Job's deadline
+      *) takeable=yes ;;
+    esac
   fi
   [ "$takeable" = yes ] || { outcome skip locked; return; }
   lease_take "$j" && lease_mine && outcome ok locked_by_me || outcome skip lock_race
@@ -97,12 +101,16 @@ step_fetch() {
   [ "$(status_of lock)" = ok ] || { echo skip > "$TRUSTED/plan"; outcome skip not_locked; return; }
   install -m 600 /git-key/deploy_key /tmp/deploy_key 2>/dev/null || { echo skip > "$TRUSTED/plan"; outcome infra_error no_key; return; }
   export GIT_SSH_COMMAND="ssh -i /tmp/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=/scripts/known_hosts -o StrictHostKeyChecking=yes"
-  head="$(timeout 60 git ls-remote "$REPO_URL" refs/heads/main 2>/dev/null | cut -f1)"
-  echo "$head" | grep -q "$HEX40" || { echo skip > "$TRUSTED/plan"; outcome infra_error ls_remote; return; }
+  head="$(timeout -s KILL 60 git ls-remote "$REPO_URL" refs/heads/main 2>/dev/null | cut -f1)"
+  echo "$head" | grep -q "$HEX40" || { rm -f /tmp/deploy_key; echo skip > "$TRUSTED/plan"; outcome infra_error ls_remote; return; }
   st="$(state_get state)"; cm="$(state_get commit)"; dv="$(state_get deployer)"; tries="$(state_get tries)"; t="$(state_get time)"
   mine="$(deployer_version)"
+  # Recovery table (plan, round-3 changes). Nothing switched yet (staging, or
+  # switching with current not at the commit): deploy afresh. Otherwise resume.
   case "$st" in
-    staging|switching|restarting|rolling_back)
+    staging|switching) [ "$(current_sha)" = "$cm" ] && {
+      echo "$cm" > "$TRUSTED/sha"; echo recover > "$TRUSTED/plan"; outcome ok "recover_$st"; return; } ;;
+    restarting|rolling_back)
       echo "$cm" > "$TRUSTED/sha"; echo recover > "$TRUSTED/plan"; outcome ok "recover_$st"; return ;;
   esac
   if [ "$cm" = "$head" ] && [ "$dv" = "$mine" ]; then
@@ -117,10 +125,11 @@ step_fetch() {
   fi
   rm -rf "$TRUSTED/src" /checkin/src
   mkdir -p "$TRUSTED/src" && cd "$TRUSTED/src" && git init -q &&
-    timeout 120 git fetch -q --depth 1 "$REPO_URL" "$head" && git checkout -q FETCH_HEAD &&
+    timeout -s KILL 120 git fetch -q --depth 1 "$REPO_URL" "$head" && git checkout -q FETCH_HEAD &&
     [ "$(git rev-parse HEAD)" = "$head" ] || { echo skip > "$TRUSTED/plan"; outcome infra_error clone; return; }
   rm -rf .git
   cp -a "$TRUSTED/src" /checkin/src || { echo skip > "$TRUSTED/plan"; outcome infra_error copy_checkin; return; }
+  rm -f /tmp/deploy_key
   echo "$head" > "$TRUSTED/sha"; echo deploy > "$TRUSTED/plan"
   outcome ok "deploy"
 }
@@ -134,16 +143,21 @@ step_attempt() { # count attempts per commit+deployer before any untrusted work
   [ "$prev" = "$key" ] && n=$(( ${n:-0} + 1 )) || n=1
   kubectl -n "$NS" patch configmap site-deploy-state --type merge \
     -p "{\"data\":{\"attempt-key\":\"$key\",\"attempt-count\":\"$n\"}}" >/dev/null || { outcome infra_error cm_patch; return; }
-  if [ "$n" -gt 3 ]; then echo skip > "$TRUSTED/plan"; outcome failed_timeout "attempts_$n"; return; fi
+  if [ "$n" -gt 3 ]; then rm -rf /checkin/src; echo overflow > "$TRUSTED/plan"; outcome failed_timeout "attempts_exceeded"; return; fi
   outcome ok "attempt_$n"
 }
 
 step_check() { # commit code; mounts /checkin and /checkout only; writes one word
-  rm -f /checkout/result
-  [ -d /checkin/src ] || { echo skip > /checkout/result; return 0; }
-  cd /checkin/src && timeout 300 node site-src/build.cjs --check > /dev/null 2>&1; rc=$?
+  [ -d /checkin/src ] || return 0
+  ( cd /checkin/src && exec timeout -s KILL "${CHECK_TIMEOUT:-300}" node site-src/build.cjs --check ) > /dev/null 2>&1; rc=$?
   case "$rc" in 0) w=pass ;; 124|137|143) w=timeout ;; *) w=fail ;; esac
-  echo "$w" > /checkout/result 2>/dev/null || true
+  # Commit code ran as this uid and may have left processes or planted
+  # /checkout/result (a file, a read-only file, a directory, a symlink). Kill
+  # everything else of ours, then replace the result. If the replace fails, step
+  # 3a finds no valid word and fails closed.
+  kill -KILL -1 2>/dev/null; sleep 1
+  rm -rf /checkout/result /checkout/.r 2>/dev/null
+  printf '%s\n' "$w" > /checkout/.r && mv -f /checkout/.r /checkout/result
   echo "[check] $w"
   return 0
 }
@@ -178,7 +192,9 @@ step_copy() { # PVC read-write; runs no commit code
      [ "$(du -sk "$src/public" | cut -f1)" -gt 512000 ]; then
     state_put failed_check too_large "$s" "$pv" "$ph" 0; outcome failed_check too_large; return; fi
   rel="$SITE/releases/$s"
-  if [ -f "$rel/.complete" ]; then outcome ok reuse; state_put staging staged "$s" "$pv" "$ph" 0; return; fi
+  if [ -f "$rel/.complete" ] && [ "$(head -c 64 "$rel/deployer" 2>/dev/null)" = "$(deployer_version)" ]; then
+    state_put staging staged "$s" "$pv" "$ph" 0; outcome ok reuse; return; fi
+  [ "$s" = "$pv" ] && { state_put failed_check rerender_live_release "$s" "$pv" "$ph" 0; outcome failed_check rerender_live; return; }
   tmp="$SITE/releases/.tmp-$s"; rm -rf "$tmp" "$rel"
   { mkdir -p "$tmp" && cp -R "$src/public" "$tmp/html" &&
     cp "$src/deploy/security-headers.conf" "$tmp/security-headers.conf"; } ||
@@ -187,7 +203,7 @@ step_copy() { # PVC read-write; runs no commit code
   render "$src/deploy/nginx.conf" "$tmp/staging.conf" "$rel" 'listen 127.0.0.1:8081;' ||
     { rm -rf "$tmp"; state_put failed_check config_anchors "$s" "$pv" "$ph" 0; outcome failed_check config_anchors; return; }
   cat "$tmp/default.conf" "$tmp/security-headers.conf" | sha256sum | cut -c1-64 > "$tmp/config.hash"
-  touch "$tmp/.complete" && mv "$tmp" "$rel" ||
+  deployer_version > "$tmp/deployer" && touch "$tmp/.complete" && mv "$tmp" "$rel" ||
     { state_put infra_error rename "$s" "$pv" "$ph" 1; outcome infra_error rename; return; }
   state_put staging staged "$s" "$pv" "$ph" 0
   outcome ok staged
@@ -198,27 +214,30 @@ step_stage() { # PVC read-only; runs the commit's nginx config; writes one word
   [ "$(plan_action)" = deploy ] && [ "$(status_of copy)" = ok ] || { echo skip > /stageout/result; return 0; }
   s="$(sha)"; [ -n "$s" ] || { echo fail > /stageout/result; return 0; }
   sed "s#__RELEASE__#$SITE/releases/$s#" /scripts/stage-top.conf > /stagetmp/top.conf
-  if ! timeout 30 nginx -t -c /stagetmp/top.conf >/stagetmp/nginx-t.log 2>&1; then echo conf > /stageout/result; echo "[stage] conf"; return 0; fi
-  timeout 30 nginx -c /stagetmp/top.conf || { echo conf > /stageout/result; return 0; }
+  if ! timeout -s KILL 30 nginx -t -c /stagetmp/top.conf >/stagetmp/nginx-t.log 2>&1; then echo conf > /stageout/result; echo "[stage] conf"; return 0; fi
+  timeout -s KILL 30 nginx -c /stagetmp/top.conf || { echo conf > /stageout/result; return 0; }
   sleep 1
-  TMPDIR=/stagetmp timeout 200 sh /scripts/smoke.sh http://127.0.0.1:8081 "$SITE/releases/$s/html/sitemap.xml"; rc=$?
+  TMPDIR=/stagetmp timeout -s KILL 200 sh /scripts/smoke.sh http://127.0.0.1:8081 "$SITE/releases/$s/html/sitemap.xml"; rc=$?
   nginx -c /stagetmp/top.conf -s stop >/dev/null 2>&1 || true
   case "$rc" in 0) w=pass ;; 124|137|143) w=timeout ;; *) w=fail ;; esac
   echo "$w" > /stageout/result; echo "[stage] $w"; return 0
 }
 
 # pods_smoke SHA: smoke each serving, non-terminating website pod
+# returns 0 pass, 1 smoke failed (or no serving pod), 2 the API could not be read
 pods_smoke() {
-  ips="$(kubectl -n "$NS" get endpointslices -l kubernetes.io/service-name=reliora-website -o json |
-    jq -r '.items[].endpoints[]? | select(.conditions.serving==true and .conditions.terminating!=true) | .addresses[0]' | sort -u)"
+  es="$(kubectl -n "$NS" get endpointslices -l kubernetes.io/service-name=reliora-website -o json 2>/dev/null)" || return 2
+  ips="$(echo "$es" | jq -r '.items[].endpoints[]? | select(.conditions.serving==true and .conditions.terminating!=true) | .addresses[0]' | sort -u)"
   [ -n "$ips" ] || { log "no serving pods"; return 1; }
   for ip in $ips; do
     echo "$ip" | grep -q '^[0-9.]\{7,15\}$' || return 1
-    timeout 200 sh /scripts/smoke.sh "http://$ip:8080" "$SITE/releases/$1/html/sitemap.xml" > /tmp/smoke.log 2>&1 || { log "smoke failed on $ip"; tail -5 /tmp/smoke.log; return 1; }
+    timeout -s KILL 200 sh /scripts/smoke.sh "http://$ip:8080" "$SITE/releases/$1/html/sitemap.xml" > /tmp/smoke.log 2>&1 || { log "smoke failed on $ip"; tail -5 /tmp/smoke.log; return 1; }
   done
 }
-template_hash() { kubectl -n "$NS" get deploy reliora-website -o jsonpath='{.spec.template.metadata.annotations.reliora\.ai/config-hash}'; }
-serving_mode() { kubectl -n "$NS" get deploy reliora-website -o jsonpath='{.metadata.annotations.reliora\.ai/serving}'; }
+template_hash() { kubectl -n "$NS" get deploy reliora-website -o jsonpath='{.spec.template.metadata.annotations.reliora\.ai/config-hash}' 2>/dev/null || echo error; }
+serving_mode() { # prints the mode, or "error" when the API cannot be read
+  m="$(kubectl -n "$NS" get deploy reliora-website -o json 2>/dev/null)" || { echo error; return; }
+  echo "$m" | jq -r '.metadata.annotations["reliora.ai/serving"] // "none"'; }
 set_hash() { # set_hash HASH: restart pods onto that config, wait for the rollout
   fence
   kubectl -n "$NS" patch deploy reliora-website --type merge \
@@ -228,11 +247,12 @@ set_hash() { # set_hash HASH: restart pods onto that config, wait for the rollou
 point_to() { fence; ln -sfn "releases/$1" "$SITE/.current.new" && mv -T "$SITE/.current.new" "$SITE/current"; }
 hash_of() { head -c 64 "$SITE/releases/$1/config.hash" 2>/dev/null; }
 
-go_live_check() { # go_live_check SHA: config hash, then each pod
-  h="$(hash_of "$1")"
-  if [ "$(template_hash)" != "$h" ]; then
+go_live_check() { # go_live_check SHA: 0 live and passing, 1 failed, 2 API error
+  h="$(hash_of "$1")"; th="$(template_hash)"
+  [ "$th" = error ] && return 2
+  if [ "$th" != "$h" ]; then
     state_put restarting config_changed "$1" "$PV" "$PH" 0
-    set_hash "$h" || return 1
+    set_hash "$h" || return 1      # pods not Ready on the new config: a failure
   fi
   pods_smoke "$1"
 }
@@ -240,13 +260,32 @@ rollback() { # rollback SHA reason
   state_put rolling_back "$2" "$1" "$PV" "$PH" 0
   if [ -z "$PV" ] || [ ! -f "$SITE/releases/$PV/.complete" ]; then state_put broken no_previous "$1" none none 0; outcome broken no_previous; return; fi
   point_to "$PV"
-  if [ "$(template_hash)" != "$PH" ]; then set_hash "$PH" || true; fi
-  if pods_smoke "$PV"; then state_put failed_smoke "$2" "$1" "$PV" "$PH" 0; outcome failed_smoke "$2"
-  else state_put broken "$2" "$1" "$PV" "$PH" 0; outcome broken "$2"; fi
+  th="$(template_hash)"
+  [ "$th" = error ] && { outcome infra_error rollback_api; return; }   # state stays rolling_back
+  if [ "$th" != "$PH" ]; then set_hash "$PH" || true; fi
+  pods_smoke "$PV"; rc=$?
+  case "$rc" in
+    0) state_put failed_smoke "$2" "$1" "$PV" "$PH" 0; outcome failed_smoke "$2" ;;
+    2) outcome infra_error rollback_api ;;                           # state stays rolling_back
+    *) state_put broken "$2" "$1" "$PV" "$PH" 0; outcome broken "$2" ;;
+  esac
+}
+# live_or_rollback SHA OK_REASON: after the switch, or in recovery
+live_or_rollback() {
+  go_live_check "$1"; rc=$?
+  case "$rc" in
+    0) state_put ok "$2" "$1" "$PV" "$PH" 0; outcome ok "$2" ;;
+    2) outcome infra_error live_check_api ;;   # state stays switching/restarting; the next run resumes
+    *) rollback "$1" live_smoke ;;
+  esac
 }
 
 step_switch() { # token, PVC read-write
   a="$(plan_action)"; s="$(sha)"
+  if [ "$a" = overflow ] && [ -n "$s" ]; then # attempts exceeded: pin it on the volume
+    st="$(state_get state)"; case "$st" in staging|switching|restarting|rolling_back) ;; *)
+      state_put failed_timeout attempts_exceeded "$s" "$(current_sha)" none 0 ;; esac
+    outcome failed_timeout attempts_exceeded; return; fi
   [ "$a" = deploy ] || [ "$a" = recover ] || { outcome skip "$a"; return; }
   [ "$(status_of attempt)" = ok ] || { outcome skip attempt_not_ok; return; }
   [ -n "$s" ] || { outcome infra_error no_sha; return; }
@@ -262,7 +301,9 @@ step_switch() { # token, PVC read-write
       *) state_put failed_smoke stage_smoke "$s" "$PV" "$PH" 0; outcome failed_smoke stage; kill "$RENEW_PID" 2>/dev/null; return ;;
     esac
   fi
-  if [ "$(serving_mode)" != release-volume ]; then # before cutover: publish only
+  mode="$(serving_mode)"
+  [ "$mode" = error ] && { outcome infra_error serving_mode_api; kill "$RENEW_PID" 2>/dev/null; return; }
+  if [ "$mode" != release-volume ]; then # before cutover: publish only
     [ "$a" = deploy ] || { outcome skip not_cut_over; kill "$RENEW_PID" 2>/dev/null; return; }
     point_to "$s"; state_put published not_cut_over "$s" none none 0; outcome published not_cut_over
     kill "$RENEW_PID" 2>/dev/null; return
@@ -270,17 +311,15 @@ step_switch() { # token, PVC read-write
   if [ "$a" = deploy ]; then
     state_put switching switching "$s" "$PV" "$PH" 0
     point_to "$s"
-    if go_live_check "$s"; then state_put ok live "$s" "$PV" "$PH" 0; outcome ok live
-    else rollback "$s" live_smoke; fi
+    live_or_rollback "$s" live
   else # recover, from the recorded state
     st="$(state_get state)"; PV="$(state_get previous)"; PH="$(state_get prevhash)"
     [ "$PV" = none ] && PV=""
     case "$st" in
       staging) state_put infra_error interrupted_staging "$s" "$PV" "$PH" 1; outcome infra_error interrupted_staging ;;
       switching) if [ "$(current_sha)" != "$s" ]; then state_put infra_error interrupted_switch "$s" "$PV" "$PH" 1; outcome infra_error interrupted_switch
-                 elif go_live_check "$s"; then state_put ok live_recovered "$s" "$PV" "$PH" 0; outcome ok live_recovered
-                 else rollback "$s" live_smoke; fi ;;
-      restarting) if [ "$(current_sha)" = "$s" ] && go_live_check "$s"; then state_put ok live_recovered "$s" "$PV" "$PH" 0; outcome ok live_recovered
+                 else live_or_rollback "$s" live_recovered; fi ;;
+      restarting) if [ "$(current_sha)" = "$s" ]; then live_or_rollback "$s" live_recovered
                   else rollback "$s" live_smoke; fi ;;
       rolling_back) rollback "$s" live_smoke ;;
       *) outcome skip "nothing_to_recover" ;;
@@ -307,20 +346,24 @@ step_report() { # token, Slack webhook; sets the Job's exit code
       *) final="$o"; reason="$r" ;;
     esac
   done
+  # a deploy that never reached the switch step was killed by its time limit
+  if [ "$(plan_action)" = deploy ] && [ ! -f "$TRUSTED/status/switch" ] && [ "$final" = skip ]; then final=infra_error; reason=step_killed; fi
   echo "$final" | grep -q '^[a-z_]\{1,24\}$' || final=invalid
   echo "$reason" | grep -q '^[a-z0-9_]\{1,40\}$' || reason=invalid
   s="$(sha)"; s="${s:-none}"
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  was="$(kubectl -n "$NS" get configmap site-deploy-state -o json 2>/dev/null | jq -r '"\(.data.state // "")/\(.data.reason // "")/\(.data.commit // "")"')"
   data="{\"heartbeat\":\"$ts\",\"deployer\":\"$(deployer_version | cut -c1-12)\""
   [ "$final" != skip ] && data="$data,\"state\":\"$final\",\"reason\":\"$reason\",\"commit\":\"$s\",\"time\":\"$ts\""
   kubectl -n "$NS" patch configmap site-deploy-state --type merge -p "{\"data\":$data}}" >/dev/null || log "heartbeat write failed"
   case "$final" in
     ok|skip|published) ;;
-    *) if [ -s /slack/webhook ]; then
+    *) if [ "$was" = "$final/$reason/$s" ]; then log "same failure as last run; no new alert"
+       elif [ -s /slack/webhook ]; then
          curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
            --data "{\"text\":\"reliora.ai deploy: $final ($reason), commit ${s%"${s#???????}"}. See configmap reliora-website/site-deploy-state.\"}" \
            "$(head -c 300 /slack/webhook)" >/dev/null || log "slack post failed"
-       fi ;;
+       else log "no Slack webhook mounted: alert not sent"; fi ;;
   esac
   lease_mine && kubectl -n "$NS" patch lease site-deployer --type merge -p '{"spec":{"holderIdentity":""}}' >/dev/null 2>&1
   log "final: $final $reason"

@@ -58,5 +58,4 @@ kind: ConfigMap
 metadata:
   name: site-deploy-state
   namespace: reliora-website
-data:
-  state: "not_started"
+# No data here: re-applying must not reset what the deployer wrote.
