@@ -52,7 +52,7 @@ REPORT_POLICY="job-function: C-level agents report to the board"
 BLOCK_POLICY="job-function: C-level agents do not write elsewhere"
 BLOCK_NAMED_POLICY="job-function: C-level agents do not use mutating tools classified read"
 # A tool classified read whose name has one of these words. Tokens, not substrings.
-MUTATING_NAME='(^|[_.:-])(merge|push|fork|assign|dismiss|create|update|delete|remove|add|star|subscribe|write|trigger|send|publish|execute|run|cancel|rerun|request|manage|close|reopen|submit|register|modify|move|share|rename|upload|reply|edit|set|post|approve|reject|revoke|invite|lock|unlock|import|sync|restart|deploy)([_.:-]|$)'
+MUTATING_NAME='(^|[_.:-])(merge|push|fork|assign|dismiss|create|update|delete|remove|add|star|unstar|subscribe|unsubscribe|write|trigger|send|publish|execute|run|cancel|rerun|request|manage|close|reopen|submit|register|modify|move|share|rename|upload|reply|edit|set|post|approve|reject|revoke|invite|lock|unlock|import|sync|restart|deploy)([_.:-]|$)'
 READ_NAME='^(get|list|search|read|fetch)[_.:-]|[_.:-](read|get|list)$'
 READ_ONLY_POLICY="job-function: this GitHub connection is read-only"
 BEGIN='<!-- BEGIN bionic-org:job-function -->'
@@ -149,9 +149,14 @@ You delegate, review, strategize and answer to the board. You do not do tactical
 - Review the result when the task comes back. A missing write permission is expected: delegate, do not report it as a blocker.
 EOF
 
-companies="$(api GET "/companies?scope=accessible")"
-jq -e 'type=="array"' <<<"$companies" >/dev/null || companies="$(jq '.companies // .items' <<<"$companies")"
-companies="$(jq '[.[] | select((.status // "active") != "archived")]' <<<"$companies")"
+# An instance admin lists every company but can change only those it is a member
+# of. Report the others: a skipped company must not look like a finished one.
+companies="$(api GET "/companies" | jq 'if type=="array" then . else (.companies // .items) end | [.[] | select((.status // "active") != "archived")]')"
+accessible="$(api GET "/companies?scope=accessible" | jq -c 'if type=="array" then . else (.companies // .items) end | [.[].id]')"
+while read -r skipped; do
+  [[ -z "$skipped" ]] || pending "not applied to company '$skipped': this key's user is not a member of it"
+done < <(jq -r --argjson a "$accessible" --arg only "$ONLY_COMPANY" '.[] | select(($only == "" or .id == $only) and (.id | IN($a[]) | not)) | .name' <<<"$companies")
+companies="$(jq --argjson a "$accessible" '[.[] | select(.id | IN($a[]))]' <<<"$companies")"
 [[ -z "$ONLY_COMPANY" ]] || companies="$(jq --arg id "$ONLY_COMPANY" '[.[] | select(.id==$id)]' <<<"$companies")"
 [[ "$(jq length <<<"$companies")" -gt 0 ]] || die "no matching active company visible to this board key"
 
@@ -205,6 +210,25 @@ while read -r cid; do
   jq -r --argjson c "$clevel" --argjson a "$agents" '.[] | select(.status != "archived" and (.assigneeAgentId | IN($c[])))
       | "[job-function]   C-level routine: \(.title) -> \(.assigneeAgentId as $i | $a[] | select(.id==$i) | .name)"' <<<"$routines"
 
+  github="$(jq -c '[.[] | select((.config.sourceTemplateKey // .transportConfig.sourceTemplateKey) == "github")]' <<<"$conns")"
+  managed="$(jq -r '[.[] | select(.config.oauth.connectorProfile == "github.code")] | if length == 1 then .[0].id else "" end' <<<"$github")"
+  readconn="$(jq -r '[.[] | select(.config.oauth.connectorProfile != "github.code")] | if length == 1 then .[0].id else "" end' <<<"$github")"
+  exports=""
+  if [[ -n "$readconn" ]]; then
+    # git-credentials.ts issues a token only from an active agent or user grant
+    # with both of these. The route can hide such grants from a key without the
+    # capability, so a hidden list counts as able to export. A connection with no
+    # such grant fails closed in the resolver: "The managed GitHub identity is
+    # incomplete". That failure is what keeps git and gh away from these agents.
+    exports="$(api GET "/tool-connections/$readconn/grants" | jq -r '
+      if (.capabilities.canViewOtherPersonalIdentities // false) | not then "(hidden from this key)" else
+        [.grants[] | select(.status == "active" and (.kind | IN("agent","user")))
+         | select(([.credentialSecretRefs[]?.configPath] | index("oauth.access_token")) and (.providerTenant.github != null))
+         | .id] | join(", ") end')"
+  fi
+  # Read now, so that a failed read cannot stop the run after the policies changed.
+  [[ -z "$managed" ]] || api GET "/tool-connections/$managed/installs" >/dev/null
+  [[ -z "$readconn" ]] || api GET "/tool-connections/$readconn/installs" >/dev/null
   existing="$(api GET "/companies/$cid/tools/policies" | jq 'if type=="array" then . else .policies end')"
   ensure_policy "$cid" "$existing" "$(jq -n --arg n "$ALLOW_POLICY" --arg ws "$ws" --argjson a "$clevel" --argjson t "$DRIVE_WRITE_TOOLS" \
     '{name: $n, description: "C-level agents write documents to Google Drive.", policyType: "allow", priority: 10, enabled: true,
@@ -225,20 +249,6 @@ while read -r cid; do
         policyType: "block", priority: 11, enabled: true, selectors: {agentIds: $a, toolNames: $t}, conditions: null}')"
   fi
 
-  github="$(jq -c '[.[] | select((.config.sourceTemplateKey // .transportConfig.sourceTemplateKey) == "github")]' <<<"$conns")"
-  managed="$(jq -r '[.[] | select(.config.oauth.connectorProfile == "github.code")] | if length == 1 then .[0].id else "" end' <<<"$github")"
-  readconn="$(jq -r '[.[] | select(.config.oauth.connectorProfile != "github.code")] | if length == 1 then .[0].id else "" end' <<<"$github")"
-  exports=""
-  if [[ -n "$readconn" ]]; then
-    # git-credentials.ts issues a token only with both of these. A response that
-    # omits the fields counts as able to export, and so does an empty list: this
-    # route hides personal grants from a key that may not see them.
-    exports="$(api GET "/tool-connections/$readconn/grants" | jq -r '(if type=="array" then . else .grants end)
-      | [.[] | select(.status == "active")] as $g
-      | if ($g | length) == 0 then "(none visible to this key)" else
-          [$g[] | select((has("credentialSecretRefs") | not) or (([.credentialSecretRefs[]?.configPath] | index("oauth.access_token")) and (.providerTenant.github != null)))
-           | .id] | join(", ") end')"
-  fi
   if [[ "$(jq length <<<"$engineers")" -eq 0 ]]; then
     pending "$cname has no engineering agents: GitHub installs not narrowed"
   elif [[ -z "$managed" ]]; then
@@ -283,7 +293,8 @@ while read -r cid; do
   # nothing could be written even if the block failed.
   probe_agent="$(jq -r '.[0]' <<<"$clevel")"; first_gh=""
   while read -r g; do
-    if api GET "/tool-connections/$g/test-agents/$probe_agent/access" | jq -e '[.access.tools[] | select(.toolName == "create_branch")] | length == 1' >/dev/null; then first_gh="$g"; break; fi
+    access="$(api GET "/tool-connections/$g/test-agents/$probe_agent/access")"
+    if jq -e '[.access.tools[] | select(.toolName == "create_branch")] | length == 1' <<<"$access" >/dev/null; then first_gh="$g"; break; fi
   done < <(jq -r '.[].id' <<<"$github")
   if [[ -n "$first_gh" ]]; then
     jq -n --arg a "$probe_agent" '{agentId: $a, toolName: "create_branch", parameters: {owner: "zz-governance-probe", repo: "none", branch: "probe"}}' > "$WORK/probe.json"
