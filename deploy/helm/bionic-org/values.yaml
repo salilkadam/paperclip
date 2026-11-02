@@ -376,28 +376,40 @@ dnsConfig:
 # Liveness / Readiness probes
 # ---------------------------------------------------------------------------
 probes:
-  # Gates liveness/readiness until the server first answers /health. Startup
-  # time varies widely (entrypoint ownership repair on the NFS home, Composio
-  # login, then heartbeat recovery): 23s to well over 85s observed. Without
-  # this, liveness killed a still-starting server on every deploy. Budget:
-  # failureThreshold x periodSeconds = 5 minutes.
+  # All three probes use /api/liveness, the dedicated probe route: it answers
+  # 200 from memory once startup recovery is ready and 503 before that, with
+  # no auth, no SQL, and no disk reads. The root /health looks like a probe
+  # endpoint but is not one: it falls through to the SPA fallback and serves
+  # index.html from disk. That disk read repeatedly exceeds the probe timeout
+  # whenever the container is under CPU/IO pressure, which the hourly in-app
+  # database backup window reliably produces (readiness-timeout events 11x in
+  # 20h, always inside a backup window; a 2s sampler logged root /health
+  # stalling up to 8s while a memory+pool JSON route held sub-100ms in the
+  # same window). The guard allowlists /api/liveness for kubelet's pod-IP Host
+  # header and the HTTP logger silences it, like /api/health.
+  #
+  # Startup gate stays: startup time varies widely (entrypoint ownership
+  # repair on the NFS home, Composio login, then heartbeat recovery): 23s to
+  # well over 85s observed. Without this, liveness killed a still-starting
+  # server on every deploy. Budget: failureThreshold x periodSeconds = 5
+  # minutes, well above the observed recovery time.
   startup:
-    path: /health
+    path: /api/liveness
     port: 3100
     periodSeconds: 10
     timeoutSeconds: 5
     failureThreshold: 30
   liveness:
-    path: /health
+    path: /api/liveness
     port: 3100
     initialDelaySeconds: 15
     periodSeconds: 30
-    # /health can exceed the 1s Kubernetes default while the event loop is
-    # busy (recovery sweeps, large runs); that is slow, not dead.
+    # A busy event loop (recovery sweeps, large runs, the hourly backup) can
+    # exceed the 1s Kubernetes default; that is slow, not dead.
     timeoutSeconds: 5
     failureThreshold: 3
   readiness:
-    path: /health
+    path: /api/liveness
     port: 3100
     initialDelaySeconds: 5
     periodSeconds: 10

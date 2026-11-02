@@ -70,7 +70,12 @@ export function privateHostnameGuard(opts: {
   return (req, res, next) => {
     // Skip the hostname guard for health check endpoints so Kubernetes
     // liveness/readiness probes (which hit the pod's cluster IP) can pass.
-    if (req.path === "/health" || req.path === "/api/health") {
+    // /api/liveness is the dedicated probe route: it answers from memory
+    // only. The root /health is not a route — it falls through to the SPA
+    // fallback and reads index.html from disk, which stalls past the probe
+    // timeout under the CPU/IO pressure of the hourly in-app database backup
+    // window.
+    if (req.path === "/health" || req.path === "/api/health" || req.path === "/api/liveness") {
       return next();
     }
 

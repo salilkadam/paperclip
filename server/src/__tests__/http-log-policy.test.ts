@@ -114,6 +114,7 @@ describe("shouldSilenceHttpSuccessLog", () => {
 
   it("silences successful polling endpoints", () => {
     expect(shouldSilenceHttpSuccessLog("GET", "/api/health", 200)).toBe(true);
+    expect(shouldSilenceHttpSuccessLog("GET", "/api/liveness", 200)).toBe(true);
     expect(
       shouldSilenceHttpSuccessLog(
         "GET",
@@ -188,6 +189,8 @@ describe("shouldSilenceHttpSuccessLog", () => {
 
   it("keeps failing requests visible", () => {
     expect(shouldSilenceHttpSuccessLog("GET", "/api/health", 500)).toBe(false);
+    // A failing liveness probe must stay visible in the logs.
+    expect(shouldSilenceHttpSuccessLog("GET", "/api/liveness", 503)).toBe(false);
     expect(
       shouldSilenceHttpSuccessLog(
         "GET",

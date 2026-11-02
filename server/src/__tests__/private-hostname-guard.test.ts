@@ -17,6 +17,15 @@ function createApp(opts: { enabled: boolean; allowedHostnames?: string[]; bindHo
   app.get("/api/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
   });
+  app.get("/health", (_req, res) => {
+    res.status(200).json({ status: "ok" });
+  });
+  app.get("/api/liveness", (_req, res) => {
+    res.status(200).json({ status: "ok" });
+  });
+  app.get("/api/companies", (_req, res) => {
+    res.status(200).json({ companies: [] });
+  });
   app.get("/dashboard", (_req, res) => {
     res.status(200).send("ok");
   });
@@ -44,12 +53,24 @@ describe("privateHostnameGuard", () => {
 
   it("blocks unknown hostnames with a static remediation command", async () => {
     const app = createApp({ enabled: true, allowedHostnames: ["some-other-host"] });
-    const res = await request(app).get("/api/health").set("Host", `${unknownHostname}:3100`);
+    const res = await request(app).get("/api/companies").set("Host", `${unknownHostname}:3100`);
     expect(res.status).toBe(403);
     // The remediation command carries a static `<host>` placeholder. It never
     // interpolates the request Host header into the command.
     expect(res.body?.error).toContain("run npx paperclipai allowed-hostname <host>");
     expect(res.body?.error).not.toContain(unknownHostname);
+  });
+
+  it("passes kubelet probe routes for any Host header", async () => {
+    // Kubernetes probes hit the pod's cluster IP, so the Host header is never
+    // an allowlisted hostname. The probe routes must bypass the guard or the
+    // chart can only probe the root /health SPA fallback, which stalls during
+    // the hourly in-process database backup.
+    const app = createApp({ enabled: true, allowedHostnames: ["some-other-host"] });
+    for (const path of ["/health", "/api/health", "/api/liveness"]) {
+      const res = await request(app).get(path).set("Host", "10.42.13.37:3100");
+      expect(res.status).toBe(200);
+    }
   });
 
   it("blocks unknown hostnames on page routes with a static plain-text remediation command", async () => {
@@ -89,7 +110,7 @@ describe("privateHostnameGuard", () => {
     // shell. Use a harmless, nonexistent command name inside the span.
     const hostileHost = "evil$(echo marker)host";
     const app = createApp({ enabled: true, allowedHostnames: ["some-other-host"] });
-    const res = await request(app).get("/api/health").set("Host", hostileHost);
+    const res = await request(app).get("/api/companies").set("Host", hostileHost);
     expect(res.status).toBe(403);
     expect(res.body?.error).toContain("run npx paperclipai allowed-hostname <host>");
     expect(res.body?.error).not.toContain("evil");

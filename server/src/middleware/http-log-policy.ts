@@ -3,6 +3,7 @@ const SILENCED_SUCCESS_METHODS = new Set(["GET", "HEAD"]);
 const SILENCED_SUCCESS_API_PATHS = [
   /^\/api\/muse\/v1\/signal$/i,
   /^\/api\/health(?:\/|$)/,
+  /^\/api\/liveness(?:\/|$)/,
   /^\/api\/companies\/[^/]+\/activity(?:\/|$)/,
   /^\/api\/companies\/[^/]+\/dashboard(?:\/|$)/,
   /^\/api\/companies\/[^/]+\/heartbeat-runs(?:\/|$)/,
