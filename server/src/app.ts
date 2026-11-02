@@ -640,6 +640,11 @@ export async function createApp(
     pluginWorkerManager: workerManager,
   });
   const chatChannels = chatChannelService(db, {
+    // Resolved at click time; the gateway is constructed later in this function.
+    toolActionDecisions: {
+      approve: (input) => toolGateway.approveActionRequest(input),
+      decline: (input) => toolGateway.declineActionRequest(input),
+    },
     allowLocalVoiceBoard: opts.deploymentMode === "local_trusted",
     deferWebhookProcessing: true,
     heartbeat: connectionIntentHeartbeat,

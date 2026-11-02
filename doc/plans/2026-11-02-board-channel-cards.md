@@ -137,3 +137,37 @@ without a valid human approval, twice, or for another agent/company/run.
 | D | Approved plugin actions pass the issue's current project (or none), not the run's original project. | **Accepted**, owner: board; pre-existing convention (`?? ""`); trigger: a plugin that scopes storage by project. |
 
 Review rounds: 2 of 2 (safety tier cap); remaining fixes verified by the reviewer's probe scenarios and plants.
+
+## Stage 2 as built
+
+- Tokens: `chat_actions` kind `board_card_decision`, two per eligible card (accept/reject), issued in the same
+  transaction as the post, bound to that post, expiring at the earlier of 7 days and the subject's own expiry, and
+  expired when the card is settled.
+- Eligible: plain confirmations (Telegram predicate: no reject-reason, secret proposal, connection authorization or
+  plan-document review) and read/write tool actions without a formal approval, on non-private tasks. Questions,
+  destructive or formal-approval tool actions, approvals and private tasks stay link-only (single-select questions
+  are deferred: the per-issue path supports them, the board path does not yet).
+- A click (Slack `block_actions`, signature-verified upstream) reaches `board-card-decisions.ts` only for a
+  `board_card_decision` token on the same bot. It requires the token issued and unexpired, the card published with
+  the clicked message id in the board channel, and, under lock in the resolving transaction: the Slack identity
+  linked on this bot to the clicking user, an active owner/admin membership, the channel still the enabled board
+  channel, and `issue:read` for that user. Plain confirmations resolve through `issueThreadInteractionService`
+  (accept/reject, the UI's service) with an `interaction_wakeup` for the assignee; tool actions through the
+  gateway's approve/decline (the UI route's calls). Refusals are ephemeral and logged
+  (`chat.board_card_decision_refused`); decisions are logged (`chat.board_card_decided`).
+
+## Stage 2 code review round 1 (Fable 5.1) and dispositions
+
+Confirmed: nobody outside a linked owner/admin who can read the task can decide; tokens are company/endpoint
+scoped and bound to the card message; UI-first races answer "already decided".
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | A losing concurrent click handed back the winner's claim; the claim condition had no test. | **Fixed:** only the call that made the claim may hand it back, and only if it never reached the gateway. Test: two truly simultaneous clicks reach the gateway once; the reviewer's unconditional-claim plant now fails it. |
+| 2 | A gateway failure after the claim left the token `processing` forever, unlogged. | **Fixed:** the token becomes `failed` (or `processed` if the decision landed), `chat.board_card_decision_failed` is logged and the click is refused; settles expire `issued` and `failed` tokens. |
+| 3 | Prompts addressed to one user had buttons; the service 403 escaped unlogged. | **Fixed:** addressed prompts get no buttons; service 403/404/409/422 become logged refusals. |
+| 4 | The wake went to the pre-decision assignee; accepting can hand the task back to the creator agent. | **Fixed:** the wake target is re-read inside the resolving transaction. |
+| 5 | Plain-confirmation decisions skipped the UI's `issue.thread_interaction_accepted/rejected` activity. | **Fixed:** the same activity is written (details.source = slack_board_card). |
+| 6 | Reject woke the agent under `wake_assignee_on_accept`. | **Fixed.** |
+| 7 | Refusals show the generic deny text; the card keeps its buttons up to one sweep after a decision. | **Accepted**, owner: board; trigger: confusion reported from the board channel. A click on a decided card is refused. |
+| Q1 caveat | For tool actions the authority check runs in the claim transaction, not inside the gateway's commit. | **Accepted**, owner: board; the window is the gateway call; trigger: a role change racing a click. |

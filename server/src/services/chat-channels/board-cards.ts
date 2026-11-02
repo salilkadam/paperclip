@@ -40,10 +40,56 @@ import { projectSafeChatPublicationText, sanitizeExternalChatUrl } from "../chat
 import { classifyChatPublicationError } from "../chat-publication-errors.js";
 import { Actions, Button, Card, CardText, LinkButton } from "chat";
 import { fitCardToProviderLimits } from "./publications/card-limits.js";
+import { CHAT_QUESTION_ACTION_TOKEN_TTL_MS, createChatConfirmationActionToken } from "../chat-interaction-publications.js";
 import type { EndpointRow } from "./runtime-types.js";
 import type { ChatEndpointRuntime } from "../voice/voice-runtime.js";
 
 export const BOARD_CARD_KIND = "board_card";
+/** Single-use Slack button token for a decision on a board card (stage 2). */
+export const BOARD_CARD_DECISION_KIND = "board_card_decision";
+
+export type BoardCardDecisionToken = {
+  version: 1;
+  postProviderActionId: string;
+  subjectKind: "interaction";
+  subjectId: string;
+  issueId: string;
+  decision: "accept" | "reject";
+  toolAction: boolean;
+  actionRequestId: string | null;
+  expiresAt: string;
+};
+
+/**
+ * Which pending interactions can be decided with a Slack button. Everything else
+ * stays link-only and is decided in Paperclip (plan table "Stage 2: act").
+ */
+export function boardCardDecisionLabels(row: {
+  kind: string;
+  addresseeUserId?: string | null;
+  payload: Record<string, unknown>;
+  issueVisibility: string;
+}, formalApproval: boolean): { accept: string; reject: string; toolAction: boolean; actionRequestId: string | null; expiresAt: string | null } | null {
+  if (row.kind !== "request_confirmation" || row.issueVisibility === "private") return null;
+  // A prompt addressed to one person is theirs to answer, not the board channel's.
+  if (row.addresseeUserId) return null;
+  const p = row.payload ?? {};
+  const toolAction = p.toolAction as Record<string, unknown> | undefined;
+  if (toolAction) {
+    if (formalApproval) return null; // two-step governance stays in Paperclip
+    if (toolAction.risk !== "read" && toolAction.risk !== "write") return null; // destructive: full view in Paperclip
+    if (typeof toolAction.actionRequestId !== "string") return null;
+    return { accept: "Approve", reject: "Reject", toolAction: true, actionRequestId: toolAction.actionRequestId, expiresAt: typeof toolAction.expiresAt === "string" ? toolAction.expiresAt : null };
+  }
+  // Same predicate as native Telegram confirmations.
+  if (p.rejectRequiresReason === true || p.secretProposal !== undefined || p.connectionAuthorization !== undefined) return null;
+  if ((p.target as Record<string, unknown> | undefined)?.type === "issue_document") return null;
+  return {
+    accept: typeof p.acceptLabel === "string" ? p.acceptLabel : "Accept",
+    reject: typeof p.rejectLabel === "string" ? p.rejectLabel : "Reject",
+    toolAction: false, actionRequestId: null, expiresAt: null,
+  };
+}
 /** How often pending decisions are re-read; the longest a card can lag or stay stale. */
 export const BOARD_CARD_SWEEP_MS = 20_000;
 /** A post still `processing` after this is treated as delivered-or-not-known, never re-sent. */
@@ -136,6 +182,7 @@ type InteractionRow = {
   payload: Record<string, unknown>;
   createdByAgentId: string | null;
   addresseeAgentId: string | null;
+  addresseeUserId?: string | null;
   issueIdentifier: string | null;
   issueTitle: string;
   issueVisibility: string;
@@ -302,21 +349,59 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
     return row.status === "cancelled" || (row.status === "failed" && row.result?.retryable !== true);
   }
 
-  async function stagePost(dest: Awaited<ReturnType<typeof destinations>>[number], input: Omit<BoardCardPost, "version" | "op" | "resourceId" | "channelId">) {
+  async function stagePost(
+    dest: Awaited<ReturnType<typeof destinations>>[number],
+    input: Omit<BoardCardPost, "version" | "op" | "resourceId" | "channelId" | "actions">,
+    decision?: ReturnType<typeof boardCardDecisionLabels>,
+  ) {
     const channelId = dest.resource.providerResourceId.replace(/^slack:/, "");
-    const payload: BoardCardPost = { version: 1, op: "post", resourceId: dest.resource.id, channelId, ...input };
-    await db.insert(chatActions).values({
-      companyId: dest.resource.companyId,
-      endpointId: dest.endpoint.id,
-      kind: BOARD_CARD_KIND,
-      providerActionId: `board-card:${input.subjectKind}:${input.subjectId}:${input.rev}`,
-      payload,
-      status: "received",
-    }).onConflictDoNothing();
+    const postProviderActionId = `board-card:${input.subjectKind}:${input.subjectId}:${input.rev}`;
+    const tokens = decision && input.issueId
+      ? (["accept", "reject"] as const).map((choice) => ({ choice, actionId: createChatConfirmationActionToken() }))
+      : [];
+    const actions: SafeExternalChatCardAction[] = tokens.map(({ choice, actionId }) => ({
+      type: "callback" as const,
+      actionId,
+      label: choice === "accept" ? decision!.accept : decision!.reject,
+      style: choice === "accept" ? ("primary" as const) : ("danger" as const),
+    }));
+    const payload: BoardCardPost = { version: 1, op: "post", resourceId: dest.resource.id, channelId, ...input, ...(actions.length ? { actions } : {}) };
+    const ttl = new Date(now() + CHAT_QUESTION_ACTION_TOKEN_TTL_MS).getTime();
+    const subjectExpiry = decision?.expiresAt ? Date.parse(decision.expiresAt) : Number.NaN;
+    const expiresAt = new Date(Number.isFinite(subjectExpiry) ? Math.min(ttl, subjectExpiry) : ttl).toISOString();
+    await db.transaction(async (tx) => {
+      const inserted = await tx.insert(chatActions).values({
+        companyId: dest.resource.companyId,
+        endpointId: dest.endpoint.id,
+        kind: BOARD_CARD_KIND,
+        providerActionId: postProviderActionId,
+        payload,
+        status: "received",
+      }).onConflictDoNothing().returning({ id: chatActions.id });
+      if (!inserted.length || !tokens.length) return;
+      await tx.insert(chatActions).values(tokens.map(({ choice, actionId }) => ({
+        companyId: dest.resource.companyId,
+        endpointId: dest.endpoint.id,
+        kind: BOARD_CARD_DECISION_KIND,
+        providerActionId: actionId,
+        payload: {
+          version: 1, postProviderActionId, subjectKind: "interaction", subjectId: input.subjectId, issueId: input.issueId!,
+          decision: choice, toolAction: decision!.toolAction, actionRequestId: decision!.actionRequestId, expiresAt,
+        } satisfies BoardCardDecisionToken,
+        status: "issued",
+      })));
+    });
   }
 
   async function stageSettle(post: ActionRow, outcome: string) {
     const p = post.payload as unknown as BoardCardPost;
+    // The decision is made; no button on this card may act any more.
+    await db.update(chatActions).set({ status: "expired", updatedAt: new Date() }).where(and(
+      eq(chatActions.companyId, post.companyId),
+      eq(chatActions.kind, BOARD_CARD_DECISION_KIND),
+      inArray(chatActions.status, ["issued", "failed"]),
+      sql`${chatActions.payload}->>'postProviderActionId' = ${post.providerActionId}`,
+    ));
     const payload: BoardCardSettle = {
       version: 1, op: "settle", postActionId: post.id, subjectKind: p.subjectKind, subjectId: p.subjectId,
       outcome, content: settledContent(p.content, outcome),
@@ -370,6 +455,7 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
           payload: issueThreadInteractions.payload,
           createdByAgentId: issueThreadInteractions.createdByAgentId,
           addresseeAgentId: issueThreadInteractions.addresseeAgentId,
+          addresseeUserId: issueThreadInteractions.addresseeUserId,
           issueIdentifier: issues.identifier,
           issueTitle: issues.title,
           issueVisibility: issues.visibility,
@@ -416,8 +502,10 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
         const rev = last ? Number((last.payload as unknown as BoardCardPost).rev ?? 0) + 1 : 0;
         const actionRequestId = (row.payload?.toolAction as Record<string, unknown> | undefined)?.actionRequestId;
         const contentRow = privateSourceIssues.has(row.issueId) ? { ...row, issueVisibility: "private" } : row;
-        const content = interactionCardContent(contentRow, { baseUrl, issuePrefix, formalApproval: typeof actionRequestId === "string" && formal.has(actionRequestId) });
-        await stagePost(dest, { subjectKind: "interaction", subjectId: row.id, rev, issueId: row.issueId, content });
+        const formalApproval = typeof actionRequestId === "string" && formal.has(actionRequestId);
+        const content = interactionCardContent(contentRow, { baseUrl, issuePrefix, formalApproval });
+        await stagePost(dest, { subjectKind: "interaction", subjectId: row.id, rev, issueId: row.issueId, content },
+          boardCardDecisionLabels(contentRow, formalApproval));
       }
 
       // ---- approvals (link-only; gateway approvals are covered by their interaction card)
