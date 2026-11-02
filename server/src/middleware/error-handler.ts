@@ -135,6 +135,14 @@ function recordResponsibleUserDenialFromHttpError(
   });
 }
 
+/** Duck-typed so the middleware does not import the gateway service. */
+function isToolGatewayHttpError(err: unknown): err is { status: number; message: string; reasonCode: string; details: Record<string, unknown> } {
+  if (!(err instanceof Error) || err.constructor?.name !== "ToolGatewayHttpError") return false;
+  const e = err as unknown as { status?: unknown; reasonCode?: unknown; details?: unknown };
+  return typeof e.status === "number" && e.status >= 400 && e.status < 500
+    && typeof e.reasonCode === "string" && !!e.details && typeof e.details === "object";
+}
+
 export function errorHandler(
   err: unknown,
   req: Request,
@@ -142,6 +150,14 @@ export function errorHandler(
   _next: NextFunction,
 ) {
   if (err instanceof AgentLifecycleConflict) { res.status(409).json({ error: err.message }); return; }
+  // Tool-gateway refusals (e.g. "requires formal board approval", 409) carry
+  // their own status and reason. Without this they surfaced as a bare 500
+  // "Internal error" in the UI when a route let them propagate.
+  if (isToolGatewayHttpError(err)) {
+    // Same body shape as the gateway's own routes (sendGatewayError): { error, reasonCode, ...details }.
+    res.status(err.status).json({ ...err.details, error: err.message, reasonCode: err.reasonCode });
+    return;
+  }
   if (err instanceof HttpError) {
     const details =
       err.details &&

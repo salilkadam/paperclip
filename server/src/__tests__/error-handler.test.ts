@@ -74,6 +74,27 @@ describe("errorHandler", () => {
     expect(res.__errorContext?.error?.message).toBe("boom");
   });
 
+  it("returns a tool-gateway refusal with its own status and reason, not a 500", async () => {
+    const { ToolGatewayHttpError } = await import("../services/tool-gateway.js");
+    const req = makeReq();
+    const res = makeRes() as any;
+    const err = new ToolGatewayHttpError(409, "Tool action request requires formal board approval before execution", "formal_approval_required", { approvalId: "a1" });
+    errorHandler(err, req, res, vi.fn() as unknown as NextFunction);
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Tool action request requires formal board approval before execution",
+      reasonCode: "formal_approval_required",
+      approvalId: "a1",
+    });
+    expect(captureExceptionMock).not.toHaveBeenCalled();
+  });
+
+  it("still treats an unknown error that merely has a status as a 500", () => {
+    const res = makeRes() as any;
+    errorHandler(Object.assign(new Error("x"), { status: 409, reasonCode: "y", details: {} }), makeReq(), res, vi.fn() as unknown as NextFunction);
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
   it("ends aborted client requests without reporting a crash", () => {
     // A closed tab or dropped network surfaces as `Error: aborted` with
     // ECONNRESET; there is no server fault and nobody left to answer.
