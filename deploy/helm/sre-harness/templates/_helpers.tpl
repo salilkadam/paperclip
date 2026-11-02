@@ -111,12 +111,22 @@ fi
 DSH_LOG=/tmp/dsh-events.jsonl
 : > "$DSH_LOG"
 DSH_STARTED_AT="$(date +%s)"
+# Read by record_run and the trap, some of which now run before the session
+# has set them. These scripts run under `set -u`, and an unset read there kills
+# the record silently.
+DSH_RC=
+DSH_PID=
+DSH_TAIL=
+DSH_HB=
 
 # Evidence must outlive the pod. On a deadline kill the Job controller deletes
 # the pod in the same second, so `kubectl logs` is unreadable afterwards and
 # the run reports nothing at all. The SIGTERM grace window is the last chance
 # to say anything, so report how far the session got before we exit.
-post_partial_evidence() {
+# session_summary builds (but does not send) a "how far did it get" digest of
+# the event stream. Split out of post_partial_evidence so the heartbeat can
+# reuse it every few minutes without spamming Slack.
+session_summary() {
   DSH_PARTIAL="$(DSH_STARTED_AT="$DSH_STARTED_AT" node -e '
     const fs = require("fs");
     let raw = "";
@@ -151,6 +161,11 @@ post_partial_evidence() {
     if (last) parts.push("last activity: " + last);
     process.stdout.write(parts.join(" | ").slice(0, 4000));
   ' "$DSH_LOG" 2>/dev/null || true)"
+}
+
+# Last words on a cut-short run: the summary above, posted to Slack.
+post_partial_evidence() {
+  session_summary
   post_to_slack "RUN TERMINATED BEFORE COMPLETION ($DSH_PROFILE, SIGTERM): ${DSH_PARTIAL:-no session events captured}"
 }
 
@@ -175,8 +190,10 @@ post_partial_evidence() {
 record_run() {
   # $1: 1 when the run was cut short, 0 on a normal end. $2: excerpt already
   # deemed safe for the Slack report (this text is that same report's content).
+  # $3 (optional): "running" for in-flight beats -- same run, rewritten in
+  # place, rc still unknown; anything else means the run's final record.
   RUN_LOG="$DSH_LOG" RUN_STARTED_AT="$DSH_STARTED_AT" RUN_RC="$DSH_RC" \
-    RUN_COMPONENT="$DSH_PROFILE" RUN_TERMINATED="$1" RUN_EXCERPT="$2" RUN_CM="sre-harness-run-log" node -e '
+    RUN_COMPONENT="$DSH_PROFILE" RUN_TERMINATED="$1" RUN_EXCERPT="$2" RUN_MODE="${3:-final}" RUN_CM="sre-harness-run-log" node -e '
     const fs = require("fs");
     const https = require("https");
     const SA = "/var/run/secrets/kubernetes.io/serviceaccount/";
@@ -192,11 +209,13 @@ record_run() {
         try { if (JSON.parse(l).type === "tool_call") tools++; } catch (e) {}
       }
     } catch (e) {}
+    const mode = process.env.RUN_MODE || "final";
     const rec = {
       component: process.env.RUN_COMPONENT || "unknown",
       startedAt: new Date(Number(process.env.RUN_STARTED_AT) * 1000).toISOString(),
       finishedAt: new Date().toISOString(),
-      rc: Number(process.env.RUN_RC || 0),
+      running: mode === "running",
+      rc: mode === "running" ? null : Number(process.env.RUN_RC || 0),
       terminated: process.env.RUN_TERMINATED === "1",
       events: events,
       toolCalls: tools,
@@ -269,7 +288,45 @@ record_run() {
           prev = (obj.data || {}).runs || "";
           rv = (obj.metadata || {}).resourceVersion || "";
         } catch (e) {}
-        const runs = (prev + line + "\n").split("\n").filter(Boolean).slice(-20).join("\n") + "\n";
+        // Replace the record of this run in place (heartbeat beats cost zero
+        // ring space), then cap retention per component. The old global
+        // slice(-20) let monitor traffic (~48 writes/day) evict every other
+        // component history within hours: on 2026-11-01 the ring held
+        // 20/20 monitor lines with not one remediate record left, healthy or
+        // killed. Each component now keeps its own last 20 runs. A beat must
+        // never overwrite a final record that won the race a moment earlier.
+        const isMine = (l) => {
+          try {
+            const o = JSON.parse(l);
+            return o.component === rec.component && o.startedAt === rec.startedAt;
+          } catch (e) { return false; }
+        };
+        const kept = [];
+        let replaced = false;
+        for (const l of prev.split("\n")) {
+          if (!l.trim()) continue;
+          if (isMine(l)) {
+            let mineIsFinal = true;
+            try { mineIsFinal = JSON.parse(l).running !== true; } catch (e) {}
+            if (mode === "running" && mineIsFinal) {
+              console.log("[run-record] final record already written; dropping beat");
+              return;
+            }
+            if (!replaced) { kept.push(line); replaced = true; }
+            continue;
+          }
+          kept.push(l);
+        }
+        if (!replaced) kept.push(line);
+        const counts = {};
+        const out = [];
+        for (let i = kept.length - 1; i >= 0; i--) {
+          let comp = "corrupt";
+          try { comp = String(JSON.parse(kept[i]).component || "corrupt"); } catch (e) {}
+          counts[comp] = (counts[comp] || 0) + 1;
+          if (counts[comp] <= 20) out.unshift(kept[i]);
+        }
+        const runs = out.join("\n") + "\n";
         const patchBody = { data: { runs: runs } };
         if (rv) patchBody.metadata = { resourceVersion: rv };
         api("PATCH", "/" + cm, json(patchBody), "application/merge-patch+json", code2 => {
@@ -289,19 +346,57 @@ record_run() {
 
 # TERM arrives on a deadline kill or an eviction; INT on a manual stop. Report
 # and leave with 143, which says the run was cut short, not that it failed.
-trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" 2>/dev/null; post_partial_evidence; record_run 1 "$DSH_PARTIAL"; exit 143' TERM INT
+trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" "$DSH_HB" 2>/dev/null; post_partial_evidence; record_run 1 "$DSH_PARTIAL"; exit 143' TERM INT
+
+# The first record is written BEFORE the session starts: from that second on,
+# the run-log says this run exists, the next monitor sweep can see a live
+# remediate/approvals entry, and a broken record path (RBAC, API) surfaces
+# while there is still a whole session left to act on it.
+record_run 0 "session started" running
+DSH_DONE=/tmp/dsh-session-done
 
 dsh --profile "$DSH_PROFILE" --from-default-profile headless \
     --patch /config/gpuai.patch.yml --json "$TASK" >"$DSH_LOG" 2>&1 &
 DSH_PID=$!
 tail -f -n +1 "$DSH_LOG" 2>/dev/null &
 DSH_TAIL=$!
+
+# One background loop, two jobs, both rewritten in place rather than written
+# at death only. Every deadline kill in this cluster's history (2026-10-30,
+# 2026-11-01) left no forensics at all because the only durable write happened
+# inside the 60s grace window the kubelet enforces on someone else's clock.
+#  - Heartbeat: every DSH_HB_INTERVAL (default 300s) rewrite this run's
+#    record with the latest digest. Whatever kills the pod -- missed signal,
+#    API down in the dying second, SIGKILL -- the last beat is a truthful
+#    snapshot minutes old instead of nothing.
+#  - Soft deadline: at DSH_SOFT_LIMIT_SECONDS (each cronjob sets its own
+#    activeDeadlineSeconds minus 300) send SIGTERM to ourselves, so the trap's
+#    report and record run with minutes of wall clock instead of racing
+#    kubelet's grace window, and the k8s deadline should only ever catch a
+#    pod that is already being torn down.
+(
+  while :; do
+    sleep "${DSH_HB_INTERVAL:-300}"
+    [ -e "$DSH_DONE" ] && exit 0
+    ELAPSED=$(( $(date +%s) - DSH_STARTED_AT ))
+    if [ -n "${DSH_SOFT_LIMIT_SECONDS:-}" ] && [ "$ELAPSED" -ge "$DSH_SOFT_LIMIT_SECONDS" ]; then
+      echo "[watchdog] soft deadline ${DSH_SOFT_LIMIT_SECONDS}s reached at ${ELAPSED}s; reporting and exiting ahead of the k8s deadline"
+      kill -TERM $$
+      exit 0
+    fi
+    session_summary
+    record_run 0 "${DSH_PARTIAL:-heartbeat}" running
+  done
+) &
+DSH_HB=$!
+
 wait "$DSH_PID"
 DSH_RC=$?
+: > "$DSH_DONE"
 # Session ended on its own terms: disarm, so the caller's own Slack post is
 # never doubled by a late signal.
 trap - TERM INT
-kill "$DSH_TAIL" 2>/dev/null
+kill "$DSH_HB" "$DSH_TAIL" 2>/dev/null
 wait "$DSH_TAIL" 2>/dev/null
 DSH_FINAL="$(DSH_RC="$DSH_RC" node -e '
   const fs = require("fs");

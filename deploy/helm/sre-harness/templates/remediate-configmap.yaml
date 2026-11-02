@@ -55,6 +55,10 @@ data:
 
     TASK="$(cat /config/remediate-prompt.md)"
     DSH_PROFILE=remediate
+    # Self-report and exit 300s before the k8s deadline kill; the watchdog in
+    # sre-harness.runHeadless uses this. Margin matches the monitor's view: a
+    # session that needs the full deadline should end on its own report.
+    DSH_SOFT_LIMIT_SECONDS={{ sub .Values.remediate.activeDeadlineSeconds 300 }}
 
     set +e
     {{- include "sre-harness.runHeadless" . | nindent 4 }}

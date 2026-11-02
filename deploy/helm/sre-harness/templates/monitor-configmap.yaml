@@ -65,6 +65,10 @@ data:
     # verdict is unrecoverable, so we cannot tell a slow sweep from a broken
     # prompt. --json events go to the log as they happen.
     DSH_PROFILE=monitor
+    # Watchdog self-report margin (see sre-harness.runHeadless): the 2026-10-18
+    # sweep died at the hard deadline with nothing to show; this ends a stuck
+    # sweep 300s early with a report instead.
+    DSH_SOFT_LIMIT_SECONDS={{ sub .Values.monitor.activeDeadlineSeconds 300 }}
     set +e
 {{- include "sre-harness.runHeadless" . | nindent 4 }}
     set -e
