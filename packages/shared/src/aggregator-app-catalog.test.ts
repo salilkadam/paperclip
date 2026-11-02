@@ -51,9 +51,12 @@ describe("public aggregator app catalog", () => {
     const github = findAggregatorApp("connecthub", "github")!;
     expect(github.routes.map(route => route.provider)).toEqual(expect.arrayContaining(["composio", "connecthub"]));
     expect(github.routes.find(route => route.provider === "connecthub")?.toolkit).toBe("github");
-    // Jira and Confluence go through the hub's Atlassian OAuth toolkit.
-    const jira = AGGREGATOR_APP_CATALOG.find(app => app.slug === "jira")!;
-    expect(jira.routes.find(route => route.provider === "connecthub")?.toolkit).toBe("atlassian");
+    // Each hub toolkit keeps its own tile, so discovery tags its accounts on the right app.
+    const toolkitFor = (slug: string) => AGGREGATOR_APP_CATALOG.find(app => app.slug === slug)?.routes.find(route => route.provider === "connecthub")?.toolkit;
+    expect(toolkitFor("jira")).toBe("jira-cloud");
+    expect(toolkitFor("confluence")).toBe("confluence");
+    expect(resolveAggregatorApp("connecthub", "jira-cloud").slug).toBe("jira");
+    expect(resolveAggregatorApp("connecthub", "confluence").slug).toBe("confluence");
     expect(resolveAggregatorApp("connecthub", "google-drive")).toMatchObject({ name: "Google Drive" });
     expect(resolveAggregatorApp("connecthub", "github").slug).toBe("github");
     expect(resolveAggregatorApp("connecthub", "acme-internal")).toEqual({ slug: "connecthub:acme-internal", name: "acme-internal" });

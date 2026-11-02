@@ -390,5 +390,8 @@ export function aggregatorContinuationInstruction(
     zapier:
       "In Agentic mode, use discover_zapier_actions and the documented app connection flow. In Managed mode, ask the user to add the required actions in Zapier and refresh the catalog.",
   }[provider];
-  return `${name} is an external service. Its connection is available to this agent, but ${targetName} access is not yet verified. ${discovery} Use only the requested capability and effective permissions. If support is absent, explain that result and ask before switching providers. Claim success only after verifying the underlying app; never repeat an uncertain write.`;
+  const hubToolkit = provider === "connecthub" ? connecthubCatalog.apps.find(app =>
+    aggregatorAppIdentity(app.name) === aggregatorAppIdentity(targetName) || app.slug === targetName.toLowerCase())?.toolkit : undefined;
+  const toolkitHint = hubToolkit ? ` The hub toolkit for ${targetName} is usually ${hubToolkit}; use the slug the server lists.` : "";
+  return `${name} is an external service. Its connection is available to this agent, but ${targetName} access is not yet verified. ${discovery}${toolkitHint} Use only the requested capability and effective permissions. If support is absent, explain that result and ask before switching providers. Claim success only after verifying the underlying app; never repeat an uncertain write.`;
 }

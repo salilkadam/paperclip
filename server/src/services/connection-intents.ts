@@ -563,7 +563,8 @@ export function connectionIntentService(db: Db) {
             service: `via:${provider}:${targetService}`, name: `${targetName} through ${app.name}`,
             source: "aggregator", state: "available", description: `Connect ${targetName} through ${app.name}, an external service.`,
             logoUrl: app.branding.logoUrl ?? null, methods: app.methods, connectionId: ready?.id ?? null,
-            reason: ready ? `${app.name} is connected; verify ${targetName} authorization and the requested action.`
+            reason: ready ? provider === "connecthub" ? `${app.name} is connected; check that its server includes ${targetName} (hub_list_connections), then verify authorization and the requested action.`
+              : `${app.name} is connected; verify ${targetName} authorization and the requested action.`
               : provider === "arcade" ? "Set up an Arcade gateway with this app's tools, then authorize the app."
               : `Connect ${app.name}, then verify and authorize ${targetName}.`,
             aggregator: { provider, targetService, targetName, evidenceUrl: published ? publicService?.evidenceUrls?.[provider] ?? AGGREGATOR_CATALOG_SOURCES[provider] ?? null : null,

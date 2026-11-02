@@ -255,7 +255,7 @@
     },
     {
       "slug": "jira",
-      "toolkit": "atlassian",
+      "toolkit": "jira-cloud",
       "name": "Jira",
       "logoUrl": "https://cdn.activepieces.com/pieces/jira.png",
       "aliases": [
@@ -266,11 +266,12 @@
     },
     {
       "slug": "confluence",
-      "toolkit": "atlassian",
+      "toolkit": "confluence",
       "name": "Confluence",
       "logoUrl": "https://cdn.activepieces.com/pieces/confluence.png",
       "aliases": [
-        "Confluence"
+        "Confluence",
+        "confluence"
       ]
     }
   ]

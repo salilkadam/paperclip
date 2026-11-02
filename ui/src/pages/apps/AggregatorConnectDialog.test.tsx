@@ -73,12 +73,23 @@ describe("AggregatorConnectDialog with Connect Hub", () => {
     expect(document.body.textContent).toContain("GitHub is connected in Connect Hub");
   });
 
+  it("resumes an unfinished hub connection in Paperclip instead of starting a link", async () => {
+    const draft = { ...hub, status: "draft" } as unknown as ToolConnection;
+    const onNavigate = await render({ connecthub: [draft] });
+    await act(async () => button("Connect Hub")!.click());
+    expect(button("Connect GitHub")).toBeUndefined();
+    await act(async () => button("Finish setup")!.click());
+    expect(onNavigate).toHaveBeenCalledWith("/apps/connect?source=connecthub&targetToolkit=github&resume=hub-1");
+    expect(setupAggregatorAppMock).not.toHaveBeenCalled();
+  });
+
   it("shows the hub's error instead of a link when the server does not expose the app", async () => {
     setupAggregatorAppMock.mockRejectedValueOnce(new Error("Toolkit is not on this MCP server"));
     await render({ connecthub: [hub] });
     await act(async () => button("Connect Hub")!.click());
     await act(async () => button("Connect GitHub")!.click());
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toContain("Toolkit is not on this MCP server");
+    // A rejected mutation settles after the click's own act() tick.
+    await vi.waitFor(() => expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain("Toolkit is not on this MCP server"));
     expect(document.body.querySelector(`a[href^="${HUB}/connect"]`)).toBeNull();
   });
 });

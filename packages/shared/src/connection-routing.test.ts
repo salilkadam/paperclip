@@ -110,4 +110,6 @@ it("parses Connect Hub with or without a space, and never from a bare connect-Hu
   expect(explicitAggregatorQuery("Jira via Connect Hub, not connecthub")).toBeNull();
   expect(parseAggregatorRoute("via:connecthub:github")).toEqual({ provider: "connecthub", targetService: "github" });
   expect(aggregatorContinuationInstruction("connecthub", "GitHub")).toContain("hub_list_connections");
+  expect(aggregatorContinuationInstruction("connecthub", "Jira")).toContain("usually jira-cloud");
+  expect(aggregatorContinuationInstruction("composio", "Jira")).not.toContain("jira-cloud");
 });
