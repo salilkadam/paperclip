@@ -6268,6 +6268,84 @@ rl.on("line", (line) => {
     ]);
   });
 
+  it("runs a board-approved plugin action once, with the approved arguments and the requesting run", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { issue, run, project } = await createIssueAndRun(db, company.id, agent.id);
+    const calls: Array<{ tool: string; parameters: unknown; runContext: unknown }> = [];
+    let failNext = false;
+    const dispatcher: PluginToolDispatcher = {
+      initialize: async () => {},
+      teardown: () => {},
+      listToolsForAgent: () => [{
+        name: "demo-plugin:send_note",
+        displayName: "Send note",
+        description: "Send a note through a plugin tool.",
+        parametersSchema: { type: "object" },
+        pluginId: "demo-plugin",
+      }],
+      getTool: () => null,
+      executeTool: async (tool, parameters, runContext) => {
+        calls.push({ tool, parameters, runContext });
+        if (failNext) return { pluginId: "demo-plugin", toolName: "send_note", result: { error: "provider refused" } };
+        return { pluginId: "demo-plugin", toolName: "send_note", result: { content: "sent", data: { ok: true } } };
+      },
+      registerPluginTools: () => {},
+      unregisterPluginTools: () => {},
+      toolCount: () => 1,
+      getRegistry: () => { throw new Error("not used"); },
+    };
+    const gateway = createTestToolGatewayService(db, { pluginToolDispatcher: dispatcher });
+    await allowToolsForAgent(db, company.id, agent.id, ["demo-plugin:send_note"]);
+    await db.insert(toolPolicies).values({
+      companyId: company.id, name: "Board approves plugin sends", policyType: "require_approval",
+      selectors: { toolNames: ["demo-plugin:send_note"] }, priority: 9,
+    });
+    const call = (parameters: Record<string, unknown>) => gateway.executePluginTool({
+      actor: { type: "agent", companyId: company.id, agentId: agent.id, runId: run.id },
+      tool: "demo-plugin:send_note",
+      parameters,
+      runContext: { companyId: company.id, agentId: agent.id, runId: run.id, projectId: project.id },
+    });
+
+    await call({ to: "ada@example.com", body: "hello" }).then(
+      () => { throw new Error("Expected the plugin send to need approval"); },
+      (error) => expectGatewayError(error, 409, "approval_required"),
+    );
+    expect(calls).toHaveLength(0);
+    const [actionRequest] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, company.id));
+
+    await gateway.approveActionRequest({
+      companyId: company.id, issueId: issue.id, interactionId: actionRequest.interactionId!,
+      actionRequestId: actionRequest.id, actor: { userId: "board-user" },
+    });
+    expect(calls).toEqual([{
+      tool: "demo-plugin:send_note",
+      parameters: { to: "ada@example.com", body: "hello" },
+      runContext: { agentId: agent.id, runId: run.id, companyId: company.id, projectId: project.id },
+    }]);
+    const [invocation] = await db.select().from(toolInvocations).where(eq(toolInvocations.id, actionRequest.invocationId));
+    expect(invocation.status).toBe("succeeded");
+    // Approving again does not run it twice.
+    await gateway.approveActionRequest({
+      companyId: company.id, issueId: issue.id, interactionId: actionRequest.interactionId!,
+      actionRequestId: actionRequest.id, actor: { userId: "board-user" },
+    }).catch(() => undefined);
+    expect(calls).toHaveLength(1);
+
+    // A plugin error is a failed execution, not a success.
+    failNext = true;
+    await call({ to: "bob@example.com", body: "second" }).catch(() => undefined);
+    const second = (await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, company.id)))
+      .find((row) => row.id !== actionRequest.id)!;
+    await gateway.approveActionRequest({
+      companyId: company.id, issueId: issue.id, interactionId: second.interactionId!,
+      actionRequestId: second.id, actor: { userId: "board-user" },
+    }).catch(() => undefined);
+    const [failed] = await db.select().from(toolInvocations).where(eq(toolInvocations.id, second.invocationId));
+    expect(failed.status).toBe("failed");
+  });
+
   it("rejects caller-supplied issue context outside the run company", async () => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);

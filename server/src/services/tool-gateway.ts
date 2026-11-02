@@ -3355,6 +3355,41 @@ export function createToolGatewayService(
     return deduplicateToolDescriptors(visibleTools);
   }
 
+  /**
+   * Run a board-approved plugin action. Plugin tools take an agent run
+   * context; the approved action carries the agent and run that requested it
+   * (the board approves after that run may have ended), the same ids the
+   * in-run path passes. Arguments are the signed, approved ones. A plugin
+   * error is a failed execution, never a success.
+   */
+  async function executeApprovedPluginTool(
+    session: ToolGatewaySession,
+    tool: ToolGatewayDescriptor,
+    parameters: unknown,
+    executionTimeoutMs: number,
+  ) {
+    if (!pluginToolDispatcher) {
+      throw new ToolGatewayHttpError(501, "Plugin tool dispatch is not enabled", "plugin_tools_disabled");
+    }
+    if (!session.agentId || !session.runId) {
+      throw new ToolGatewayHttpError(409, "The approved plugin action has no originating agent run", "approved_execution_unsupported");
+    }
+    const execution = await runWithTimeout(
+      pluginToolDispatcher.executeTool(tool.name, parameters, {
+        agentId: session.agentId,
+        runId: session.runId,
+        companyId: session.companyId,
+        projectId: session.projectId ?? "",
+      }),
+      executionTimeoutMs,
+    );
+    const pluginResult = asRecord(asRecord(execution)?.result);
+    if (pluginResult?.error) {
+      throw new ToolGatewayHttpError(502, String(pluginResult.error), "tool_execution_failed");
+    }
+    return execution;
+  }
+
   async function executeBuiltinTool(
     session: ToolGatewaySession,
     tool: ToolGatewayDescriptor,
@@ -8515,13 +8550,7 @@ export function createToolGatewayService(
                   executeBuiltinTool(session, tool, parameters, invocation.id),
                   executionTimeoutMs,
                 )
-              : (() => {
-                  throw new ToolGatewayHttpError(
-                    409,
-                    "Plugin actions cannot execute outside their originating run",
-                    "approved_execution_unsupported",
-                  );
-                })();
+              : await executeApprovedPluginTool(session, tool, parameters, executionTimeoutMs);
       const resultRecord = asRecord(result);
       if (resultRecord?.error)
         throw new ToolGatewayHttpError(
