@@ -95,3 +95,28 @@ UI's "any non-viewer member"; tokens are per endpoint and single-use; Slack sign
 | D1 | "Same services as the UI" over-claims: approval and interaction accept paths are route code. | Stage 2 buttons are limited to items whose UI path is a service call: plain confirmations (the Telegram predicate, which excludes plan-document reviews) via `issueThreadInteractionService`, single-select questions via `answerQuestions`, read/write tool actions via the gateway approve/decline path. Approvals stay in the UI. |
 | D4 | Agent-authored text (prompts, options, approval titles) reaches the channel verbatim; non-Slack private sources are not detected. | Accepted, stated: the board channel's curation (private, not shared, re-probed) is the control; cards never include raw payloads or argument JSON. |
 | Q2c | An @mention reply under a card creates a task bound to that thread. | Accepted, stated (normal Slack behaviour). |
+
+## Code review round 1 (Fable 5.1) and dispositions
+
+Confirmed: no tool arguments, approval payloads or private-issue content reach Slack (three plants caught).
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | The worker never woke on first enable. | **Fixed:** setting `boardCards` wakes the board-card queue in the same transaction. |
+| 2 | A failure before the send (channel probe, runtime) became a permanent `delivery_unknown`. | **Fixed:** preparation runs outside the send; its failures are retried with backoff and logged when they give up. Only the provider call can produce `delivery_unknown`, which is logged as activity. |
+| 3 | An archived or missing endpoint's rows starved every company. | **Fixed:** those rows are cancelled with `board_endpoint_unavailable` and logged; paused/attention endpoints are not dispatched. |
+| 4 | A cancelled or permanently failed post blocked a still-pending decision forever. | **Fixed:** such posts count as absent; the decision gets a new card (new rev). `delivery_unknown` stays the only never-repost state. |
+| 5 | Settles skipped the channel re-probe. | **Fixed:** settles re-probe too; an unsafe channel cancels the settle and logs it. |
+| 6 | Private-Slack-source tasks, approvals on private tasks, tasks already in the board channel. | **Fixed:** content-free cards for the first two; no board card when the task's conversation is the board channel. |
+| 7 | Observability for 1–4. | **Fixed:** activity entries `chat.board_card_blocked`, `chat.board_card_failed`, `chat.board_card_delivery_unknown`. |
+| D | Sweep cost grew with history; first enable could flood the channel. | **Fixed:** the sweep reads only open (unsettled) posts and the latest post of currently pending subjects; only decisions from the last 14 days are posted. |
+| D | `enabled = false` still received cards. | **Fixed:** the board channel must also be enabled. |
+| D | Agent text can carry Slack user/user-group mentions. | **Accepted** (pre-existing in thread cards; broadcast mentions are neutralised). |
+
+## Found in production while delivering this: approved plugin actions could never run
+
+The gateway refused to execute any board-approved plugin action ("Plugin actions cannot execute outside their
+originating run"), so a require_approval policy on a plugin tool (the agreement send) could never send. Fixed in
+the same release: an approved plugin action runs through the plugin dispatcher with the agent and run that requested
+it and the signed arguments; a plugin error is a failed execution. Test: approve once runs once with the approved
+arguments; approving again does not re-run; a plugin error fails the invocation; reverting the fix fails the test.

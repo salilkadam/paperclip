@@ -38,7 +38,7 @@ describeDatabase("board-channel cards", () => {
   });
   afterAll(async () => { await database?.cleanup(); });
 
-  async function fixture(opts: { channel?: Record<string, unknown> | null; failPost?: Error } = {}) {
+  async function fixture(opts: { channel?: Record<string, unknown> | null | (() => Record<string, unknown> | null); failPost?: Error } = {}) {
     const prefix = `BC${randomUUID().slice(0, 6).toUpperCase()}`;
     const [company] = await db.insert(companies).values({ name: `Board ${randomUUID()}`, issuePrefix: prefix }).returning();
     companyIds.push(company.id);
@@ -53,7 +53,10 @@ describeDatabase("board-channel cards", () => {
     const cards = createBoardCards(db, {
       now: () => clock,
       publicBaseUrl: () => "https://org.example.com",
-      inspectSlackBoardChannel: async () => (opts.channel === undefined ? { private: true, extShared: false } : opts.channel),
+      inspectSlackBoardChannel: async () => {
+        const c = typeof opts.channel === "function" ? opts.channel() : opts.channel;
+        return c === undefined ? { private: true, extShared: false } : c;
+      },
       runtimeFor: async () => ({
         thread: (threadId: string) => ({
           id: threadId,
@@ -80,7 +83,7 @@ describeDatabase("board-channel cards", () => {
       return row;
     };
     const cardRows = () => db.select().from(chatActions).where(and(eq(chatActions.companyId, company.id), eq(chatActions.kind, BOARD_CARD_KIND)));
-    return { company, agent, endpoint, resource, issue, sent, run, interaction, cardRows, advance: (ms: number) => { clock += ms; }, prefix };
+    return { company, agent, endpoint, resource, issue, sent, run, interaction, cardRows, advance: (ms: number) => { clock += ms; }, prefix, cards };
   }
 
   const toolActionPayload = (actionRequestId = randomUUID()) => ({
@@ -203,4 +206,80 @@ describeDatabase("board-channel cards", () => {
     await f.run(); await f.run();
     expect(f.sent.map((s) => s.op)).toEqual(["post", "edit", "post"]);
   });
+
+  it("retries a failure before the send instead of giving the card up", async () => {
+    let calls = 0;
+    const f = await fixture({ channel: () => { calls += 1; if (calls === 1) throw new Error("getaddrinfo ENOTFOUND slack.com"); return { private: true }; } });
+    await f.interaction({ payload: toolActionPayload() });
+    await f.run();
+    expect(f.sent).toHaveLength(0);
+    expect((await f.cardRows())[0].status).toBe("failed");
+    f.advance(60 * 60_000);
+    await f.run();
+    expect(f.sent).toHaveLength(1);
+    expect((await f.cardRows())[0].status).toBe("published");
+  });
+
+  it("cancels cards of an archived bot without blocking other companies", async () => {
+    const a = await fixture();
+    const b = await fixture();
+    await a.interaction({ payload: toolActionPayload() });
+    await b.interaction({ payload: toolActionPayload() });
+    await a.cards.sweep();
+    await db.update(chatEndpoints).set({ status: "archived" }).where(eq(chatEndpoints.id, a.endpoint.id));
+    await b.run();
+    await b.run();
+    expect(b.sent).toHaveLength(1);
+    const [aCard] = await a.cardRows();
+    expect(aCard.status).toBe("cancelled");
+    expect(aCard.result).toMatchObject({ code: "board_endpoint_unavailable" });
+  });
+
+  it("re-posts a card that was cancelled for an unsafe channel once the channel is safe again", async () => {
+    let isPrivate = false;
+    const f = await fixture({ channel: () => ({ private: isPrivate }) });
+    await f.interaction({ payload: toolActionPayload() });
+    await f.run();
+    expect(f.sent).toHaveLength(0);
+    isPrivate = true;
+    f.advance(11 * 60_000);
+    await f.run();
+    await f.run();
+    expect(f.sent).toHaveLength(1);
+  });
+
+  it("does not settle into a channel that became public", async () => {
+    let isPrivate = true;
+    const f = await fixture({ channel: () => ({ private: isPrivate }) });
+    const row = await f.interaction({ payload: toolActionPayload() });
+    await f.run();
+    isPrivate = false;
+    f.advance(11 * 60_000);
+    await db.update(issueThreadInteractions).set({ status: "accepted" }).where(eq(issueThreadInteractions.id, row.id));
+    await f.run();
+    await f.run();
+    expect(f.sent.map((s) => s.op)).toEqual(["post"]);
+  });
+
+  it("gives a content-free card to a task that read a private Slack channel", async () => {
+    const f = await fixture();
+    await db.insert(chatActions).values({ companyId: f.company.id, endpointId: f.endpoint.id, kind: "slack_private_source", providerActionId: randomUUID(), payload: { issueId: f.issue.id } });
+    await f.interaction({ payload: toolActionPayload() });
+    await f.run();
+    expect(f.sent[0].text).toContain("A task needs board attention");
+    expect(f.sent[0].text).not.toContain("Send an email");
+  });
+
+  it("posts nothing for a disabled board channel or for decisions older than the backfill window", async () => {
+    const f = await fixture();
+    await db.update(chatEndpointResources).set({ enabled: false }).where(eq(chatEndpointResources.id, f.resource.id));
+    await f.interaction({ payload: toolActionPayload() });
+    await f.run();
+    expect(f.sent).toHaveLength(0);
+    await db.update(chatEndpointResources).set({ enabled: true }).where(eq(chatEndpointResources.id, f.resource.id));
+    await db.update(issueThreadInteractions).set({ createdAt: new Date(Date.now() - 30 * 24 * 60 * 60_000) }).where(eq(issueThreadInteractions.companyId, f.company.id));
+    await f.run();
+    expect(f.sent).toHaveLength(0);
+  });
 });
+
