@@ -37,7 +37,8 @@
 #   brev-heartbeat.sh uninstall-hook remove that line
 #
 # Environment:
-#   BREV_BIN                       brev binary (default: `command -v brev`)
+#   BREV_BIN                       brev binary (default: `command -v brev`, also
+#                                  searching ~/.local/bin)
 #   BREV_HEARTBEAT_INTERVAL        seconds between cycles (default 600; keep under 900)
 #   BREV_HEARTBEAT_TARGETS         space-separated instance names to SSH-probe
 #                                  (default "paperclip-linux"; empty disables probing)
@@ -46,6 +47,11 @@
 #   BREV_HEARTBEAT_SLACK_WEBHOOK   optional Slack incoming-webhook URL for alerts
 #   BREV_HEARTBEAT_DIR             state dir (default ~/.brev/heartbeat)
 set -uo pipefail
+
+# The ~/.bashrc hook runs in shells that never read ~/.profile, so the default
+# brev install location may be missing from PATH. Without this the loop logs
+# brev_binary_missing forever and the session expires.
+export PATH="$PATH:$HOME/.local/bin"
 
 BREV_BIN="${BREV_BIN:-$(command -v brev || true)}"
 INTERVAL="${BREV_HEARTBEAT_INTERVAL:-600}"
