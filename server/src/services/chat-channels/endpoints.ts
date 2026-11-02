@@ -402,6 +402,8 @@ function providerSetupState(
       throw unprocessable("The agent execution policy only applies to Slack connections (board-trusted channels) and AgentMail inboxes");
     if (input.boardChannelTrust && initial.endpoint.provider !== "slack")
       throw unprocessable("Board-trusted channels are only supported for Slack connections");
+    if (input.boardCards && initial.endpoint.provider !== "slack")
+      throw unprocessable("A board channel for board-decision cards is only supported for Slack connections");
     await withCredentialMutationLease(
       initial.endpoint,
       async (credentialLease) => {
@@ -483,8 +485,47 @@ function providerSetupState(
               throw unprocessable("Slack Connect (shared) channels cannot be board-trusted");
           }
         }
+        const cards = input.boardCards;
+        if (cards) {
+          const [resource] = await db.select().from(chatEndpointResources).where(and(
+            eq(chatEndpointResources.companyId, existing.endpoint.companyId),
+            eq(chatEndpointResources.endpointId, endpointId),
+            eq(chatEndpointResources.id, cards.resourceId),
+          ));
+          if (!resource) throw notFound("Channel not found on this connection");
+          if (cards.enabled) {
+            if (resource.type !== "channel") throw unprocessable("Only a Slack channel can be the board channel");
+            // Board cards carry board-confidential summaries and decision
+            // buttons: the channel must be private, not shared, not a DM.
+            const channel = await options.inspectSlackBoardChannel(existing.endpoint, resource.providerResourceId);
+            if (!channel) throw unprocessable("The bot cannot see this channel; invite it first");
+            if (channel.directConversation === true) throw unprocessable("Direct and group messages cannot be the board channel");
+            if (channel.private !== true) throw unprocessable("Only a private channel can be the board channel");
+            if (channel.extShared === true || channel.pendingExtShared === true)
+              throw unprocessable("A Slack Connect (shared) channel cannot be the board channel");
+          }
+        }
         await db.transaction(async (tx) => {
           await credentialLease.assertOwned(tx);
+          if (cards) {
+            if (cards.enabled) {
+              // One board channel per company; the partial unique index enforces
+              // the same rule under concurrency.
+              const [other] = await tx.select({ id: chatEndpointResources.id }).from(chatEndpointResources).where(and(
+                eq(chatEndpointResources.companyId, existing.endpoint.companyId),
+                eq(chatEndpointResources.boardCards, true),
+                ne(chatEndpointResources.id, cards.resourceId),
+              )).limit(1);
+              if (other) throw conflict("Another channel is already this company's board channel", { code: "chat_board_cards_taken" });
+            }
+            await tx.update(chatEndpointResources)
+              .set({ boardCards: cards.enabled, updatedAt: new Date() })
+              .where(and(
+                eq(chatEndpointResources.companyId, existing.endpoint.companyId),
+                eq(chatEndpointResources.endpointId, endpointId),
+                eq(chatEndpointResources.id, cards.resourceId),
+              ));
+          }
           if (trust && trustChannelId !== null) {
             if (trust.trusted) {
               // One trusted bot per channel per company; the partial unique
@@ -530,6 +571,7 @@ function providerSetupState(
               fields: Object.keys(input),
               ...(input.externalExecutionPolicy !== undefined ? { externalExecutionPolicy: input.externalExecutionPolicy } : {}),
               ...(trust ? { boardChannelTrust: { resourceId: trust.resourceId, trusted: trust.trusted } } : {}),
+              ...(cards ? { boardCards: { resourceId: cards.resourceId, enabled: cards.enabled } } : {}),
             },
           });
           await credentialLease.assertOwned(tx);

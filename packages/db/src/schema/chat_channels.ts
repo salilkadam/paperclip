@@ -226,6 +226,10 @@ export const chatEndpointResources = pgTable(
     // in this (private, non-shared Slack) channel is treated as a board
     // instruction. Separate from `enabled`, which only grants reach.
     boardTrusted: boolean("board_trusted").notNull().default(false),
+    // The company's board channel: every pending board decision (approval,
+    // tool-action confirmation, agent question) is mirrored here, whatever
+    // started the task. At most one per company (index below).
+    boardCards: boolean("board_cards").notNull().default(false),
     executionDefaults: jsonb("execution_defaults").$type<ChatExecutionDefaults>(),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
@@ -256,6 +260,10 @@ export const chatEndpointResources = pgTable(
     uniqueIndex("chat_endpoint_resources_board_trusted_uq")
       .on(table.companyId, table.providerResourceId)
       .where(sql`${table.boardTrusted}`),
+    // Exactly one board-card destination per company.
+    uniqueIndex("chat_endpoint_resources_board_cards_uq")
+      .on(table.companyId)
+      .where(sql`${table.boardCards}`),
     unique("chat_endpoint_resources_company_id_uq").on(
       table.companyId,
       table.id,

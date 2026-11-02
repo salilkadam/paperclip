@@ -14,6 +14,7 @@ export const DELIVERY_QUEUES = {
   accounting: "cost-accounting",
   agentLifecycle: "agent-lifecycle",
   chatBoardMessages: "chat-board-messages",
+  chatBoardCards: "chat-board-cards",
   chatTaskStarts: "chat-task-starts",
   chatReceiptReactions: "chat-receipt-reactions",
   chatSessionStops: "chat-session-stops",

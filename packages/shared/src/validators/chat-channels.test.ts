@@ -111,3 +111,14 @@ describe("chat provider-action resolution validation", () => {
     );
   });
 });
+
+describe("board channel setting", () => {
+  it("accepts one resource id with an enabled flag and nothing else", async () => {
+    const { updateChatEndpointSchema } = await import("./chat-channels.js");
+    const resourceId = "4f9b8b2e-6c3a-4b8f-9a7c-2d1e5f6a7b8c";
+    expect(updateChatEndpointSchema.parse({ boardCards: { resourceId, enabled: true } })).toEqual({ boardCards: { resourceId, enabled: true } });
+    expect(() => updateChatEndpointSchema.parse({ boardCards: { resourceId: "not-a-uuid", enabled: true } })).toThrow();
+    expect(() => updateChatEndpointSchema.parse({ boardCards: { resourceId, enabled: "yes" } })).toThrow();
+    expect(() => updateChatEndpointSchema.parse({ boardCards: { resourceId, enabled: true, channel: "C1" } })).toThrow();
+  });
+});

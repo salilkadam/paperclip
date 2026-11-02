@@ -307,6 +307,8 @@ export interface ChatEndpointResource {
   boardTrusted?: boolean;
   /** Why board trust cannot be turned on here; null when it can. */
   boardTrustBlockedReason?: string | null;
+  /** This channel is the company's board channel for board-decision cards. */
+  boardCards?: boolean;
   createdAt: string;
   updatedAt: string;
   participants?: string[];
@@ -539,6 +541,8 @@ export interface UpdateChatEndpointInput {
   externalExecutionPolicy?: ExternalMessageExecutionPolicy;
   /** Add or remove one Slack channel from the board-trust allowlist. */
   boardChannelTrust?: { resourceId: string; trusted: boolean };
+  /** Make one Slack channel the company's board channel for board-decision cards (or stop). */
+  boardCards?: { resourceId: string; enabled: boolean };
 }
 
 export interface ConfigureChatEndpointInput {

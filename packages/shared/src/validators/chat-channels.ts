@@ -108,6 +108,10 @@ export const updateChatEndpointSchema = z
       .object({ resourceId: z.string().uuid(), trusted: z.boolean() })
       .strict()
       .optional(),
+    boardCards: z
+      .object({ resourceId: z.string().uuid(), enabled: z.boolean() })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {

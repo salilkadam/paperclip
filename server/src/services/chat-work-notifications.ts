@@ -27,6 +27,11 @@ export async function notifyChatActionWork(tx: object, kind: ScheduledChatAction
   await notifyDeliveryWork(tx, CHAT_ACTION_QUEUES[kind]);
 }
 
+/** Wake the board-channel card worker (its own queue and timing). */
+export async function notifyBoardCardWork(tx: object): Promise<void> {
+  await notifyDeliveryWork(tx, DELIVERY_QUEUES.chatBoardCards);
+}
+
 export async function notifyChatVerificationWork(tx: object): Promise<void> {
   await notifyDeliveryWork(tx, DELIVERY_QUEUES.chatVerification);
 }
@@ -36,5 +41,6 @@ export async function notifyChatEndpointWork(tx: object, connectionId: string): 
   await notifyChatPublicationWork(tx);
   for (const queue of Object.values(CHAT_ACTION_QUEUES)) await notifyDeliveryWork(tx, queue);
   await notifyChatVerificationWork(tx);
+  await notifyBoardCardWork(tx);
   await notifyDeliveryWork(tx, DELIVERY_QUEUES.chatTelegramSubscriptions, connectionId);
 }

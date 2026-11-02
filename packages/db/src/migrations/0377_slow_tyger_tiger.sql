@@ -1,0 +1,2 @@
+ALTER TABLE "chat_endpoint_resources" ADD COLUMN "board_cards" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "chat_endpoint_resources_board_cards_uq" ON "chat_endpoint_resources" USING btree ("company_id") WHERE "chat_endpoint_resources"."board_cards";

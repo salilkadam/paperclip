@@ -85,6 +85,8 @@ type ChatActionService = {
   processPendingGitHubWebhookIngress(): Promise<unknown>;
   processPendingSlackSessionSyncs(): Promise<unknown>;
   processPendingSlackBoardMessages(): Promise<unknown>;
+  processPendingBoardCards(): Promise<unknown>;
+  nextBoardCardAt(): Promise<number | null>;
   processPendingSlackTaskStarts(): Promise<unknown>;
   processPendingReceiptReactions(): Promise<unknown>;
   processPendingSlackSessionStops(): Promise<unknown>;
@@ -111,6 +113,12 @@ export function registerChatActionWork(
   ] as const;
   const workers = actions.map(({ kind, run }) => registerChatQueueWork(coordinator, {
     queue: CHAT_ACTION_QUEUES[kind], run, next: () => service.nextChatActionAt(kind),
+  }, canRun));
+  // Board-channel cards keep their own timing (a due card now, else the next
+  // sweep) and their own stale-claim rule (never re-send an uncertain post).
+  workers.push(registerChatQueueWork(coordinator, {
+    queue: DELIVERY_QUEUES.chatBoardCards,
+    run: service.processPendingBoardCards, next: service.nextBoardCardAt,
   }, canRun));
   workers.push(registerChatQueueWork(coordinator, {
     queue: DELIVERY_QUEUES.chatVerification,
