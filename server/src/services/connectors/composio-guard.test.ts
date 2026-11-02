@@ -28,6 +28,17 @@ describe("composio guard", () => {
     expect(code(["REDDIT_POST_REDDIT_COMMENT"], {})).toBe("composio_community_write");
   });
 
+  it("refuses LinkedIn deletes in any item, case or padding, and directly; leaves LinkedIn reads and writes to policy", () => {
+    for (const s of ["LINKEDIN_DELETE_POST", "linkedin_delete_ugc_post", " LinkedIn_Delete_Linked_In_Post\t"]) {
+      expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], multi(slug("LINKEDIN_WHO_AM_I"), slug(s)))).toBe("composio_linkedin_delete");
+    }
+    expect(code(["LINKEDIN_DELETE_POST"], {})).toBe("composio_linkedin_delete");
+    // reads and (policy-approved) writes are not the guard's business
+    for (const s of ["LINKEDIN_GET_MY_INFO", "LINKEDIN_LIST_REACTIONS", "LINKEDIN_CREATE_LINKED_IN_POST", "LINKEDIN_CREATE_COMMENT_ON_POST", "LINKEDIN_UPLOAD_VIDEO"]) {
+      expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], multi(slug(s)))).toBeNull();
+    }
+  });
+
   it("lets discovery see multi-execute: a call without tools executes nothing", () => {
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], {})).toBeNull();
     expect(code(["COMPOSIO_MULTI_EXECUTE_TOOL"], undefined)).toBeNull();

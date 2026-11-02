@@ -18,6 +18,11 @@
 //     not a list, an item without a text tool_slug, unknown item keys, a slug
 //     with characters outside A-Z, 0-9 and "_", or a COMPOSIO_* meta tool as an
 //     item (a call without `tools` executes nothing and is how discovery asks);
+//   - a LinkedIn delete (LINKEDIN_DELETE_*), directly or inside multi-execute:
+//     agents may read as a board member's connected LinkedIn account and, after
+//     an approval card, post or comment from it (owner, 2026-11-02), but never
+//     delete; the approval for the other LinkedIn writes is a company policy
+//     (setup-composio-governance.sh), this guard only closes the delete path;
 //   - the remote bash and workbench sandboxes (they can call any Composio tool
 //     themselves);
 //   - any other COMPOSIO_* meta tool not reviewed below. A new one stays
@@ -75,6 +80,14 @@ function communityWrite(slug: string): ComposioGuardRefusal | null {
   };
 }
 
+function linkedinDelete(slug: string): ComposioGuardRefusal | null {
+  if (!slug.startsWith("LINKEDIN_DELETE")) return null;
+  return {
+    code: "composio_linkedin_delete",
+    explanation: `Agents never delete a LinkedIn post or comment (owner's decision, 2026-11-02); a person removes it in LinkedIn. ${slug} was refused.`,
+  };
+}
+
 function multiExecuteRefusal(args: Record<string, unknown>): ComposioGuardRefusal | null {
   const unreadable = (detail: string): ComposioGuardRefusal => ({
     code: "composio_unreadable_call",
@@ -99,7 +112,7 @@ function multiExecuteRefusal(args: Record<string, unknown>): ComposioGuardRefusa
     if (!/^[A-Z0-9_]+$/.test(slug)) return unreadable("a tool_slug has unexpected characters");
     // a meta tool run as an item (a sandbox, another multi-execute) would escape this check
     if (slug.startsWith("COMPOSIO_")) return unreadable(`${slug} cannot run inside multi-execute`);
-    const refusal = communityWrite(slug);
+    const refusal = communityWrite(slug) ?? linkedinDelete(slug);
     if (refusal) return refusal;
   }
   return null;
@@ -130,7 +143,7 @@ export function composioGuardRefusal(toolNames: Array<string | null | undefined>
       }
       continue;
     }
-    const refusal = communityWrite(name);
+    const refusal = communityWrite(name) ?? linkedinDelete(name);
     if (refusal) return refusal;
   }
   return null;

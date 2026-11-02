@@ -73,7 +73,7 @@ api() {
 # the exact MCP tool names Apify derives from them (apify/apify-mcp-server
 # actorNameToToolName: `user--actor`, names over 64 chars truncated to 59 plus
 # `-` and the first 4 hex of sha256("user/actor")).
-ACTOR_TOOLS='["apimaestro--linkedin-post-detail","apimaestro--linkedin-post-comments-replies-engagements-scra-1137","apimaestro--linkedin-profile-comments","scraping_solutions--linkedin-posts-engagers-likers-and-comm-cf07","xquik--x-tweet-scraper","apify--instagram-hashtag-scraper","apify--instagram-profile-scraper","igview-owner--threads-search-scraper","apify--threads-profile-api-scraper","clockworks--tiktok-scraper","clockworks--tiktok-comments-scraper","apify--facebook-pages-scraper","danek--facebook-comments-ppr","streamers--youtube-scraper","streamers--youtube-comments-scraper"]'
+ACTOR_TOOLS='["apimaestro--linkedin-post-detail","apimaestro--linkedin-post-comments-replies-engagements-scra-1137","apimaestro--linkedin-profile-comments","apimaestro--linkedin-profile-posts","scraping_solutions--linkedin-posts-engagers-likers-and-comm-cf07","xquik--x-tweet-scraper","apify--instagram-hashtag-scraper","apify--instagram-profile-scraper","igview-owner--threads-search-scraper","apify--threads-profile-api-scraper","clockworks--tiktok-scraper","clockworks--tiktok-comments-scraper","apify--facebook-pages-scraper","danek--facebook-comments-ppr","streamers--youtube-scraper","streamers--youtube-comments-scraper"]'
 HELPERS='["get-actor-run","get-dataset-items","get-key-value-store-record","abort-actor-run"]'
 # Every other tool Apify's server can expose (HELPER_TOOLS in its src/const.ts),
 # blocked by name so a catalog refresh that adds one is still blocked.

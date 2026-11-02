@@ -10,11 +10,12 @@ the same records.
 
 ## The connection
 
-Four actors, nothing else:
+Five actors, nothing else:
 
 - `apimaestro/linkedin-post-detail`
 - `apimaestro/linkedin-post-comments-replies-engagements-scraper-no-cookies`
 - `apimaestro/linkedin-profile-comments`
+- `apimaestro/linkedin-profile-posts`
 - `scraping_solutions/linkedin-posts-engagers-likers-and-commenters-no-cookies`
 
 Connected per company through the Apify card in Apps (see social-core section 6).
@@ -35,6 +36,7 @@ governance gap.
 | A post | `apimaestro--linkedin-post-detail` |
 | Comments on a post | `apimaestro--linkedin-post-comments-replies-engagements-scra-1137` |
 | A user's recent comments | `apimaestro--linkedin-profile-comments` |
+| A profile's recent posts | `apimaestro--linkedin-profile-posts` |
 | Likers and commenters | `scraping_solutions--linkedin-posts-engagers-likers-and-comm-cf07` |
 
 The server rewrites `/` as `--` and truncates past about 60 characters, adding a
@@ -120,6 +122,22 @@ of a profile URL. `limit` caps at 3000.
 
 The singular `username` and `resultLimit` are ignored and bill 100 rows. Rows
 pass through unchanged.
+
+### A profile's recent posts
+
+Tool `apimaestro--linkedin-profile-posts`, input
+`{"username": "<handle or profile URL>", "limit": 20}`. The handle is the last
+path segment of a personal profile URL (the actor's schema documents profile
+usernames; a company page is not promised).
+
+- `limit` is per page, 1–100. `total_posts` turns on automatic pagination and
+  bills every page; leave it out unless the task asks for more than one page.
+- `page_number` / `pagination_token` are for manual paging only.
+- Each row carries the post text, URL, URN, reaction and comment counts, media
+  and author. Use it to **list the posts to sweep**, then read comments per post
+  with the comments tool above. It is the right source for "my own posts" when a
+  post was published outside TryPost: TryPost's published list only knows the
+  posts it sent.
 
 ### Likers and commenters
 

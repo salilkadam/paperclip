@@ -27,7 +27,15 @@
 #          that can call Composio tools themselves; agents fetch public APIs
 #          from their own runtime instead);
 #   ask first COMPOSIO_MANAGE_CONNECTIONS (connecting a new app needs the board).
-# All at priority 0, so they are evaluated before other rules. A policy that
+# LinkedIn (owner, 2026-11-02: agents may act on a board member's own LinkedIn
+# account through Composio, but every write is approved on a card first):
+#   block  COMPOSIO_MULTI_EXECUTE_TOOL when tools[i].tool_slug is LINKEDIN_DELETE_*
+#          (priority 0; nothing an agent posted is ever deleted by an agent);
+#   ask first COMPOSIO_MULTI_EXECUTE_TOOL when tools[i].tool_slug is any other
+#          LINKEDIN_ slug that is not a read (GET / LIST / WHO / SEARCH), i.e.
+#          CREATE_*, UPLOAD_*, INITIALIZE_*, REGISTER_* (priority 1, so the
+#          delete block above wins).
+# Reddit / Stack Exchange / LinkedIn-delete blocks sit at priority 0, so they are evaluated before other rules. A policy that
 # exists with a different type, priority, selectors or conditions (or disabled)
 # is updated in place. It fails when an enabled "allow" policy could cover the
 # connection (an allow wins outright if ordered first), or when the connection's
@@ -48,6 +56,8 @@
 #   - multi-execute with `tools` as a JSON string             -> off (deny_policy_block)
 #   - remote bash, remote workbench                           -> off (deny_policy_block)
 #   - manage connections                                      -> ask_first (declined)
+#   - multi-execute LINKEDIN_DELETE_POST in slot 1            -> off (deny_policy_block)
+#   - multi-execute LINKEDIN_CREATE_LINKED_IN_POST in slot 2  -> ask_first (declined)
 #   - multi-execute REDDIT_SEARCH_ACROSS_SUBREDDITS           -> allowed
 # Any other outcome is fatal.
 #
@@ -64,6 +74,9 @@ COMPOSIO_URL="https://connect.composio.dev/mcp"
 # pattern per site, chained single-verb lookaheads, and per-letter classes instead of a flag.
 REDDIT_WRITE_RE='^\s*[rR][eE][dD][dD][iI][tT]_(?![sS][eE][aA][rR][cC][hH]_)(?![rR][eE][tT][rR][iI][eE][vV][eE]_)(?![gG][eE][tT]_)(?![lL][iI][sS][tT]_)(?![fF][eE][tT][cC][hH]_)'
 STACKEX_WRITE_RE='^\s*[sS][tT][aA][cC][kK]_[eE][xX][cC][hH][aA][nN][gG][eE]_(?![sS][eE][aA][rR][cC][hH]_)(?![rR][eE][tT][rR][iI][eE][vV][eE]_)(?![gG][eE][tT]_)(?![lL][iI][sS][tT]_)(?![fF][eE][tT][cC][hH]_)'
+# LinkedIn: deletes are blocked outright; every other non-read (CREATE/UPLOAD/INITIALIZE/REGISTER) is ask-first.
+LINKEDIN_DELETE_RE='^\s*[lL][iI][nN][kK][eE][dD][iI][nN]_[dD][eE][lL][eE][tT][eE]_'
+LINKEDIN_WRITE_RE='^\s*[lL][iI][nN][kK][eE][dD][iI][nN]_(?![gG][eE][tT]_)(?![lL][iI][sS][tT]_)(?![wW][hH][oO]_)(?![sS][eE][aA][rR][cC][hH]_)'
 # every tool the connection's catalog may hold; anything else fails the run until reviewed
 KNOWN_TOOLS='["COMPOSIO_SEARCH_TOOLS","COMPOSIO_GET_TOOL_SCHEMAS","COMPOSIO_MULTI_EXECUTE_TOOL","COMPOSIO_MANAGE_CONNECTIONS",
   "COMPOSIO_WAIT_FOR_CONNECTIONS","COMPOSIO_REMOTE_BASH_TOOL","COMPOSIO_REMOTE_WORKBENCH","COMPOSIO_SEARCH_SKILLS",
@@ -97,7 +110,7 @@ api() {
 }
 
 desired_policies() {
-  jq -n --arg conn "$1" --arg reddit "$REDDIT_WRITE_RE" --arg stackex "$STACKEX_WRITE_RE" '
+  jq -n --arg conn "$1" --arg reddit "$REDDIT_WRITE_RE" --arg stackex "$STACKEX_WRITE_RE" --arg lidel "$LINKEDIN_DELETE_RE" --arg liwrite "$LINKEDIN_WRITE_RE" '
     def multi(name; cond): { name: name,
       description: "Replies on community sites are human-posted (owner, 2026-10-28): no agent writes to Reddit or Stack Exchange through Composio.",
       policyType: "block", priority: 0, enabled: true,
@@ -109,6 +122,18 @@ desired_policies() {
         { arguments: { fieldMatches: { "tools": "^" } } }) ]
     + [ multi("org-instructions: Composio multi-execute carries at most 4 tools";
         { arguments: { fieldExists: ["tools.4"] } }) ]
+    + [ range(0;4) as $i
+        | { name: "org-instructions: no LinkedIn deletes via Composio (tool \($i + 1))",
+            description: "An agent never deletes a LinkedIn post or comment (owner, 2026-11-02); a person removes it in LinkedIn.",
+            policyType: "block", priority: 0, enabled: true,
+            selectors: { toolNames: ["COMPOSIO_MULTI_EXECUTE_TOOL"], connectionId: $conn },
+            conditions: { arguments: { fieldMatches: { ("tools.\($i).tool_slug"): $lidel } } } } ]
+    + [ range(0;4) as $i
+        | { name: "org-instructions: LinkedIn writes via Composio need approval (tool \($i + 1))",
+            description: "Posting, commenting, replying or uploading media on the connected LinkedIn account runs only after the board approves the card (owner, 2026-11-02). Reads are allowed.",
+            policyType: "require_approval", priority: 1, enabled: true,
+            selectors: { toolNames: ["COMPOSIO_MULTI_EXECUTE_TOOL"], connectionId: $conn },
+            conditions: { arguments: { fieldMatches: { ("tools.\($i).tool_slug"): $liwrite } } } } ]
     + [ { name: "org-instructions: no Composio sandboxes for agents",
           description: "The remote bash and workbench sandboxes can call Composio tools themselves, past the write rules. Agents fetch public APIs from their own runtime.",
           policyType: "block", priority: 0, enabled: true,
@@ -190,6 +215,12 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
       probe "$cid" "$conn" "$agent" "remote bash" COMPOSIO_REMOTE_BASH_TOOL '{"session_id":"governance-probe","command":"true"}' off deny_policy_block
       probe "$cid" "$conn" "$agent" "remote workbench" COMPOSIO_REMOTE_WORKBENCH '{"session_id":"governance-probe","code_to_execute":"pass","thought":"probe","current_step":"PROBE"}' off deny_policy_block
       probe "$cid" "$conn" "$agent" "manage connections" COMPOSIO_MANAGE_CONNECTIONS '{"session_id":"governance-probe","toolkits":["reddit"]}' ask_first
+      probe "$cid" "$conn" "$agent" "LinkedIn delete in tool 1" COMPOSIO_MULTI_EXECUTE_TOOL \
+        "$(t '[{"tool_slug":"LINKEDIN_DELETE_POST","arguments":{"post_urn":"urn:li:share:governanceprobe"}}]')" off deny_policy_block
+      probe "$cid" "$conn" "$agent" "LinkedIn post in tool 2 (ask first)" COMPOSIO_MULTI_EXECUTE_TOOL \
+        "$(t '[{"tool_slug":"LINKEDIN_WHO_AM_I","arguments":{}},{"tool_slug":"LINKEDIN_CREATE_LINKED_IN_POST","arguments":{"text":"governance probe; never meant to run"}}]')" ask_first
+      probe "$cid" "$conn" "$agent" "LinkedIn create then delete: block beats ask" COMPOSIO_MULTI_EXECUTE_TOOL \
+        "$(t '[{"tool_slug":"LINKEDIN_CREATE_LINKED_IN_POST","arguments":{"text":"probe"}},{"tool_slug":"LINKEDIN_DELETE_POST","arguments":{"post_urn":"urn:li:share:governanceprobe"}}]')" off deny_policy_block
       probe "$cid" "$conn" "$agent" "read-only Reddit search" COMPOSIO_MULTI_EXECUTE_TOOL \
         "$(t '[{"tool_slug":"REDDIT_SEARCH_ACROSS_SUBREDDITS","arguments":{"search_query":"subreddit:kubernetes","time_filter":"day","limit":1}}]')" allowed
     fi

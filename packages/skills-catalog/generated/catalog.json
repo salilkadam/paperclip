@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "packageName": "@paperclipai/skills-catalog",
   "packageVersion": "0.3.1",
-  "generatedAt": "2026-10-27T02:09:59.692Z",
+  "generatedAt": "2026-11-02T07:05:43.606Z",
   "skills": [
     {
       "id": "paperclipai:bundled:docs:doc-maintenance",
@@ -1969,8 +1969,8 @@
         {
           "path": "SKILL.md",
           "kind": "skill",
-          "sizeBytes": 12510,
-          "sha256": "64598ddcaada3df055ed4023d2cd89ca2c79ab51b3995de9721513b9f49f8892"
+          "sizeBytes": 13087,
+          "sha256": "d7c2fbf31d52984fed4b7a42049a727312b8dc1acb76459603af3e9c86543dca"
         },
         {
           "path": "assets/icon.svg",
@@ -2011,8 +2011,8 @@
         {
           "path": "references/mcp-read-layer.md",
           "kind": "reference",
-          "sizeBytes": 7648,
-          "sha256": "eb6728d2c67a1250fe6651aae7c6e0ff52ede2684b18143521308d749aac9a05"
+          "sizeBytes": 8594,
+          "sha256": "28eabf5d119c7e705587ed4ba9df907938236db6318820f99e67084012ec73d8"
         },
         {
           "path": "references/precedence.md",
@@ -2051,7 +2051,44 @@
           "sha256": "d7d555e9f213c7d63b6ab380dfbea3b33d788a94d20d4005b2f67d2124c26930"
         }
       ],
-      "contentHash": "sha256:064bfd4c07eb4f6047dca9ae0aa553bf04999814960ae662384d751a82107e6a"
+      "contentHash": "sha256:697416ad55be8d5bd5070381151e239e684f780dab9bb31992fad079acfae0bc"
+    },
+    {
+      "id": "paperclipai:optional:linkedin:linkedin-personal-account",
+      "key": "paperclipai/optional/linkedin/linkedin-personal-account",
+      "kind": "optional",
+      "category": "linkedin",
+      "slug": "linkedin-personal-account",
+      "name": "linkedin-personal-account",
+      "description": "Act as a board member's own LinkedIn account through the company's Composio connection — member-only reads (profile, post by URN, reactions, page stats) and ask-first posts, comments and replies. Companion to Apify reads and TryPost publishing.",
+      "path": "catalog/optional/linkedin/linkedin-personal-account",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "cmo",
+        "content-marketer",
+        "marketer",
+        "social-media-manager",
+        "founder"
+      ],
+      "requires": [],
+      "tags": [
+        "linkedin",
+        "social-media",
+        "composio",
+        "personal-account"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 8017,
+          "sha256": "f4998d7a5b6da5da0f4e4b2ba5a920f3015848627ee9feface2a1f923397a512"
+        }
+      ],
+      "contentHash": "sha256:99bc747a3336736ea2febf2ee986792eebf946483f222011921938ddd7fee051"
     },
     {
       "id": "paperclipai:optional:linkedin:linkedin-post-writer",
@@ -2904,11 +2941,11 @@
         {
           "path": "SKILL.md",
           "kind": "skill",
-          "sizeBytes": 9757,
-          "sha256": "3b9550f89cc6e80b1cbf73b20d7965be3b9bfb8d84db14218485e47c73102387"
+          "sizeBytes": 11308,
+          "sha256": "999245d02205b430071c8250b0fb0ac4de347ddd05de6bfacba00e1397edb0a8"
         }
       ],
-      "contentHash": "sha256:9bb26a8a069df94c32b1529bb0c84d89d6e4f35bdf3c8b8a443d8bdf1d18b3eb"
+      "contentHash": "sha256:df78e0e6f435211a7b20e1317e402c022c9428c0d7118870951cc55374d5fb3f"
     },
     {
       "id": "paperclipai:optional:software-development:prepare-mcp-integration",
