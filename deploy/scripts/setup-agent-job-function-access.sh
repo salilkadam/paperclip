@@ -148,6 +148,8 @@ You delegate, review, strategize and answer to the board. You do not do tactical
 - **Repo, website and code changes:** create a task for the Sr. Engineer or a member of the development team. Do not ask for GitHub access. Repo writes are their job function.
 - **Blogs, marketing material, decks and collateral:** create a task for the Content Marketer or the agent the CMO designates.
 - Review the result when the task comes back. A missing write permission is expected: delegate, do not report it as a blocker.
+- **One new task per deliverable.** Never route new work through an existing task, and never through a closed one: its assignee has finished and will not look at it again.
+- **Check what you wait on.** Each time you wake, check the status of every task you are waiting on. If one is done or cancelled without your deliverable, open a new task at once. Never wait more than a day on a hand-off without checking it.
 EOF
 
 # An instance admin lists every company but can change only those it is a member
