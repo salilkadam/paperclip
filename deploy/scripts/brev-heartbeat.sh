@@ -47,6 +47,11 @@
 #   BREV_HEARTBEAT_DIR             state dir (default ~/.brev/heartbeat)
 set -uo pipefail
 
+# The ~/.bashrc hook runs in shells that never read ~/.profile, so the default
+# brev install location may be missing from PATH. Without this the loop logs
+# brev_binary_missing forever and the session expires.
+export PATH="$HOME/.local/bin:$PATH"
+
 BREV_BIN="${BREV_BIN:-$(command -v brev || true)}"
 INTERVAL="${BREV_HEARTBEAT_INTERVAL:-600}"
 TARGETS="${BREV_HEARTBEAT_TARGETS-paperclip-linux}"
