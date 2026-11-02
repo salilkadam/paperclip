@@ -21,7 +21,7 @@
  *   hidden-block redaction) and the provider card limits.
  */
 
-import { and, asc, desc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -48,6 +48,12 @@ export const BOARD_CARD_KIND = "board_card";
 export const BOARD_CARD_SWEEP_MS = 20_000;
 /** A post still `processing` after this is treated as delivered-or-not-known, never re-sent. */
 export const BOARD_CARD_PROCESSING_STALE_MS = 60_000;
+/** Only decisions raised in this window are posted, so turning the channel on does not flood it with old items. */
+export const BOARD_CARD_BACKFILL_MS = 14 * 24 * 60 * 60_000;
+/** A dead card (cancelled or permanently failed) is retried no sooner than this, and only if the cause cleared. */
+export const BOARD_CARD_DEAD_RETRY_MS = 60 * 60_000;
+/** At most this many cards (revs) per decision, and this many settle revivals per card. */
+export const BOARD_CARD_MAX_REVS = 5;
 /** Re-check that the board channel is still private and not shared at most this often. */
 const CHANNEL_PROBE_TTL_MS = 10 * 60_000;
 const MAX_BODY = 1500;
@@ -244,8 +250,9 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
   const now = options.now ?? Date.now;
   const probeCache = new Map<string, { at: number; ok: boolean; reason?: string }>();
   let lastSweepAt = 0;
+  type ActionRow = typeof chatActions.$inferSelect;
 
-  /** The single board destination of each company that has one, on a live Slack bot. */
+  /** The single board destination of each company that has one, on a live, enabled Slack channel. */
   async function destinations() {
     return db
       .select({ resource: chatEndpointResources, endpoint: chatEndpoints, issuePrefix: companies.issuePrefix })
@@ -254,20 +261,35 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
       .innerJoin(companies, eq(companies.id, chatEndpointResources.companyId))
       .where(and(
         eq(chatEndpointResources.boardCards, true),
+        eq(chatEndpointResources.enabled, true),
         eq(chatEndpointResources.availability, "available"),
         eq(chatEndpoints.provider, "slack"),
         inArray(chatEndpoints.status, ["active", "verifying"]),
       ));
   }
 
-  async function latestPosts(companyId: string, subjectKind: SubjectKind) {
+  /** Posts not yet settled, for one company (bounded by open cards, not history). */
+  async function openPosts(companyId: string) {
+    return db.select().from(chatActions).where(and(
+      eq(chatActions.companyId, companyId),
+      eq(chatActions.kind, BOARD_CARD_KIND),
+      sql`${chatActions.payload}->>'op' = 'post'`,
+      sql`not exists (select 1 from chat_actions s where s.endpoint_id = ${chatActions.endpointId}
+        and s.provider_action_id = 'board-card-settle:' || ${chatActions.id}::text)`,
+    ));
+  }
+
+  /** The newest post per subject among the given subject ids (for rev numbering). */
+  async function latestPostsFor(companyId: string, subjectKind: SubjectKind, subjectIds: string[]) {
+    const bySubject = new Map<string, ActionRow>();
+    if (subjectIds.length === 0) return bySubject;
     const rows = await db.select().from(chatActions).where(and(
       eq(chatActions.companyId, companyId),
       eq(chatActions.kind, BOARD_CARD_KIND),
       sql`${chatActions.payload}->>'op' = 'post'`,
       sql`${chatActions.payload}->>'subjectKind' = ${subjectKind}`,
+      sql`${chatActions.payload}->>'subjectId' in (${sql.join(subjectIds.map((id) => sql`${id}`), sql`, `)})`,
     )).orderBy(desc(chatActions.createdAt));
-    const bySubject = new Map<string, typeof rows[number]>();
     for (const row of rows) {
       const id = String(row.payload.subjectId);
       if (!bySubject.has(id)) bySubject.set(id, row);
@@ -275,12 +297,9 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
     return bySubject;
   }
 
-  async function settled(postId: string) {
-    const [row] = await db.select({ id: chatActions.id }).from(chatActions).where(and(
-      eq(chatActions.kind, BOARD_CARD_KIND),
-      eq(chatActions.providerActionId, `board-card-settle:${postId}`),
-    )).limit(1);
-    return Boolean(row);
+  /** A post that will never reach Slack: cancelled (unsafe channel, endpoint gone) or permanently failed. */
+  function deadPost(row: ActionRow) {
+    return row.status === "cancelled" || (row.status === "failed" && row.result?.retryable !== true);
   }
 
   async function stagePost(dest: Awaited<ReturnType<typeof destinations>>[number], input: Omit<BoardCardPost, "version" | "op" | "resourceId" | "channelId">) {
@@ -296,7 +315,7 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
     }).onConflictDoNothing();
   }
 
-  async function stageSettle(post: typeof chatActions.$inferSelect, outcome: string) {
+  async function stageSettle(post: ActionRow, outcome: string) {
     const p = post.payload as unknown as BoardCardPost;
     const payload: BoardCardSettle = {
       version: 1, op: "settle", postActionId: post.id, subjectKind: p.subjectKind, subjectId: p.subjectId,
@@ -312,20 +331,32 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
     }).onConflictDoNothing();
   }
 
+  async function logProblem(action: ActionRow, what: string, details: Record<string, unknown>) {
+    await logActivity(db, {
+      companyId: action.companyId, actorType: "system", actorId: "board-cards", action: what,
+      entityType: "chat_endpoint", entityId: action.endpointId,
+      details: { actionId: action.id, op: action.payload.op, subjectKind: action.payload.subjectKind, subjectId: action.payload.subjectId, ...details },
+    });
+  }
+
   /** Read pending decisions and card state; stage posts for new ones and settles for decided ones. */
   async function sweep() {
     const baseUrl = options.publicBaseUrl();
     const staleBefore = new Date(now() - BOARD_CARD_PROCESSING_STALE_MS);
-    // An uncertain delivery is never retried as a post.
-    await db.update(chatActions).set({ status: "delivery_unknown", updatedAt: new Date() }).where(and(
+    const backfillSince = new Date(now() - BOARD_CARD_BACKFILL_MS);
+    // An uncertain delivery is never retried as a post; record it so it is visible.
+    const unknown = await db.update(chatActions).set({ status: "delivery_unknown", updatedAt: new Date() }).where(and(
       eq(chatActions.kind, BOARD_CARD_KIND),
       eq(chatActions.status, "processing"),
       sql`${chatActions.payload}->>'op' = 'post'`,
       lt(chatActions.updatedAt, staleBefore),
-    ));
+    )).returning();
+    for (const row of unknown) await logProblem(row, "chat.board_card_delivery_unknown", { reason: "the send did not finish; it is not repeated" });
+
     for (const dest of await destinations()) {
       const companyId = dest.resource.companyId;
       const issuePrefix = dest.issuePrefix;
+      const channelId = dest.resource.providerResourceId.replace(/^slack:/, "");
 
       // ---- interactions
       const pending: InteractionRow[] = await db
@@ -355,9 +386,19 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
           sql`${issueThreadInteractions.createdByAgentId} is not null`,
           isNull(issueThreadInteractions.addresseeAgentId),
           isNull(issues.conversationAgentId),
+          sql`greatest(${issueThreadInteractions.createdAt}, ${issueThreadInteractions.updatedAt}) >= ${backfillSince.toISOString()}::timestamptz`,
+          // A task that already lives in the board channel shows its card in its own thread.
+          sql`not exists (select 1 from chat_conversations c where c.company_id = ${issues.companyId}
+            and c.issue_id = ${issues.id} and c.state in ('active', 'waiting')
+            and c.external_conversation_id in (${`slack:${channelId}`}, ${channelId}))`,
         )) as unknown as InteractionRow[];
-      const pendingIds = new Set(pending.map((row) => row.id));
-      const interactionPosts = await latestPosts(companyId, "interaction");
+      const privateSourceIssues = new Set(pending.length
+        ? (await db.select({ issueId: sql<string>`${chatActions.payload}->>'issueId'` }).from(chatActions).where(and(
+            eq(chatActions.companyId, companyId),
+            eq(chatActions.kind, "slack_private_source"),
+            sql`${chatActions.payload}->>'issueId' in (${sql.join([...new Set(pending.map((r) => r.issueId))].map((id) => sql`${id}`), sql`, `)})`,
+          ))).map((r) => r.issueId)
+        : []);
       const actionRequestIds = pending
         .map((row) => (row.payload?.toolAction as Record<string, unknown> | undefined)?.actionRequestId)
         .filter((id): id is string => typeof id === "string");
@@ -367,49 +408,119 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
             sql`${approvals.payload}->>'actionRequestId' in (${sql.join(actionRequestIds.map((id) => sql`${id}`), sql`, `)})`,
           ))).map((row) => row.id))
         : new Set<string>();
+      const interactionLatest = await latestPostsFor(companyId, "interaction", pending.map((r) => r.id));
       for (const row of pending) {
-        const last = interactionPosts.get(row.id);
-        if (last && !(await settled(last.id))) continue;
+        const last = interactionLatest.get(row.id);
+        // Live or uncertain card already exists: nothing to post. A dead post is re-staged.
+        if (last && !(await mayRestage(last, dest.endpoint, channelId))) continue;
         const rev = last ? Number((last.payload as unknown as BoardCardPost).rev ?? 0) + 1 : 0;
         const actionRequestId = (row.payload?.toolAction as Record<string, unknown> | undefined)?.actionRequestId;
-        const content = interactionCardContent(row, { baseUrl, issuePrefix, formalApproval: typeof actionRequestId === "string" && formal.has(actionRequestId) });
+        const contentRow = privateSourceIssues.has(row.issueId) ? { ...row, issueVisibility: "private" } : row;
+        const content = interactionCardContent(contentRow, { baseUrl, issuePrefix, formalApproval: typeof actionRequestId === "string" && formal.has(actionRequestId) });
         await stagePost(dest, { subjectKind: "interaction", subjectId: row.id, rev, issueId: row.issueId, content });
-      }
-      for (const [subjectId, post] of interactionPosts) {
-        if (pendingIds.has(subjectId) || ["cancelled"].includes(post.status) || (await settled(post.id))) continue;
-        const [current] = await db.select({ status: issueThreadInteractions.status }).from(issueThreadInteractions).where(and(
-          eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.id, subjectId)));
-        await stageSettle(post, current ? (INTERACTION_OUTCOME[current.status] ?? "Closed") : "Removed");
       }
 
       // ---- approvals (link-only; gateway approvals are covered by their interaction card)
-      const pendingApprovals: ApprovalRow[] = await db
+      const pendingApprovals = await db
         .select({
           id: approvals.id, type: approvals.type, status: approvals.status, payload: approvals.payload,
           requestedByAgentId: approvals.requestedByAgentId, agentName: agents.name,
+          privateLinked: sql<boolean>`exists (select 1 from issue_approvals ia join issues i on i.id = ia.issue_id
+            where ia.approval_id = ${approvals.id} and i.visibility = 'private')`,
         })
         .from(approvals)
         .leftJoin(agents, eq(agents.id, approvals.requestedByAgentId))
         .where(and(
           eq(approvals.companyId, companyId),
           eq(approvals.status, "pending"),
+          sql`greatest(${approvals.createdAt}, ${approvals.updatedAt}) >= ${backfillSince.toISOString()}::timestamptz`,
           or(sql`${approvals.payload}->>'source' is null`, sql`${approvals.payload}->>'source' <> 'tool_gateway'`),
         ));
-      const pendingApprovalIds = new Set(pendingApprovals.map((row) => row.id));
-      const approvalPosts = await latestPosts(companyId, "approval");
+      const approvalLatest = await latestPostsFor(companyId, "approval", pendingApprovals.map((r) => r.id));
       for (const row of pendingApprovals) {
-        const last = approvalPosts.get(row.id);
-        if (last && !(await settled(last.id))) continue;
+        const last = approvalLatest.get(row.id);
+        if (last && !(await mayRestage(last, dest.endpoint, channelId))) continue;
         const rev = last ? Number((last.payload as unknown as BoardCardPost).rev ?? 0) + 1 : 0;
-        await stagePost(dest, { subjectKind: "approval", subjectId: row.id, rev, issueId: null, content: approvalCardContent(row, { baseUrl, issuePrefix }) });
+        const content = row.privateLinked
+          ? { title: "An approval needs the board", body: `${row.agentName ?? "Someone"} requests a board approval on a private task. Decide in Paperclip.`, url: approvalCardContent(row, { baseUrl, issuePrefix }).url }
+          : approvalCardContent(row, { baseUrl, issuePrefix });
+        await stagePost(dest, { subjectKind: "approval", subjectId: row.id, rev, issueId: null, content });
       }
-      for (const [subjectId, post] of approvalPosts) {
-        if (pendingApprovalIds.has(subjectId) || ["cancelled"].includes(post.status) || (await settled(post.id))) continue;
-        const [current] = await db.select({ status: approvals.status }).from(approvals).where(and(eq(approvals.companyId, companyId), eq(approvals.id, subjectId)));
-        await stageSettle(post, current ? (APPROVAL_OUTCOME[current.status] ?? "Closed") : "Removed");
+
+      // ---- settle open cards whose subject is no longer pending
+      const pendingInteractionIds = new Set(pending.map((r) => r.id));
+      const pendingApprovalIds = new Set(pendingApprovals.map((r) => r.id));
+      for (const post of await openPosts(companyId)) {
+        if (deadPost(post)) continue;
+        const p = post.payload as unknown as BoardCardPost;
+        if (p.subjectKind === "interaction") {
+          if (pendingInteractionIds.has(p.subjectId)) continue;
+          const [current] = await db.select({ status: issueThreadInteractions.status }).from(issueThreadInteractions).where(and(
+            eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.id, p.subjectId)));
+          if (current?.status === "pending") continue; // still pending but filtered (e.g. older than the backfill window)
+          await stageSettle(post, current ? (INTERACTION_OUTCOME[current.status] ?? "Closed") : "Removed");
+        } else {
+          if (pendingApprovalIds.has(p.subjectId)) continue;
+          const [current] = await db.select({ status: approvals.status }).from(approvals).where(and(eq(approvals.companyId, companyId), eq(approvals.id, p.subjectId)));
+          if (current?.status === "pending") continue;
+          await stageSettle(post, current ? (APPROVAL_OUTCOME[current.status] ?? "Closed") : "Removed");
+        }
       }
+      await reviveSettles(companyId, dest.endpoint, channelId);
     }
     lastSweepAt = now();
+  }
+
+  /**
+   * Whether a subject that still needs the board may get a new card. A live or
+   * uncertain card blocks; a settled one allows (re-pended subject). A dead card
+   * allows only after a cool-down, only when its cause has cleared, and only up
+   * to a cap, so a broken bot or channel cannot turn the sweep into a loop.
+   */
+  async function mayRestage(last: ActionRow, endpoint: EndpointRow, channelId: string) {
+    if (await isSettled(last.id)) return true;
+    if (!deadPost(last)) return false;
+    const rev = Number((last.payload as unknown as BoardCardPost).rev ?? 0);
+    if (rev + 1 >= BOARD_CARD_MAX_REVS) return false;
+    if (now() - last.updatedAt.getTime() < BOARD_CARD_DEAD_RETRY_MS) return false;
+    if (last.result?.code === "board_endpoint_unavailable") return false; // the destination now uses another bot or none
+    try {
+      return (await channelStillPrivate(endpoint, channelId)).ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Revive settles that died on an unsafe channel or exhausted retries, once the channel is safe again. */
+  async function reviveSettles(companyId: string, endpoint: EndpointRow, channelId: string) {
+    const dead = await db.select().from(chatActions).where(and(
+      eq(chatActions.companyId, companyId),
+      eq(chatActions.endpointId, endpoint.id),
+      eq(chatActions.kind, BOARD_CARD_KIND),
+      sql`${chatActions.payload}->>'op' = 'settle'`,
+      or(eq(chatActions.status, "cancelled"), and(eq(chatActions.status, "failed"), sql`coalesce(${chatActions.result}->>'retryable', 'false') <> 'true'`)),
+      lt(chatActions.updatedAt, new Date(now() - BOARD_CARD_DEAD_RETRY_MS)),
+      sql`coalesce((${chatActions.result}->>'revivals')::int, 0) < ${BOARD_CARD_MAX_REVS}`,
+    ));
+    if (!dead.length) return;
+    let safe = false;
+    try { safe = (await channelStillPrivate(endpoint, channelId)).ok; } catch { safe = false; }
+    if (!safe) return;
+    for (const row of dead) {
+      await db.update(chatActions).set({
+        status: "received",
+        result: { revivals: Number(row.result?.revivals ?? 0) + 1, previous: row.result ?? null },
+        updatedAt: new Date(),
+      }).where(and(eq(chatActions.id, row.id), eq(chatActions.status, row.status)));
+    }
+  }
+
+  async function isSettled(postId: string) {
+    const [row] = await db.select({ id: chatActions.id }).from(chatActions).where(and(
+      eq(chatActions.kind, BOARD_CARD_KIND),
+      eq(chatActions.providerActionId, `board-card-settle:${postId}`),
+    )).limit(1);
+    return Boolean(row);
   }
 
   /** Slack's current view of the channel must still be private, not shared, not archived. */
@@ -432,32 +543,42 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
     return result;
   }
 
-  async function markFailed(action: typeof chatActions.$inferSelect, error: unknown) {
+  /** A failure before anything was sent: always safe to retry. */
+  async function retryLater(action: ActionRow, error: unknown) {
     const attempts = Number(action.result?.attempts ?? 0) + 1;
+    const message = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
+    const retryable = attempts < 12;
+    await db.update(chatActions).set({
+      status: "failed",
+      result: { ...(action.result ?? {}), attempts, retryable, retryAt: new Date(now() + Math.min(60 * 60_000, 15_000 * 2 ** attempts)).toISOString(), error: message, stage: "before_send" },
+      updatedAt: new Date(),
+    }).where(eq(chatActions.id, action.id));
+    if (!retryable) await logProblem(action, "chat.board_card_failed", { error: message, stage: "before_send" });
+  }
+
+  /** A failure of the provider call itself. */
+  async function sendFailed(action: ActionRow, error: unknown) {
+    const attempts = Number(action.result?.attempts ?? 0) + 1;
+    const message = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
     const classified = classifyChatPublicationError(error, attempts);
     if (classified.kind === "delivery_unknown" && action.payload.op === "post") {
-      // The provider may have shown the card. Never send it again.
-      await db.update(chatActions).set({ status: "delivery_unknown", result: { ...(action.result ?? {}), attempts, reason: classified.reason }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
+      // The provider may have shown the card. Never send it again; make it visible.
+      await db.update(chatActions).set({ status: "delivery_unknown", result: { ...(action.result ?? {}), attempts, reason: classified.reason, error: message }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
+      await logProblem(action, "chat.board_card_delivery_unknown", { error: message });
       return;
     }
-    const retryable = classified.kind === "retry" && attempts < 8;
+    const retryable = (classified.kind === "retry" || classified.kind === "delivery_unknown") && attempts < 12;
     const retryAfterMs = classified.kind === "retry" ? (classified as { retryAfterMs?: number }).retryAfterMs ?? 0 : 0;
     const retryAt = new Date(now() + Math.min(60 * 60_000, retryAfterMs || 15_000 * 2 ** attempts)).toISOString();
     await db.update(chatActions).set({
       status: "failed",
-      result: { ...(action.result ?? {}), attempts, retryable, retryAt, error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300) },
+      result: { ...(action.result ?? {}), attempts, retryable, retryAt, error: message },
       updatedAt: new Date(),
     }).where(eq(chatActions.id, action.id));
-    if (!retryable) {
-      await logActivity(db, {
-        companyId: action.companyId, actorType: "system", actorId: "board-cards", action: "chat.board_card_failed",
-        entityType: "chat_endpoint", entityId: action.endpointId,
-        details: { actionId: action.id, op: action.payload.op, subjectKind: action.payload.subjectKind, subjectId: action.payload.subjectId, error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300) },
-      });
-    }
+    if (!retryable) await logProblem(action, "chat.board_card_failed", { error: message });
   }
 
-  async function processOne(action: typeof chatActions.$inferSelect) {
+  async function processOne(action: ActionRow) {
     // Claim: only one worker sends a given row.
     const [claimed] = await db.update(chatActions).set({ status: "processing", updatedAt: new Date() }).where(and(
       eq(chatActions.id, action.id), inArray(chatActions.status, ["received", "failed"]),
@@ -465,63 +586,86 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
     if (!claimed) return;
     const [endpoint] = await db.select().from(chatEndpoints).where(and(eq(chatEndpoints.id, action.endpointId), eq(chatEndpoints.companyId, action.companyId)));
     if (!endpoint || !["active", "verifying"].includes(endpoint.status)) {
-      await db.update(chatActions).set({ status: "received", updatedAt: new Date() }).where(eq(chatActions.id, action.id));
+      // Gone or archived: this card can never be sent from this bot. Paused bots are not dispatched at all.
+      await db.update(chatActions).set({ status: "cancelled", result: { code: "board_endpoint_unavailable", endpointStatus: endpoint?.status ?? "missing" }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
+      await logProblem(claimed, "chat.board_card_blocked", { reason: `the board bot is ${endpoint?.status ?? "missing"}` });
       return;
     }
+
+    // ---- everything before the provider call is retryable and never counts as a send
+    let runtime: ChatEndpointRuntime;
+    let probe: { ok: boolean; reason?: string };
+    let settlePost: ActionRow | undefined;
+    const channelId = action.payload.op === "post"
+      ? String((action.payload as unknown as BoardCardPost).channelId)
+      : undefined;
     try {
-      const runtime = await options.runtimeFor(endpoint);
-      if (action.payload.op === "post") {
-        const post = action.payload as unknown as BoardCardPost;
-        const probe = await channelStillPrivate(endpoint, post.channelId);
-        if (!probe.ok) {
-          await db.update(chatActions).set({ status: "cancelled", result: { code: "board_channel_unsafe", message: probe.reason }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
-          await logActivity(db, {
-            companyId: action.companyId, actorType: "system", actorId: "board-cards", action: "chat.board_card_blocked",
-            entityType: "chat_endpoint", entityId: action.endpointId, details: { reason: probe.reason, subjectKind: post.subjectKind, subjectId: post.subjectId },
-          });
+      if (action.payload.op === "settle") {
+        const settle = action.payload as unknown as BoardCardSettle;
+        [settlePost] = await db.select().from(chatActions).where(eq(chatActions.id, settle.postActionId));
+        if (!settlePost) {
+          await db.update(chatActions).set({ status: "processed", result: { code: "post_missing" }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
           return;
         }
+        if (settlePost.status === "received" || settlePost.status === "failed") {
+          // Never sent: cancel the post instead of sending a dead card.
+          const cancelled = await db.update(chatActions).set({ status: "cancelled", result: { code: "settled_before_post" }, updatedAt: new Date() })
+            .where(and(eq(chatActions.id, settlePost.id), inArray(chatActions.status, ["received", "failed"]))).returning({ id: chatActions.id });
+          if (cancelled.length) {
+            await db.update(chatActions).set({ status: "processed", updatedAt: new Date() }).where(eq(chatActions.id, action.id));
+            return;
+          }
+        }
+        if (settlePost.status === "processing") {
+          await db.update(chatActions).set({ status: "received", updatedAt: new Date() }).where(eq(chatActions.id, action.id));
+          return;
+        }
+        if (settlePost.status === "cancelled") {
+          // Nothing was ever shown; nothing to settle.
+          await db.update(chatActions).set({ status: "processed", result: { code: "post_never_shown" }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
+          return;
+        }
+      }
+      runtime = await options.runtimeFor(endpoint);
+      probe = await channelStillPrivate(endpoint, channelId ?? String((settlePost!.payload as unknown as BoardCardPost).channelId));
+    } catch (error) {
+      logger.warn({ actionId: action.id, error: error instanceof Error ? error.message : String(error) }, "board card: could not prepare the send; will retry");
+      await retryLater(claimed, error);
+      return;
+    }
+    if (!probe.ok) {
+      await db.update(chatActions).set({ status: "cancelled", result: { code: "board_channel_unsafe", message: probe.reason }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
+      await logProblem(claimed, "chat.board_card_blocked", { reason: probe.reason });
+      return;
+    }
+
+    // ---- the provider call
+    try {
+      if (action.payload.op === "post") {
+        const post = action.payload as unknown as BoardCardPost;
         const thread = runtime.thread(`slack:${post.channelId}:`);
-        const card = safeCardForPublication(cardPayload(post.subjectId, post.content, post.actions ?? []), "slack");
-        const sent = await thread.post({ card: card!, fallbackText: cardPayload(post.subjectId, post.content).text });
+        const payload = cardPayload(post.subjectId, post.content, post.actions ?? []);
+        const card = safeCardForPublication(payload, "slack");
+        const sent = await thread.post({ card: card!, fallbackText: payload.text });
         await db.update(chatActions).set({ status: "published", result: { providerMessageId: sent.id, threadId: thread.id }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
         return;
       }
       const settle = action.payload as unknown as BoardCardSettle;
-      const [post] = await db.select().from(chatActions).where(eq(chatActions.id, settle.postActionId));
-      if (!post) {
-        await db.update(chatActions).set({ status: "processed", result: { code: "post_missing" }, updatedAt: new Date() }).where(eq(chatActions.id, action.id));
-        return;
-      }
-      if (post.status === "received" || post.status === "failed") {
-        // Never sent: cancel the post instead of sending a dead card.
-        const cancelled = await db.update(chatActions).set({ status: "cancelled", result: { code: "settled_before_post" }, updatedAt: new Date() })
-          .where(and(eq(chatActions.id, post.id), inArray(chatActions.status, ["received", "failed"]))).returning({ id: chatActions.id });
-        if (cancelled.length) {
-          await db.update(chatActions).set({ status: "processed", updatedAt: new Date() }).where(eq(chatActions.id, action.id));
-          return;
-        }
-      }
-      if (post.status === "processing") {
-        // The post is in flight; try again after it settles.
-        await db.update(chatActions).set({ status: "received", updatedAt: new Date() }).where(eq(chatActions.id, action.id));
-        return;
-      }
-      const postPayload = post.payload as unknown as BoardCardPost;
+      const postPayload = settlePost!.payload as unknown as BoardCardPost;
       const thread = runtime.thread(`slack:${postPayload.channelId}:`);
-      const card = safeCardForPublication(cardPayload(settle.subjectId, settle.content), "slack")!;
-      const fallbackText = cardPayload(settle.subjectId, settle.content).text;
-      const messageId = typeof post.result?.providerMessageId === "string" ? post.result.providerMessageId : null;
-      if (post.status === "published" && messageId) {
-        await thread.adapter.editMessage(thread.id, messageId, { card, fallbackText });
+      const payload = cardPayload(settle.subjectId, settle.content);
+      const card = safeCardForPublication(payload, "slack")!;
+      const messageId = typeof settlePost!.result?.providerMessageId === "string" ? settlePost!.result.providerMessageId : null;
+      if (settlePost!.status === "published" && messageId) {
+        await thread.adapter.editMessage(thread.id, messageId, { card, fallbackText: payload.text });
       } else {
-        // delivery_unknown or cancelled-after-send: a plain follow-up, no buttons.
-        await thread.post({ card, fallbackText });
+        // delivery_unknown: a plain follow-up, no buttons.
+        await thread.post({ card, fallbackText: payload.text });
       }
       await db.update(chatActions).set({ status: "processed", updatedAt: new Date() }).where(eq(chatActions.id, action.id));
     } catch (error) {
       logger.warn({ actionId: action.id, error: error instanceof Error ? error.message : String(error) }, "board card delivery failed");
-      await markFailed(action, error);
+      await sendFailed(claimed, error);
     }
   }
 
@@ -538,19 +682,22 @@ export function createBoardCards(db: Db, options: BoardCardOptions) {
       eq(chatActions.kind, BOARD_CARD_KIND),
       or(
         eq(chatActions.status, "received"),
-        and(eq(chatActions.status, "failed"), sql`${chatActions.result}->>'retryable' = 'true'`, sql`(${chatActions.result}->>'retryAt')::timestamptz <= now()`),
+        and(eq(chatActions.status, "failed"), sql`${chatActions.result}->>'retryable' = 'true'`, sql`(${chatActions.result}->>'retryAt')::timestamptz <= ${new Date(now()).toISOString()}::timestamptz`),
       ),
-      notInArray(chatActions.endpointId, sql`(select id from chat_endpoints where status in ('paused', 'attention'))`),
+      // Paused or needing-attention bots wait; archived or missing bots are cancelled by processOne.
+      sql`not exists (select 1 from chat_endpoints e where e.id = ${chatActions.endpointId} and e.status in ('paused', 'attention'))`,
     )).orderBy(sql`case when ${chatActions.payload}->>'op' = 'post' then 0 else 1 end`, asc(chatActions.createdAt)).limit(limit);
     for (const action of due) await processOne(action);
   }
 
-  /** Next time the worker should run: a due row now, else the next sweep. */
+  /** Next time the worker should run: a due row now, else the next sweep; null when no company has a board channel. */
   async function nextBoardCardAt(): Promise<number | null> {
     const [any] = await db.select({ id: chatEndpointResources.id }).from(chatEndpointResources).where(eq(chatEndpointResources.boardCards, true)).limit(1);
     if (!any) return null;
     const [row] = await db.select({ id: chatActions.id }).from(chatActions).where(and(
-      eq(chatActions.kind, BOARD_CARD_KIND), eq(chatActions.status, "received"))).limit(1);
+      eq(chatActions.kind, BOARD_CARD_KIND), eq(chatActions.status, "received"),
+      sql`not exists (select 1 from chat_endpoints e where e.id = ${chatActions.endpointId} and e.status in ('paused', 'attention'))`,
+    )).limit(1);
     return row ? now() : lastSweepAt + BOARD_CARD_SWEEP_MS;
   }
 

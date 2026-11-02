@@ -95,3 +95,45 @@ UI's "any non-viewer member"; tokens are per endpoint and single-use; Slack sign
 | D1 | "Same services as the UI" over-claims: approval and interaction accept paths are route code. | Stage 2 buttons are limited to items whose UI path is a service call: plain confirmations (the Telegram predicate, which excludes plan-document reviews) via `issueThreadInteractionService`, single-select questions via `answerQuestions`, read/write tool actions via the gateway approve/decline path. Approvals stay in the UI. |
 | D4 | Agent-authored text (prompts, options, approval titles) reaches the channel verbatim; non-Slack private sources are not detected. | Accepted, stated: the board channel's curation (private, not shared, re-probed) is the control; cards never include raw payloads or argument JSON. |
 | Q2c | An @mention reply under a card creates a task bound to that thread. | Accepted, stated (normal Slack behaviour). |
+
+## Code review round 1 (Fable 5.1) and dispositions
+
+Confirmed: no tool arguments, approval payloads or private-issue content reach Slack (three plants caught).
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | The worker never woke on first enable. | **Fixed:** setting `boardCards` wakes the board-card queue in the same transaction. |
+| 2 | A failure before the send (channel probe, runtime) became a permanent `delivery_unknown`. | **Fixed:** preparation runs outside the send; its failures are retried with backoff and logged when they give up. Only the provider call can produce `delivery_unknown`, which is logged as activity. |
+| 3 | An archived or missing endpoint's rows starved every company. | **Fixed:** those rows are cancelled with `board_endpoint_unavailable` and logged; paused/attention endpoints are not dispatched. |
+| 4 | A cancelled or permanently failed post blocked a still-pending decision forever. | **Fixed:** such posts count as absent; the decision gets a new card (new rev). `delivery_unknown` stays the only never-repost state. |
+| 5 | Settles skipped the channel re-probe. | **Fixed:** settles re-probe too; an unsafe channel cancels the settle and logs it. |
+| 6 | Private-Slack-source tasks, approvals on private tasks, tasks already in the board channel. | **Fixed:** content-free cards for the first two; no board card when the task's conversation is the board channel. |
+| 7 | Observability for 1–4. | **Fixed:** activity entries `chat.board_card_blocked`, `chat.board_card_failed`, `chat.board_card_delivery_unknown`. |
+| D | Sweep cost grew with history; first enable could flood the channel. | **Fixed:** the sweep reads only open (unsettled) posts and the latest post of currently pending subjects; only decisions from the last 14 days are posted. |
+| D | `enabled = false` still received cards. | **Fixed:** the board channel must also be enabled. |
+| D | Agent text can carry Slack user/user-group mentions. | **Accepted** (pre-existing in thread cards; broadcast mentions are neutralised). |
+
+## Found in production while delivering this: approved plugin actions could never run
+
+The gateway refused to execute any board-approved plugin action ("Plugin actions cannot execute outside their
+originating run"), so a require_approval policy on a plugin tool (the agreement send) could never send. Fixed in
+the same release: an approved plugin action runs through the plugin dispatcher with the agent and run that requested
+it and the signed arguments; a plugin error is a failed execution. Test: approve once runs once with the approved
+arguments; approving again does not re-run; a plugin error fails the invocation; reverting the fix fails the test.
+
+## Code review round 2 (Fable 5.1) and dispositions
+
+Confirmed fixed by re-running the probes: sweep cost (5 queries regardless of history), archived-endpoint starvation,
+first-enable wake, board-channel-task exclusion, settle re-probe. Gateway: an approved plugin action cannot run
+without a valid human approval, twice, or for another agent/company/run.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | The round-1 "re-post dead cards" fix re-staged every 20 s without bound (refused bot, public channel). | **Fixed:** a dead card is retried only after a 1-hour cool-down, only when the channel probe is ok again, never for a removed/archived bot, and at most 5 cards per decision. Tests: every send refused → ≤ 2 rows in 6 sweeps and ≤ 5 over 20 hours; public channel → 1 row over 6 sweeps; planted removal of the cool-down fails 2 tests. |
+| 2 | A settle cancelled on a public channel (or exhausted) stayed dead, leaving the card live. | **Fixed:** dead settles are revived after the cool-down when the channel is safe again (≤ 5 revivals). Test: public → private → the card is edited; planted removal fails it. |
+| D | Backfill filtered on created_at, missing re-pended OAuth prompts. | **Fixed:** greatest(created_at, updated_at). |
+| D | `settled_after_send` guard was dead code. | **Fixed:** removed; a cancelled post was never shown, so it needs no settle. |
+| D | A settle follow-up that failed ambiguously may be retried (duplicate "Approved:" follow-up). | **Accepted**, owner: board; trigger: a duplicate follow-up seen in the board channel. |
+| D | Approved plugin actions pass the issue's current project (or none), not the run's original project. | **Accepted**, owner: board; pre-existing convention (`?? ""`); trigger: a plugin that scopes storage by project. |
+
+Review rounds: 2 of 2 (safety tier cap); remaining fixes verified by the reviewer's probe scenarios and plants.

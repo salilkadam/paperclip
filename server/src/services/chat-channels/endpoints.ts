@@ -1,3 +1,4 @@
+import { notifyBoardCardWork } from "../chat-work-notifications.js";
 import { slackSetupState } from "./slack/setup.js";
 import { assertChatExecutionDefaultsAccess } from "../chat-execution-defaults.js";
 
@@ -518,6 +519,8 @@ function providerSetupState(
               )).limit(1);
               if (other) throw conflict("Another channel is already this company's board channel", { code: "chat_board_cards_taken" });
             }
+            // Wake the board-card worker now; it may have gone idle with no board channel.
+            await notifyBoardCardWork(tx);
             await tx.update(chatEndpointResources)
               .set({ boardCards: cards.enabled, updatedAt: new Date() })
               .where(and(
