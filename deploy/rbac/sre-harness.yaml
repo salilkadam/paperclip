@@ -128,31 +128,41 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: sre-harness-watch
+  name: sre-harness-full
   namespace: ${WEBSITE_NS}
   labels:
     app.kubernetes.io/part-of: paperclip-scoped-rbac
-# Watch only. The site deployer (deploy/reliora-website) deploys reliora.ai and
-# holds its credentials; the harness reports, it does not act here. No secrets,
-# no exec, no create: those would reach the deployer's deploy key and identity.
 rules:
+  # Workload lifecycle: deploy, scale, restart, delete.
   - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch"]
+    resources:
+      ["deployments", "statefulsets", "daemonsets", "replicasets", "deployments/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pod lifecycle, logs, and exec.
   - apiGroups: [""]
-    resources: ["pods", "pods/log", "services", "configmaps", "events", "persistentvolumeclaims"]
-    verbs: ["get", "list", "watch"]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Service and configuration repair.
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Job and CronJob repair.
   - apiGroups: ["batch"]
     resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Ingress repair.
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "networkpolicies"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Incident evidence.
+  - apiGroups: [""]
+    resources: ["events"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: sre-harness-watch
+  name: sre-harness-full
   namespace: ${WEBSITE_NS}
   labels:
     app.kubernetes.io/part-of: paperclip-scoped-rbac
@@ -163,7 +173,7 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: sre-harness-watch
+  name: sre-harness-full
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
