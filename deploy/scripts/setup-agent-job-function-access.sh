@@ -28,7 +28,10 @@
 #      a token (it has both oauth.access_token and GitHub metadata). The run then
 #      reports pending and exits 3;
 #   3. writes a marker-delimited delegation section into each C-level AGENTS.md;
-#   4. proves it (not in --dry-run): access summaries for every C-level agent on
+#   4. proves it (not in --dry-run). A write the board approves first ("ask
+#      first", carded to the board channel in Slack) is the owner's accepted
+#      exception (2026-11-02); the proof fails only on a write made without the
+#      board. Checks: access summaries for every C-level agent on
 #      every connection, a real gateway call that must be refused, and engineer
 #      write access on the managed connection. Any mismatch is fatal.
 #
@@ -278,11 +281,11 @@ while read -r cid; do
       access="$(api GET "/tool-connections/$cid_conn/test-agents/$aid/access")"
       open="$(jq -r --argjson t "$DRIVE_WRITE_TOOLS" --arg x "${BOARD_REPORT_TOOLS:-}" --arg ws "$ws" --arg c "$cid_conn" '
         ($x | split(" ")) as $rep
-        | [.access.tools[] | select(.risk != "read" and .decision != "off")
+        | [.access.tools[] | select(.risk != "read" and .decision == "allowed")
            | select((.toolName | IN($rep[])) | not)
            | select(($c == $ws and (.toolName | IN($t[]))) | not) | .toolName] | join(", ")' <<<"$access")"
-      [[ -z "$open" ]] || die "$cname: agent $aid still has write tools on $(jq -r .name <<<"$conn"): $open"
-      misread="$(jq -r --arg m "$MUTATING_NAME" --arg r "$READ_NAME" '[.access.tools[] | select(.risk == "read" and .decision != "off"
+      [[ -z "$open" ]] || die "$cname: agent $aid can still write without the board on $(jq -r .name <<<"$conn"): $open"
+      misread="$(jq -r --arg m "$MUTATING_NAME" --arg r "$READ_NAME" '[.access.tools[] | select(.risk == "read" and .decision == "allowed"
           and (.toolName | test($m; "i")) and (.toolName | test($r; "i") | not)) | .toolName] | join(", ")' <<<"$access")"
       [[ -z "$misread" ]] || die "$cname: agent $aid can still use mutating tools classified read on $(jq -r .name <<<"$conn"): $misread"
     done < <(jq -r '.[]' <<<"$clevel")
