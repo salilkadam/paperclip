@@ -41,6 +41,7 @@ name; never guess a tool name or an id.
 |---|---|---|
 | Publish, schedule, queue, preview, metrics | **TryPost** | `*-post-tool`, `list-social-accounts-tool`, `list-content-types-tool`, `get-post-metrics-tool` |
 | Read public posts, comments, engagers, profiles, channel stats | **Apify** (social reading actors) | `<username>--<actor-name>…`, plus `get-actor-run`, `get-dataset-items` |
+| Act as a board member's own LinkedIn account: member-only reads, and immediate posts/comments/replies after board approval | **Composio** (LinkedIn app connected by that person) | `COMPOSIO_MULTI_EXECUTE_TOOL` with one `LINKEDIN_*` slug; see `linkedin-personal-account` |
 | Generate or edit an image, carousel slide, thumbnail | **Loc-GenImage** | `gi_generate_image`, `gi_edit_image`, `gi_text_edit_image`, `gi_upscale_image`, `gi_remove_background` |
 | Blog source material, blog links to promote | **Ghost blog** | `gh_*` |
 | Video (promo, ad, short, explainer) | in-house skills | `marketing-video-studio` (live action), `motion-explainer-studio` (2D explainer) |

@@ -20,7 +20,7 @@ tags:
 
 > Read `social-core` first.
 
-A bundle of 12 focused skills for LinkedIn content ops in 2026. Each skill is single-purpose, follows the draft → approval → publish pattern, and publishes only through TryPost with the board's approval card (`social-core` section 2). This hub carries the references every `linkedin-*` skill shares; a leaf skill cites them as "the `linkedin-marketing` skill's `references/X.md`".
+A bundle of 13 focused skills for LinkedIn content ops in 2026. Each skill is single-purpose, follows the draft → approval → publish pattern, and publishes only through TryPost with the board's approval card (`social-core` section 2). This hub carries the references every `linkedin-*` skill shares; a leaf skill cites them as "the `linkedin-marketing` skill's `references/X.md`".
 
 ## When to use this bundle
 
@@ -33,6 +33,7 @@ A bundle of 12 focused skills for LinkedIn content ops in 2026. Each skill is si
 - **Tracking which of your comments got author replies** → use `linkedin-thread-monitor`
 - **Analyzing who liked / commented on any post (audience segmentation)** → use `linkedin-engager-analytics`
 - **Auditing / rewriting a LinkedIn profile** → use `linkedin-profile-optimizer`
+- **Acting as a board member's own LinkedIn account — reading a post by URN, reactions or page statistics as the member, or posting a comment/reply/post right now from that account (ask-first)** → use `linkedin-personal-account` (the company's Composio connection with a LinkedIn app connected by that person)
 - **Running an employee advocacy program across a marketing team** → use `linkedin-employee-advocacy` (posting to an employee's personal profile only when the task names that profile, `social-core` section 2)
 - **Adapting content from another platform (tweet, video, blog) into a native LinkedIn post** → use `linkedin-repurposer`. For the daily promotion of the company's own Ghost blog on its LinkedIn page, use the in-house `blog-linkedin-amplifier` skill.
 - **Working out what you actually have to say, or having nothing concrete for a draft to use** → use `linkedin-interviewer`. It interviews you and keeps the answers in the story bank in memory (`$AGENT_HOME/life/resources/social/story-bank.md`; template: `references/story-bank.md`), which every writing skill reads. Start here if you have never posted: the voice profile needs posts you already wrote, the Story Bank only needs a career.
@@ -70,6 +71,7 @@ Actors used (all no-cookies, public, no LinkedIn login required):
 | Post body by URL | `apimaestro/linkedin-post-detail` | $1 / 1,000 |
 | Comments + replies on a post | `apimaestro/linkedin-post-comments-replies-engagements-scraper-no-cookies` | $5 / 1,000 |
 | Your own recent comments | `apimaestro/linkedin-profile-comments` | $5 / 1,000 |
+| A profile's recent posts (your own, the company page's, or anyone's public) | `apimaestro/linkedin-profile-posts` | $5 / 1,000 |
 | Likers + commenters on any post | `scraping_solutions/linkedin-posts-engagers-likers-and-commenters-no-cookies` | $5 / 1,000 |
 
 Images come from Loc-GenImage (`linkedin-humanizer`'s `sub-skills/illustration.md`), blog source material from the Ghost blog `gh_*` tools, video from `marketing-video-studio` / `motion-explainer-studio`, clips from Loc-FFmpeg (`social-core` section 1).

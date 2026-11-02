@@ -49,6 +49,7 @@ const EXPECTED_OPTIONAL_KEYS = [
   "paperclipai/optional/linkedin/linkedin-humanizer",
   "paperclipai/optional/linkedin/linkedin-interviewer",
   "paperclipai/optional/linkedin/linkedin-marketing",
+  "paperclipai/optional/linkedin/linkedin-personal-account",
   "paperclipai/optional/linkedin/linkedin-post-writer",
   "paperclipai/optional/linkedin/linkedin-profile-optimizer",
   "paperclipai/optional/linkedin/linkedin-reply-handler",

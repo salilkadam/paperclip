@@ -19,9 +19,9 @@ catalog() { jq -n --argjson names "$1" '{catalog: ($names | map({name: ., toolNa
 full="$(jq -c '. ' <<<"$ACTOR_TOOLS")"
 helpers="$(jq -c '.' <<<"$HELPERS")"
 
-# 1. The real pinned surface passes and returns all 15 actor tools.
+# 1. The real pinned surface passes and returns all 16 actor tools.
 out="$(actor_tools "$(catalog "$(jq -c -n --argjson a "$full" --argjson h "$helpers" '$a + $h')")" 2>/dev/null)" \
-  && [[ "$(jq length <<<"$out")" == 15 ]] && pass "pinned catalog accepted (15 actor tools)" || bad "pinned catalog rejected"
+  && [[ "$(jq length <<<"$out")" == 16 ]] && pass "pinned catalog accepted (16 actor tools)" || bad "pinned catalog rejected"
 
 # 2-5. Planted defects must fail.
 for planted in call-actor search-actors apify-api-write some-owner--unpinned-actor; do
