@@ -60,6 +60,12 @@ State found on 2026-11-02:
 - **Bionic has no Google Workspace connection.** The script skips Bionic and exits 3 until it has one. Bionic's C-level agents keep their current access until then, including `git` and `gh`.
 - **Gmail and Calendar writes** are blocked for C-level agents. "Write only to Google Drive" is read literally.
 
+## Writes the board approves (owner, 2026-11-02)
+
+Some older policies are evaluated before the job-function block and give C-level agents "ask first" instead of a block: connecting a Composio app, LinkedIn writes through Composio, and the Design Partner agreement pipeline (the COO). The owner keeps them: each needs the board's approval, and each approval reaches the owner in the company's board channel in Slack (board-channel cards; `#reliora-board` for Reliora). Destructive actions post a card with an "Open in Paperclip" link instead of buttons.
+
+The script's proof therefore fails only on a write a C-level agent can make without the board (`decision == "allowed"`), not on "ask first".
+
 ## Not built: cluster access
 
 Agents run as child processes inside the `bionic-org` container and share one identity. `bionic-org-sa` is not a per-agent identity, and `paperclip-agent-web-sa` does not automount a token. Per-agent cluster access needs its own design.
