@@ -1,7 +1,7 @@
 {
   "name": "@paperclipai/plugin-loc-agentmail",
-  "version": "0.1.0",
-  "description": "Loc-AgentMail connector: self-hosted agent email — IMAP/JMAP-ready receive plus AWS SES direct send — behind a repointable Paperclip plugin",
+  "version": "0.2.0",
+  "description": "Loc-AgentMail connector: self-hosted agent email \u2014 IMAP/JMAP-ready receive plus AWS SES direct send \u2014 behind a repointable Paperclip plugin",
   "license": "MIT",
   "homepage": "https://github.com/paperclipai/paperclip",
   "bugs": {
@@ -45,7 +45,7 @@
   ],
   "scripts": {
     "prebuild": "pnpm --filter @paperclipai/plugin-sdk ensure-build-deps",
-    "build": "rm -rf dist && tsc",
+    "build": "rm -rf dist && tsc && node ./scripts/copy-assets.mjs",
     "bundle": "node ./scripts/bundle.mjs",
     "clean": "rm -rf dist",
     "typecheck": "pnpm --filter @paperclipai/plugin-sdk ensure-build-deps && tsc --noEmit",
@@ -56,10 +56,15 @@
   "devDependencies": {
     "@paperclipai/plugin-sdk": "workspace:*",
     "@types/node": "^24.0.0",
+    "pdfjs-dist": "4.10.38",
     "typescript": "^5.7.3",
     "vitest": "^4.1.8"
   },
   "engines": {
     "node": ">=24.11.0"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "1.1.1",
+    "pdf-lib": "1.17.1"
   }
 }

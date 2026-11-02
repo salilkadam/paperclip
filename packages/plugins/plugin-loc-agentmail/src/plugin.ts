@@ -53,11 +53,15 @@ import {
   MimeError,
   buildRawMessage,
   newMessageId,
+  parseAttachments,
   parseRawMail,
   requireAddressList,
   type ParsedMail,
 } from "./mime.js";
 import { SesError, sendRawViaSes } from "./ses.js";
+import { DriveError, uploadToDrive, type DriveSettings } from "./drive.js";
+import { renderDocument, type RenderedDocument } from "./documents/pdf.js";
+import { TemplateError, getTemplate, validateFields } from "./documents/templates.js";
 import { POLL_JOB, SKILL_KEY, TOOL_NAMES } from "./manifest.js";
 
 // ---------------------------------------------------------------------------
@@ -76,6 +80,34 @@ const MESSAGE_ENTITY = "loc-agentmail-message";
 const MAIL_EVENT = "mail-received";
 
 const SES_SEND_TIMEOUT_MS = 30_000;
+/** Largest rendered attachment the connector will send. */
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+/** Drive file names the connector will create. */
+const DRIVE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,170}\.pdf$/;
+
+/** The configured Drive folder, or a clear error. */
+function driveFolder(config: LocAgentMailConfig, key: unknown): { drive: DriveSettings; folderKey: string } {
+  if (!config.drive) throw new DriveError("document filing is not configured for this connector (no `drive` block)");
+  const folderKey = typeof key === "string" ? key.trim() : "";
+  if (!config.drive.folders[folderKey]) {
+    throw new DriveError(
+      `unknown Drive folder "${folderKey}". Configured folders: ${Object.keys(config.drive.folders).join(", ") || "(none)"}`,
+    );
+  }
+  return { drive: config.drive, folderKey };
+}
+
+function attachmentSummary(doc: RenderedDocument) {
+  return {
+    template: doc.template,
+    version: doc.version,
+    filename: doc.filename,
+    sha256: doc.sha256,
+    size: doc.bytes.length,
+    pages: doc.pages,
+    textSha256: doc.textSha256,
+  };
+}
 const HEALTH_PROBE_TIMEOUT_MS = 8_000;
 const COMPANY_PAGE_LIMIT = 200;
 const MAX_UIDS_PER_MARK = 200;
@@ -255,6 +287,8 @@ async function runTool(
     if (error instanceof AuthorizationError) return { error: error.message };
     if (error instanceof MimeError) return { error: `message rejected: ${error.message}` };
     if (error instanceof SesError) return { error: error.message };
+    if (error instanceof TemplateError) return { error: `document refused: ${error.message}` };
+    if (error instanceof DriveError) return { error: `Drive filing failed: ${error.message}` };
     if (error instanceof ImapError) {
       ctx.logger.warn(`${label}: mail server error`, { companyId, error: error.message });
       return { error: `mail server error: ${error.message}` };
@@ -633,6 +667,36 @@ const plugin = definePlugin({
           const html = typeof input.html === "string" && input.html.trim() ? input.html : undefined;
           if (!text.trim() && !html) return { error: "provide a `text` body (and optionally `html`)" };
 
+          // Documents: rendered here from committed text, never passed in by the caller.
+          if (input.attachments !== undefined && !Array.isArray(input.attachments)) {
+            return { error: "`attachments` must be an array of {template, fields}" };
+          }
+          const specs = Array.isArray(input.attachments) ? input.attachments : [];
+          if (specs.length > 1) return { error: "attach at most one document per email" };
+          const rendered: RenderedDocument[] = [];
+          for (const spec of specs) {
+            if (!isRecord(spec)) return { error: "each attachment must be {template, fields}" };
+            const template = getTemplate(spec.template);
+            if (!account.documentTemplates.includes(template.key)) {
+              return { error: `mailbox "${account.key}" is not allowed to send the ${template.key} document` };
+            }
+            const fields = validateFields(template, spec.fields);
+            const recipient = fields[template.recipientField];
+            if (to.length !== 1 || to[0] !== recipient) {
+              return {
+                error: `with the ${template.key} attached, \`to\` must be exactly the ${template.recipientField} field (${recipient})`,
+              };
+            }
+            if (cc.length) return { error: `\`cc\` must be empty when the ${template.key} is attached` };
+            const doc = await renderDocument(template, fields);
+            if (doc.bytes.length > MAX_ATTACHMENT_BYTES) return { error: `the rendered document is larger than ${MAX_ATTACHMENT_BYTES} bytes` };
+            rendered.push(doc);
+          }
+          const fileSentCopyTo = typeof input.fileSentCopyTo === "string" && input.fileSentCopyTo.trim() ? input.fileSentCopyTo.trim() : "";
+          if (fileSentCopyTo && rendered.length === 0) return { error: "`fileSentCopyTo` needs a document in `attachments`" };
+          // Validate the folder before anything leaves, so a bad key cannot follow a sent email.
+          const sentCopyTarget = fileSentCopyTo ? driveFolder(config, fileSentCopyTo) : null;
+
           const accessKeyId = await resolveSecretValue(ctx, config.send.accessKeyId, {
             companyId: runCtx.companyId,
             configPath: "send.accessKeyId",
@@ -645,6 +709,7 @@ const plugin = definePlugin({
           });
 
           const domain = account.fromAddress.split("@")[1] || "localhost";
+          const messageId = newMessageId(domain);
           const rawMessage = buildRawMessage({
             from: { name: account.displayName, email: account.fromAddress },
             to,
@@ -655,19 +720,36 @@ const plugin = definePlugin({
             html,
             inReplyTo: typeof input.inReplyTo === "string" ? input.inReplyTo : undefined,
             references: stringListOf(input.references),
-            messageId: newMessageId(domain),
+            messageId,
+            attachments: rendered.map((doc) => ({ filename: doc.filename, contentType: "application/pdf", bytes: doc.bytes })),
           });
 
           const recipients = [...to, ...cc];
-          const sent = await sendRawViaSes({
-            region: config.send.sesRegion,
-            credentials: { accessKeyId, secretAccessKey },
-            rawMessage,
-            source: account.fromAddress,
-            recipients,
-            configurationSet: config.send.configurationSet,
-            signal: AbortSignal.timeout(SES_SEND_TIMEOUT_MS),
-          });
+          const documents = rendered.map(attachmentSummary);
+          let sent: Awaited<ReturnType<typeof sendRawViaSes>>;
+          try {
+            sent = await sendRawViaSes({
+              region: config.send.sesRegion,
+              credentials: { accessKeyId, secretAccessKey },
+              rawMessage,
+              source: account.fromAddress,
+              recipients,
+              configurationSet: config.send.configurationSet,
+              signal: AbortSignal.timeout(SES_SEND_TIMEOUT_MS),
+            });
+          } catch (error) {
+            if (documents.length) {
+              // A document that failed to go out must be visible, not only in the agent's tool result.
+              await ctx.activity.log({
+                companyId: runCtx.companyId,
+                message: `FAILED to send ${documents.map((d) => d.template).join(", ")} from ${account.address} to ${recipients.join(", ")}`,
+                entityType: "loc-agentmail-mailbox",
+                entityId: account.key,
+                metadata: { account: account.key, to, subject, documents, error: errorMessage(error), agentId: runCtx.agentId, runId: runCtx.runId },
+              });
+            }
+            throw error;
+          }
 
           await ctx.activity.log({
             companyId: runCtx.companyId,
@@ -681,24 +763,76 @@ const plugin = definePlugin({
               cc,
               subject,
               inReplyTo: typeof input.inReplyTo === "string" ? input.inReplyTo : "",
+              messageId,
               sesMessageId: sent.messageId,
+              documents,
               agentId: runCtx.agentId,
               runId: runCtx.runId,
             },
           });
+
+          // File the exact bytes that were sent, in the same call.
+          let sentCopy: Record<string, unknown> | undefined;
+          if (sentCopyTarget && rendered.length) {
+            const doc = rendered[0];
+            const day = new Date().toISOString().slice(0, 10);
+            const name = doc.filename.replace(/\.pdf$/, `-sent-${day}.pdf`);
+            try {
+              const filed = await uploadToDrive(sentCopyTarget.drive, {
+                folderKey: sentCopyTarget.folderKey,
+                name,
+                bytes: doc.bytes,
+                mimeType: "application/pdf",
+              });
+              sentCopy = { status: "filed", ...filed, sha256: doc.sha256 };
+              await ctx.activity.log({
+                companyId: runCtx.companyId,
+                message: `Filed the sent ${doc.template} (${doc.filename}) in Drive folder ${filed.folderKey}`,
+                entityType: "loc-agentmail-mailbox",
+                entityId: account.key,
+                metadata: { account: account.key, messageId, document: attachmentSummary(doc), drive: filed, agentId: runCtx.agentId, runId: runCtx.runId },
+              });
+            } catch (error) {
+              sentCopy = { status: "failed", error: errorMessage(error) };
+              await ctx.activity.log({
+                companyId: runCtx.companyId,
+                message: `Sent ${doc.template} to ${recipients.join(", ")} but FAILED to file the sent copy in Drive folder ${sentCopyTarget.folderKey}`,
+                entityType: "loc-agentmail-mailbox",
+                entityId: account.key,
+                metadata: { account: account.key, messageId, document: attachmentSummary(doc), error: errorMessage(error), agentId: runCtx.agentId, runId: runCtx.runId },
+              });
+            }
+          }
           await ensureSkill(ctx, runCtx.companyId);
 
+          const docLines = documents.map(
+            (d) => `Attached ${d.filename} (${d.template}, ${d.pages} pages, sha256 ${d.sha256}).`,
+          );
+          const copyLine =
+            sentCopy?.status === "filed"
+              ? `Sent copy filed in Drive: ${String(sentCopy.webViewLink)}.`
+              : sentCopy?.status === "failed"
+                ? `The email WAS sent, but filing the sent copy FAILED: ${String(sentCopy.error)}. Report this; do not resend.`
+                : "";
           return {
-            content:
-              `Sent as ${account.address} to ${recipients.join(", ")}. ` +
-              `The provider accepted it (id ${sent.messageId}).`,
+            content: [
+              `Sent as ${account.address} to ${recipients.join(", ")}. The provider accepted it (id ${sent.messageId}).`,
+              `Message-ID: <${messageId}>. A reply should reference it in In-Reply-To or References.`,
+              ...docLines,
+              copyLine,
+            ]
+              .filter(Boolean)
+              .join("\n"),
             data: {
               account: account.key,
               from: account.fromAddress,
               to,
               cc,
               subject,
+              messageId,
               sesMessageId: sent.messageId,
+              documents,
+              ...(sentCopy ? { sentCopy } : {}),
             },
           };
         }),
@@ -801,6 +935,7 @@ const plugin = definePlugin({
           }
 
           const parsed = parseRawMail(found.raw);
+          const attachments = parseAttachments(found.raw).map(({ bytes: _bytes, ...meta }) => meta);
           const truncated = parsed.text.length > maxChars;
           const body = truncated ? `${parsed.text.slice(0, maxChars)}\n\n… truncated (${parsed.text.length} characters total)` : parsed.text;
           const from = parsed.fromName ? `${parsed.fromName} <${parsed.from}>` : parsed.from;
@@ -819,6 +954,9 @@ const plugin = definePlugin({
             parsed.inReplyTo ? `In-Reply-To: <${parsed.inReplyTo}>` : "",
             parsed.references.length ? `References: ${parsed.references.join(" ")}` : "",
             parsed.html && !includeHtml ? "(html part omitted; re-call with includeHtml: true)" : "",
+            ...attachments.map(
+              (a) => `Attachment ${a.index}: ${a.filename} (${a.contentType}, ${a.size} bytes, sha256 ${a.sha256})`,
+            ),
             "",
             "--- body ---",
             body,
@@ -847,9 +985,96 @@ const plugin = definePlugin({
               subject: parsed.subject,
               truncated,
               textChars: parsed.text.length,
+              attachments,
               html: includeHtml ? parsed.html : undefined,
               body,
             },
+          };
+        }),
+    );
+
+    // -- create_drive_file ---------------------------------------------------
+    ctx.tools.register(
+      TOOL_NAMES.createDriveFile,
+      declarationFor(ctx, TOOL_NAMES.createDriveFile),
+      async (params, runCtx): Promise<ToolResult> =>
+        runTool("create_drive_file", ctx, runCtx.companyId, async () => {
+          const input = isRecord(params) ? params : {};
+          const uid = intParam(input.uid, NaN, 1, Number.MAX_SAFE_INTEGER);
+          if (Number.isNaN(uid)) return { error: "`uid` is required and must be a positive integer" };
+          const index = intParam(input.attachmentIndex, NaN, 0, 50);
+          if (Number.isNaN(index)) return { error: "`attachmentIndex` is required (0-50)" };
+          const expected = typeof input.sha256 === "string" ? input.sha256.trim().toLowerCase() : "";
+          if (!/^[0-9a-f]{64}$/.test(expected)) return { error: "`sha256` is required: copy it from read_message" };
+          const name = typeof input.name === "string" ? input.name.trim() : "";
+          if (!DRIVE_NAME_RE.test(name)) {
+            return { error: "`name` must be a plain file name (letters, digits, dot, dash, underscore, space) ending in .pdf" };
+          }
+
+          const config = await loadConfig(ctx, runCtx.companyId);
+          const account = selectAccount(config, input.account, runCtx);
+          authorizeAccount(account, runCtx);
+          const target = driveFolder(config, input.folder);
+          const password = await resolveSecretValue(ctx, account.password, {
+            companyId: runCtx.companyId,
+            configPath: passwordConfigPath(config, account),
+            label: `${account.key} password`,
+          });
+
+          const found = await withImap(imapOptionsFor(config.imap), account.imapUser, password, async (client) => {
+            await client.selectMailbox(config.imap.mailbox);
+            const fetched = await client.uidFetchMessages(String(uid));
+            return fetched.find((message) => message.uid === uid) ?? null;
+          });
+          if (!found) return { error: `no message with uid ${uid} in ${account.address} / ${config.imap.mailbox}` };
+
+          const parsed = parseRawMail(found.raw);
+          const attachment = parseAttachments(found.raw).find((a) => a.index === index);
+          const fail = async (reason: string) => {
+            await ctx.activity.log({
+              companyId: runCtx.companyId,
+              message: `REFUSED to file attachment ${index} of uid ${uid} from ${account.address}: ${reason}`,
+              entityType: "loc-agentmail-mailbox",
+              entityId: account.key,
+              metadata: { account: account.key, uid, attachmentIndex: index, expectedSha256: expected, folder: target.folderKey, reason, agentId: runCtx.agentId, runId: runCtx.runId },
+            });
+            return { error: reason };
+          };
+          if (!attachment) return fail(`message uid ${uid} has no attachment ${index}`);
+          // The uid could point at a different message by now; the hash is the identity.
+          if (attachment.sha256 !== expected) {
+            return fail(`attachment ${index} of uid ${uid} has sha256 ${attachment.sha256}, not the ${expected} you read. Re-read the message`);
+          }
+          if (attachment.bytes.subarray(0, 5).toString("latin1") !== "%PDF-") return fail(`attachment ${index} is not a PDF file`);
+
+          let filed;
+          try {
+            filed = await uploadToDrive(target.drive, { folderKey: target.folderKey, name, bytes: attachment.bytes, mimeType: "application/pdf" });
+          } catch (error) {
+            await fail(`upload failed: ${errorMessage(error)}`);
+            throw error;
+          }
+          const record = {
+            account: account.key,
+            uid,
+            messageId: parsed.messageId,
+            inReplyTo: parsed.inReplyTo,
+            references: parsed.references,
+            from: parsed.from,
+            subject: parsed.subject,
+            attachment: { index, filename: attachment.filename, size: attachment.size, sha256: attachment.sha256 },
+            drive: filed,
+          };
+          await ctx.activity.log({
+            companyId: runCtx.companyId,
+            message: `Filed ${attachment.filename} from ${parsed.from} (uid ${uid}) in Drive folder ${filed.folderKey} as ${filed.name}`,
+            entityType: "loc-agentmail-mailbox",
+            entityId: account.key,
+            metadata: { ...record, agentId: runCtx.agentId, runId: runCtx.runId },
+          });
+          return {
+            content: `Filed ${attachment.filename} (sha256 ${attachment.sha256}) in Drive folder ${filed.folderKey} as ${filed.name}: ${filed.webViewLink}`,
+            data: record,
           };
         }),
     );
