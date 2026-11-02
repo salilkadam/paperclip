@@ -880,9 +880,9 @@ const AGREEMENT = "reliora-dp-agreement-v1.0";
 const DRIVE_URL = "http://drive.test/mcp";
 const agreementFields = {
   partnerLegalName: "Example Systems Ltd",
-  signatoryName: "Ada Test",
-  signatoryTitle: "Head of Platform",
-  signatoryEmail: "ada@example.com",
+  applicantName: "Ada Test",
+  applicantTitle: "Head of Platform",
+  applicantEmail: "ada@example.com",
   applicationReference: "DP-ABC12345",
   applicationSignedAt: "2026-11-02T09:29:19.000Z",
 };
@@ -967,7 +967,7 @@ describe("send with an agreement attached", () => {
     vi.stubGlobal("fetch", f.fn);
     const worker = await newWorker({ configs: { [COMPANY_A]: documentsConfig(993) } });
     const base = { subject: "s", text: "t", attachments: [{ template: AGREEMENT, fields: agreementFields }] };
-    expect((await worker.call("send", { ...base, to: ["attacker@evil.example"] })).error).toMatch(/must be exactly the signatoryEmail/);
+    expect((await worker.call("send", { ...base, to: ["attacker@evil.example"] })).error).toMatch(/must be exactly the applicantEmail/);
     expect((await worker.call("send", { ...base, to: ["ada@example.com", "attacker@evil.example"] })).error).toMatch(/must be exactly/);
     expect((await worker.call("send", { ...base, to: ["ada@example.com"], cc: ["attacker@evil.example"] })).error).toMatch(/cc/);
     expect((await worker.call("send", { ...base, to: ["ada@example.com"], attachments: [{ template: AGREEMENT, fields: agreementFields }, { template: AGREEMENT, fields: agreementFields }] })).error).toMatch(/at most one/);
@@ -1133,7 +1133,7 @@ describe("documents: review fixes", () => {
     expect(again.error).toMatch(/already sent to ada@example.com/);
     expect(f.ses).toHaveLength(1);
     // A different agreement (new fields) is not blocked.
-    const other = await worker.call("send", { ...args, attachments: [{ template: AGREEMENT, fields: { ...agreementFields, signatoryTitle: "CTO" } }] });
+    const other = await worker.call("send", { ...args, attachments: [{ template: AGREEMENT, fields: { ...agreementFields, applicantTitle: "CTO" } }] });
     expect(other.error).toBeUndefined();
   });
 

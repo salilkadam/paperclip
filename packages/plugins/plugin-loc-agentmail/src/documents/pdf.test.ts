@@ -9,9 +9,9 @@ const template = TEMPLATES["reliora-dp-agreement-v1.0"];
 
 const fields = {
   partnerLegalName: "Example Systems Ltd",
-  signatoryName: "Ada Test",
-  signatoryTitle: "Head of Platform",
-  signatoryEmail: "Ada@Example.com",
+  applicantName: "Ada Test",
+  applicantTitle: "Head of Platform",
+  applicantEmail: "Ada@Example.com",
   applicationReference: "DP-ABC12345",
   applicationSignedAt: "2026-11-02T09:29:19.000Z",
 };
@@ -51,10 +51,10 @@ describe("agreement template", () => {
   });
 
   it("validates fields strictly", () => {
-    expect(validateFields(template, fields).signatoryEmail).toBe("ada@example.com");
+    expect(validateFields(template, fields).applicantEmail).toBe("ada@example.com");
     expect(() => validateFields(template, { ...fields, extra: "x" })).toThrow(/unknown fields/);
-    expect(() => validateFields(template, { ...fields, signatoryTitle: "" })).toThrow(/signatoryTitle is required/);
-    expect(() => validateFields(template, { ...fields, signatoryEmail: "nope" })).toThrow(/not an email/);
+    expect(() => validateFields(template, { ...fields, applicantTitle: "" })).toThrow(/applicantTitle is required/);
+    expect(() => validateFields(template, { ...fields, applicantEmail: "nope" })).toThrow(/not an email/);
     expect(() => validateFields(template, { ...fields, applicationReference: "x" })).toThrow(/DP-ABC12345/);
     expect(validateFields(template, { ...fields, partnerLegalName: "Acme\r\nLtd" }).partnerLegalName).toBe("Acme Ltd");
     expect(() => getTemplate("nope")).toThrow(TemplateError);
@@ -84,6 +84,10 @@ describe("renderDocument", () => {
 
     for (const v of Object.values(f)) expect(text).toContain(v);
     expect(text).toContain("Signed for and on behalf of the Partner");
+    // Whoever signs (often not the applicant) writes their own name and title.
+    expect(text).toMatch(/Name: _{20,}/);
+    expect(text).toMatch(/Job title: _{20,}/);
+    expect(text).toContain("Application submitted by: Ada Test");
     expect(text).toContain(`Page 1 of ${doc.pages}`);
     expect(text).toContain(doc.textSha256);
   });
@@ -92,7 +96,7 @@ describe("renderDocument", () => {
     const tricky = {
       ...fields,
       partnerLegalName: "Łódź Ağaoğlu (UK) :) Ltd \\ Ω",
-      signatoryName: "Zoë Ñúñez-Øster",
+      applicantName: "Zoë Ñúñez-Øster",
     };
     const doc = await renderDocument(template, validateFields(template, tricky));
     const { text } = await extractText(doc.bytes);
