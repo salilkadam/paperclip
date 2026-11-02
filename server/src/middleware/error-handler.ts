@@ -154,7 +154,8 @@ export function errorHandler(
   // their own status and reason. Without this they surfaced as a bare 500
   // "Internal error" in the UI when a route let them propagate.
   if (isToolGatewayHttpError(err)) {
-    res.status(err.status).json({ error: err.message, code: err.reasonCode, ...(Object.keys(err.details).length ? { details: err.details } : {}) });
+    // Same body shape as the gateway's own routes (sendGatewayError): { error, reasonCode, ...details }.
+    res.status(err.status).json({ ...err.details, error: err.message, reasonCode: err.reasonCode });
     return;
   }
   if (err instanceof HttpError) {

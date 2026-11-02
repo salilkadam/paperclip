@@ -83,8 +83,8 @@ describe("errorHandler", () => {
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith({
       error: "Tool action request requires formal board approval before execution",
-      code: "formal_approval_required",
-      details: { approvalId: "a1" },
+      reasonCode: "formal_approval_required",
+      approvalId: "a1",
     });
     expect(captureExceptionMock).not.toHaveBeenCalled();
   });
