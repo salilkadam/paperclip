@@ -307,15 +307,16 @@ export async function renderDocument(template: DocumentTemplate, fields: Record<
   w.rule();
   w.ensure(LINE * 12);
   w.runs([{ text: "Signed for and on behalf of the Partner", bold: true }], { size: 12, gapAfter: 14 });
+  w.runs([{ text: "To be signed by a person authorised to sign for the Partner.", bold: false }], { size: 9.5, gapAfter: 12 });
+  w.runs([{ text: "Organisation: ", bold: true }, { text: fields.partnerLegalName, bold: false }], { gapAfter: 12 });
   w.runs([{ text: "Signature: ________________________________________", bold: false }], { gapAfter: 12 });
-  w.runs([{ text: "Name: ", bold: true }, { text: fields.signatoryName, bold: false }]);
-  w.runs([{ text: "Job title: ", bold: true }, { text: fields.signatoryTitle, bold: false }]);
-  w.runs([{ text: "Organisation: ", bold: true }, { text: fields.partnerLegalName, bold: false }]);
+  w.runs([{ text: "Name: ________________________________________", bold: false }], { gapAfter: 12 });
+  w.runs([{ text: "Job title: ____________________________________", bold: false }], { gapAfter: 12 });
   w.runs([{ text: "Date: ________________________", bold: false }], { gapAfter: 14 });
   w.runs(
     [
       {
-        text: `Please sign and date this agreement and return the signed PDF by replying to the email it came with. Reference ${fields.applicationReference}.`,
+        text: `Please sign and date this agreement and return the signed PDF by replying to the email it came with, from any address at your organisation. Reference ${fields.applicationReference}.`,
         bold: false,
       },
     ],

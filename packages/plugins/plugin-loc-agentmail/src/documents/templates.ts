@@ -53,13 +53,13 @@ export const TEMPLATES: Record<string, DocumentTemplate> = {
     approval: "CEO sign-off, Paperclip REL-5 card 26edd8da, accepted 2026-10-06; text confirmed by the CLO on REL-3326",
     fields: [
       { key: "partnerLegalName", label: "Partner (organisation legal name)", maxLength: 200, kind: "text" },
-      { key: "signatoryName", label: "Signatory name", maxLength: 120, kind: "text" },
-      { key: "signatoryTitle", label: "Signatory job title", maxLength: 120, kind: "text" },
-      { key: "signatoryEmail", label: "Signatory email", maxLength: 254, kind: "email" },
+      { key: "applicantName", label: "Application submitted by", maxLength: 120, kind: "text" },
+      { key: "applicantTitle", label: "Applicant job title", maxLength: 120, kind: "text" },
+      { key: "applicantEmail", label: "Applicant email", maxLength: 254, kind: "email" },
       { key: "applicationReference", label: "Application reference", maxLength: 32, kind: "reference" },
       { key: "applicationSignedAt", label: "Application sign-off (UTC)", maxLength: 40, kind: "timestamp" },
     ],
-    recipientField: "signatoryEmail",
+    recipientField: "applicantEmail",
     filename: (f) => `${slug(f.partnerLegalName)}-dp-agreement-v1.0-${f.applicationReference}.pdf`,
   },
 };
