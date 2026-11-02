@@ -1,11 +1,12 @@
 /** Presentation metadata only. Each provider will have its own catalog entry and connection. */
-export type RemoteMcpProviderId = "zapier" | "arcade" | "composio" | "executor";
+export type RemoteMcpProviderId = "zapier" | "arcade" | "composio" | "executor" | "connecthub";
 
 export interface RemoteMcpProvider {
   id: RemoteMcpProviderId;
   name: string;
   description: string;
   instructions: string[];
+  /** Empty for self-hosted providers without a public guide. */
   setupUrl: string;
   dashboardUrl: string;
   defaultUrl: string;
@@ -13,6 +14,8 @@ export interface RemoteMcpProvider {
   urlHelp: string;
   authHelp: string;
   supportsBrowserAuth: boolean;
+  /** Initial authentication choice when it is not browser sign-in. */
+  defaultAuth?: "bearer";
 }
 
 export const remoteMcpProviders: Record<RemoteMcpProviderId, RemoteMcpProvider> = {
@@ -55,5 +58,15 @@ export const remoteMcpProviders: Record<RemoteMcpProviderId, RemoteMcpProvider> 
     defaultUrl: "", placeholder: "Paste your Executor workspace MCP URL",
     urlHelp: "Use the hosted workspace URL or a self-hosted HTTP endpoint reachable from Paperclip. The server’s endpoint policy also applies.",
     authHelp: "Keep any options in the copied URL. If using an API key, use a user key; workspace and organization keys cannot open an MCP session.",
+  },
+  connecthub: {
+    id: "connecthub", name: "Connect Hub", supportsBrowserAuth: false, defaultAuth: "bearer",
+    description: "Use the apps connected through your self-hosted Connect Hub.",
+    instructions: ["Create an MCP server in your Connect Hub for the apps agents should use.", "Issue an MCP token for that server.", "Paste the hub's MCP URL and the token here."],
+    // Self-hosted: there is no fixed hub address or public guide.
+    setupUrl: "", dashboardUrl: "",
+    defaultUrl: "", placeholder: "https://your-hub.example.com/mcp",
+    urlHelp: "Use your hub's MCP endpoint (it ends in /mcp). App connect links are trusted only on this address.",
+    authHelp: "Paste the MCP token issued for this hub server. Paperclip sends it as a Bearer token.",
   },
 };

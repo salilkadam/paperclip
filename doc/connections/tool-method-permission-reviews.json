@@ -579,6 +579,20 @@
       "liveProof": "not-run"
     },
     {
+      "app": "connecthub",
+      "method": "mcp",
+      "auth": "none",
+      "policy": "endpoint",
+      "requestedScopes": [],
+      "capability": "provider-controlled",
+      "supportedActions": "Actions depend on the toolkits configured on the self-hosted Connect Hub MCP server and the accounts each user connects in the hub.",
+      "evidence": [
+        "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+      ],
+      "reviewedAt": "2026-11-02",
+      "liveProof": "not-run"
+    },
+    {
       "app": "fireflies",
       "method": "mcp-oauth",
       "auth": "oauth",

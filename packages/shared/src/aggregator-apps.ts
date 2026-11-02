@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ComposioAppSnapshot, ComposioAppSyncState } from "./composio-app-setup.js";
 import type { AppCatalogAggregator } from "./aggregator-app-catalog.js";
 
-export const AGGREGATOR_NAMES = { composio: "Composio", arcade: "Arcade", executor: "Executor" } as const;
+export const AGGREGATOR_NAMES = { composio: "Composio", arcade: "Arcade", executor: "Executor", connecthub: "Connect Hub" } as const;
 export function isAppAggregator(value: unknown): value is AppCatalogAggregator {
   return typeof value === "string" && Object.hasOwn(AGGREGATOR_NAMES, value);
 }
@@ -35,17 +35,38 @@ export const arcadeDiscoverySetupSchema = z.object({
 }).strict();
 export type ArcadeDiscoverySetupInput = z.infer<typeof arcadeDiscoverySetupSchema>;
 
-/** Only trustworthy browser destinations; never expose URL credentials or active schemes. */
-export function aggregatorManagementUrl(provider: AppCatalogAggregator, configured?: string | null): string | null {
+/** Connect Hub is self-hosted: its own MCP catalog, not a hostname, identifies it. */
+export const CONNECT_HUB_DISCOVERY_TOOLS = ["hub_list_connections", "hub_connect"] as const;
+export function isConnectHubToolCatalog(toolNames: Iterable<string>): boolean {
+  const names = new Set(toolNames);
+  return CONNECT_HUB_DISCOVERY_TOOLS.every(name => names.has(name));
+}
+
+/** The hub's https origin, derived only from the connection's configured endpoint. */
+export function connectHubOrigin(endpoint: string | URL | null | undefined): string | null {
+  if (!endpoint) return null;
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === "https:" && !url.username && !url.password ? url.origin : null;
+  } catch { return null; }
+}
+
+/** Only trustworthy browser destinations; never expose URL credentials or active schemes.
+ * Connect Hub has no fixed host: its management URL must stay on the connection endpoint's host. */
+export function aggregatorManagementUrl(provider: AppCatalogAggregator, configured?: string | null, endpoint?: string | URL | null): string | null {
+  const hubOrigin = provider === "connecthub" ? connectHubOrigin(endpoint) : null;
+  if (provider === "connecthub" && !hubOrigin) return null;
   if (configured) {
     try {
       const url = new URL(configured);
       if (url.protocol !== "https:" || url.username || url.password || [...url.searchParams.keys()].some(key => /token|secret|api.?key|authorization|code/i.test(key))) return null;
       if (provider === "composio" && url.hostname !== "dashboard.composio.dev") return null;
       if (provider === "arcade" && url.hostname !== "app.arcade.dev") return null;
+      if (provider === "connecthub" && url.origin !== hubOrigin) return null; // same origin: host and port
       return url.toString();
     } catch { return null; }
   }
   return provider === "composio" ? "https://dashboard.composio.dev/~/org/connect/apps"
-    : provider === "arcade" ? "https://app.arcade.dev/" : null;
+    : provider === "arcade" ? "https://app.arcade.dev/"
+    : provider === "connecthub" ? `${hubOrigin}/dashboard` : null;
 }

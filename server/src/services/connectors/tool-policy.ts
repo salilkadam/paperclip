@@ -17,6 +17,8 @@ interface ConnectionIdentity {
 interface ReviewedToolPolicy {
   sourceTemplateKey: string;
   classifyRisk?: (tool: ToolDescriptor) => ToolRiskLevel | null;
+  /** Tools held for review when first seen or changed, even when the connection does not quarantine new entries. */
+  quarantineTool?: (tool: ToolDescriptor) => boolean;
   quarantineNewEntries: boolean;
   matchesConnection?: (connection: ConnectionIdentity) => boolean;
   matchesEndpoint?: (connection: ConnectionIdentity) => boolean;
@@ -68,6 +70,34 @@ const TRYPOST_TOOL_RISK: Record<string, ToolRiskLevel> = Object.fromEntries([
   ...TRYPOST_WRITES.map(name => [name, "write" as const]),
   ...TRYPOST_DESTRUCTIVE.map(name => [name, "destructive" as const]),
 ]);
+// Connect Hub (self-hosted; no fixed host). The hub_* meta tools are reviewed
+// here. hub_execute (router mode) runs any tool on the server, so it is the
+// worst case and waits for review. App tools are named <toolkit>__<action> and
+// carry the hub's MCP annotations; without a read-only hint they are writes.
+const CONNECT_HUB_TOOL_RISK: Record<string, ToolRiskLevel> = {
+  hub_list_connections: "read", hub_list_options: "read", hub_search_tools: "read", hub_get_tool_schema: "read",
+  hub_connect: "write", hub_execute: "destructive",
+};
+function connectHubRisk(tool: ToolDescriptor): ToolRiskLevel {
+  const reviewed = CONNECT_HUB_TOOL_RISK[tool.name];
+  if (reviewed) return reviewed;
+  const annotations = tool.annotations ?? {};
+  const action = tool.name.includes("__") ? tool.name.slice(tool.name.indexOf("__") + 2) : tool.name;
+  if (annotations.destructiveHint === true || /(?:^|[_-])(?:delete|remove|destroy|purge|revoke)(?:[_-]|$)/i.test(action)) return "destructive";
+  // The hub infers readOnlyHint heuristically, and any custom server that lists hub_list_connections/hub_connect is
+  // classified here, so readOnlyHint may only lower the risk of an action whose name carries no write verb.
+  const words = action.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.some(word => CONNECT_HUB_WRITE_VERBS.has(word))) return "write";
+  return annotations.readOnlyHint === true ? "read" : "write";
+}
+
+const CONNECT_HUB_WRITE_VERBS = new Set([
+  "create", "update", "write", "set", "send", "publish", "post", "mutate", "mark", "archive", "add", "insert",
+  "upsert", "reply", "edit", "move", "copy", "rename", "assign", "invite", "share", "run", "start", "trigger",
+  "append", "save", "approve", "merge", "complete", "schedule", "subscribe", "follow", "like", "comment", "react",
+  "upload", "transition", "execute", "submit", "close", "cancel", "reject", "lock", "block", "mute", "disable",
+]);
+
 // host + path of an https endpoint (case-insensitive host, trailing slashes ignored); anything else is not ours
 const endpointPath = (url: unknown): string | null => {
   if (typeof url !== "string") return null;
@@ -112,6 +142,7 @@ const reviewedPolicies: ReviewedToolPolicy[] = [
   })),
   { sourceTemplateKey: "enterpret", quarantineNewEntries: true, classifyRisk: enterpretRisk },
   { sourceTemplateKey: "braintrust", quarantineNewEntries: true, classifyRisk: braintrustRisk },
+  { sourceTemplateKey: "connecthub", quarantineNewEntries: false, classifyRisk: connectHubRisk, quarantineTool: tool => tool.name === "hub_execute" },
 ];
 
 const bySource = new Map(reviewedPolicies.map(policy => [policy.sourceTemplateKey, policy]));
@@ -119,6 +150,7 @@ const bySource = new Map(reviewedPolicies.map(policy => [policy.sourceTemplateKe
 export function connectorToolPolicy(sourceTemplateKey?: string | null, connection?: ConnectionIdentity): {
   sourceTemplateKey: string | null;
   classifyRisk?: (tool: ToolDescriptor) => ToolRiskLevel | null;
+  quarantineTool?: (tool: ToolDescriptor) => boolean;
   quarantineNewEntries: boolean;
 } {
   const policy = (connection && reviewedPolicies.find(candidate => candidate.matchesEndpoint?.(connection)))
@@ -126,6 +158,7 @@ export function connectorToolPolicy(sourceTemplateKey?: string | null, connectio
   return {
     sourceTemplateKey: policy?.sourceTemplateKey ?? sourceTemplateKey ?? null,
     classifyRisk: policy?.classifyRisk,
+    quarantineTool: policy?.quarantineTool,
     // Initial setup declares this default before discovery. Subsequent
     // refresh/reconnect preserves it only for the reviewed connection identity.
     quarantineNewEntries: Boolean(policy?.quarantineNewEntries

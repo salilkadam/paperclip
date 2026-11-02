@@ -17,6 +17,7 @@ export const CONNECTABLE_APP_SLUGS = new Set([
   "zapier",
   "arcade",
   "executor",
+  "connecthub",
   "slack",
   "notion",
   "paperclip-notebook",

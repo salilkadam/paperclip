@@ -447,6 +447,8 @@ export const toolsApi = {
     detachInflightGet(path);
     return api.get<AggregatorAppsResponse>(path, { cache: "no-store" });
   },
+  setupAggregatorApp: (connectionId: string, toolkit: string, input: ComposioAppSetupInput) =>
+    api.post<ComposioAppSetupResult>(`/tool-connections/${connectionId}/aggregator/apps/${encodeURIComponent(toolkit)}/setup`, input),
   syncAggregatorApps: (connectionId: string, force = false) => api.post<AggregatorAppsResponse>(`/tool-connections/${connectionId}/aggregator/apps/sync`, { force }),
   refreshAggregatorApps: (connectionId: string, toolkits: string[] = []) => api.post<AggregatorAppsResponse>(`/tool-connections/${connectionId}/aggregator/apps/refresh`, { toolkits }),
   configureArcadeDiscovery: (connectionId: string, input: ArcadeDiscoverySetupInput) => api.put<AggregatorAppsResponse>(`/tool-connections/${connectionId}/aggregator/discovery`, input),

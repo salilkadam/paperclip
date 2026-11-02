@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { AggregatorDiscoveryUnavailableError, discoverArcadeApps, discoverExecutorApps, EXECUTOR_INVENTORY_CODE, inventoryPayload } from "../services/aggregator-app-discovery.js";
-import { aggregatorManagementUrl } from "@paperclipai/shared/aggregator-apps";
+import { AggregatorDiscoveryUnavailableError, connectHubConnectLink, discoverArcadeApps, discoverConnectHubApps, discoverExecutorApps, EXECUTOR_INVENTORY_CODE, inventoryPayload } from "../services/aggregator-app-discovery.js";
+import { aggregatorManagementUrl, isConnectHubToolCatalog } from "@paperclipai/shared/aggregator-apps";
 
 const account = (id: string, user = "u1") => ({ id, user_id: user, provider_id: "notion-provider", connection_status: "active", provider_user_info: { email: "Work", access_token: "do-not-store" } });
 const tool = { qualified_name: "Notion.ListPages", toolkit: { name: "Notion" }, requirements: { met: true, authorization: { provider_id: "notion-provider", token_status: "completed" } } };
@@ -55,6 +55,56 @@ describe("aggregator inventory adapters", () => {
     await expect(discoverExecutorApps({ toolNames: ["execute"], call: async () => ({ isError: true }) })).rejects.toThrow("failed");
     await expect(discoverExecutorApps({ toolNames: ["integrations"], call: async () => ({ items: [], hasMore: true, nextOffset: 0 }) })).rejects.toThrow("Incomplete");
     expect(() => inventoryPayload({ content: [{ type: "text", text: "No accounts" }] })).toThrow();
+  });
+  it("maps Connect Hub toolkits to apps, ACTIVE accounts to connected, and keeps only identity and status", async () => {
+    const hubText = (value: unknown) => ({ jsonrpc: "2.0", id: "x", result: { content: [{ type: "text", text: JSON.stringify(value) }] } });
+    const call = vi.fn(async () => hubText({
+      connected: [
+        { id: "ca_1", toolkit: "google-drive", status: "ACTIVE", identifier: "ops@example.com", access_token: "do-not-store" },
+        { id: "ca_2", toolkit: "github", status: "EXPIRED", identifier: null },
+        { id: "ca_3", toolkit: "github", status: "SOMETHING_NEW" },
+      ],
+      available_toolkits: ["google-drive", "github", "acme-internal"],
+    }));
+    const apps = await discoverConnectHubApps({ call, toolNames: ["hub_list_connections", "hub_connect"], managementUrl: "https://hub.example/dashboard" });
+    expect(call).toHaveBeenCalledWith("hub_list_connections", {});
+    expect(apps.map(app => app.toolkit)).toEqual(["google-drive", "github", "acme-internal"]);
+    expect(apps[0].accounts).toEqual([{ id: "ca_1", alias: "ops@example.com", status: "ACTIVE", isDefault: false, appSlug: "googledrive", appName: "Google Drive", managementUrl: "https://hub.example/dashboard" }]);
+    expect(apps[1].accounts.map(account => account.status)).toEqual(["EXPIRED", "UNVERIFIED"]);
+    expect(apps[2]).toEqual({ toolkit: "acme-internal", accounts: [] });
+    expect(JSON.stringify(apps)).not.toContain("do-not-store");
+  });
+  it("surfaces unsupported, failed and malformed Connect Hub inventories as errors, never as empty", async () => {
+    await expect(discoverConnectHubApps({ toolNames: ["hub_connect"], managementUrl: null, call: vi.fn() })).rejects.toBeInstanceOf(AggregatorDiscoveryUnavailableError);
+    await expect(discoverConnectHubApps({ toolNames: ["hub_list_connections"], managementUrl: null, call: async () => ({ result: { isError: true, content: [{ type: "text", text: "{\"error\":\"bad token\"}" }] } }) })).rejects.toThrow("failed");
+    await expect(discoverConnectHubApps({ toolNames: ["hub_list_connections"], managementUrl: null, call: async () => ({ result: { content: [{ type: "text", text: "No connections" }] } }) })).rejects.toThrow();
+    await expect(discoverConnectHubApps({ toolNames: ["hub_list_connections"], managementUrl: null, call: async () => ({ connected: [] }) })).rejects.toThrow("Incomplete");
+    await expect(discoverConnectHubApps({ toolNames: ["hub_list_connections"], managementUrl: null, call: async () => ({ connected: [{ toolkit: "github", status: "ACTIVE" }], available_toolkits: ["github"] }) })).rejects.toThrow("Malformed");
+    await expect(discoverConnectHubApps({ toolNames: ["hub_list_connections"], managementUrl: null, call: async () => ({ connected: [{ id: "a", toolkit: "github" }, { id: "a", toolkit: "github" }], available_toolkits: ["github"] }) })).rejects.toThrow("Duplicate");
+  });
+  it("detects Connect Hub only from both discovery tools", () => {
+    expect(isConnectHubToolCatalog(["hub_list_connections", "hub_connect", "github__github_list_repos"])).toBe(true);
+    expect(isConnectHubToolCatalog(["hub_list_connections"])).toBe(false);
+    expect(isConnectHubToolCatalog(["COMPOSIO_MANAGE_CONNECTIONS", "hub_connect"])).toBe(false);
+  });
+  it("trusts a hub_connect link only on the connection's own hub origin", () => {
+    const result = (url: string) => ({ jsonrpc: "2.0", id: "x", result: { content: [{ type: "text", text: JSON.stringify({ connect_url: url, expires_at: "2026-11-02T12:00:00.000Z" }) }] } });
+    expect(connectHubConnectLink(result("https://hub.example/connect/ln_1?sig=abc"), "https://hub.example/mcp")).toBe("https://hub.example/connect/ln_1?sig=abc");
+    expect(connectHubConnectLink(result("https://evil.example/connect/ln_1?sig=abc"), "https://hub.example/mcp")).toBeNull();
+    expect(connectHubConnectLink(result("https://hub.example.evil.example/connect/ln_1"), "https://hub.example/mcp")).toBeNull();
+    expect(connectHubConnectLink(result("http://hub.example/connect/ln_1"), "https://hub.example/mcp")).toBeNull();
+    expect(connectHubConnectLink(result("https://hub.example/connect/ln_1"), "http://hub.example/mcp")).toBeNull();
+    expect(() => connectHubConnectLink({ result: { isError: true, content: [{ type: "text", text: "{\"error\":\"nope\"}" }] } }, "https://hub.example/mcp")).toThrow();
+  });
+  it("keeps Connect Hub management URLs on the connection endpoint's host", () => {
+    expect(aggregatorManagementUrl("connecthub", null, "https://hub.example/mcp")).toBe("https://hub.example/dashboard");
+    expect(aggregatorManagementUrl("connecthub", "https://hub.example/tenants/acme", "https://hub.example/mcp")).toBe("https://hub.example/tenants/acme");
+    for (const url of ["https://other.example/dashboard", "http://hub.example/dashboard", "https://user:pw@hub.example/", "https://hub.example/?token=secret", "https://hub.example:8443/dashboard"]) {
+      expect(aggregatorManagementUrl("connecthub", url, "https://hub.example/mcp")).toBeNull();
+    }
+    expect(aggregatorManagementUrl("connecthub")).toBeNull();
+    expect(aggregatorManagementUrl("connecthub", null, "http://hub.internal/mcp")).toBeNull();
+    expect(aggregatorManagementUrl("connecthub", "https://hub.example/dashboard", "not a url")).toBeNull();
   });
   it("validates browser destinations without leaking credentials", () => {
     expect(aggregatorManagementUrl("composio")).toBe("https://dashboard.composio.dev/~/org/connect/apps");

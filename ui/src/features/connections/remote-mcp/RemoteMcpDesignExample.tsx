@@ -8,7 +8,7 @@ function ConnectExample({ providerId }: { providerId: RemoteMcpProviderId }) {
   const provider = remoteMcpProviders[providerId];
   const [state, setState] = useState<RemoteMcpSetupState>({
     step: "access", grantKind: "organization", setupComplete: false, url: provider.defaultUrl,
-    auth: provider.supportsBrowserAuth ? "auto" : "none", token: "", headers: [], connectStatus: "idle",
+    auth: provider.defaultAuth ?? (provider.supportsBrowserAuth ? "auto" : "none"), token: "", headers: [], connectStatus: "idle",
     connected: false, identity: null, allAgents: true, agentIds: [], permissions: {},
     tools: [], notice: null, refreshing: false,
   });

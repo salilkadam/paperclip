@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "slug": "connecthub",
+  "name": "Connect Hub",
+  "description": "Use the apps connected through your Connect Hub MCP server.",
+  "categories": [
+    "productivity"
+  ],
+  "featured": false,
+  "branding": {
+    "logoUrl": "/brands/apps/connecthub.svg"
+  },
+  "urlPatterns": [],
+  "methods": [
+    {
+      "key": "mcp",
+      "transport": "mcp_remote",
+      "auth": "none",
+      "ownershipModes": [
+        "dcr",
+        "customer"
+      ],
+      "whenToUse": "Use the provider-hosted connection for the quickest setup.",
+      "defaults": {},
+      "guidanceMd": "Paste your Connect Hub MCP URL (it ends in /mcp). Under Advanced authentication, choose Bearer token and paste the hub MCP token issued for this server.",
+      "riskTier": "S3",
+      "label": "Connect MCP server"
+    }
+  ]
+}

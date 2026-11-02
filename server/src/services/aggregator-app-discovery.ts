@@ -1,12 +1,14 @@
 import type { ComposioAppAccount } from "@paperclipai/shared";
 import { aggregatorManagementUrl } from "@paperclipai/shared/aggregator-apps";
 import { resolveAggregatorApp } from "@paperclipai/shared/aggregator-app-catalog";
+import { extractRemoteMcpPending } from "./remote-mcp-pending.js";
 
 export class AggregatorDiscoveryUnavailableError extends Error {}
 
 export type DiscoveredApp = { toolkit: string; accounts: ComposioAppAccount[] };
 export type JsonRequest = (path: string) => Promise<unknown>;
-export type McpCall = (name: string, args: Record<string, unknown>) => Promise<unknown>;
+/** retry: false for calls that must never repeat automatically (non-idempotent). */
+export type McpCall = (name: string, args: Record<string, unknown>, options?: { retry?: boolean }) => Promise<unknown>;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const string = (value: unknown): string | undefined => typeof value === "string" && value.trim() ? value.trim() : undefined;
 
@@ -139,4 +141,41 @@ export async function discoverExecutorApps(input: { call: McpCall; toolNames: st
     grouped.set(toolkit, before);
   }
   return [...grouped].map(([toolkit, accounts]) => ({ toolkit, accounts }));
+}
+
+const CONNECT_HUB_STATUSES = new Set(["ACTIVE", "EXPIRED", "FAILED"]);
+const CONNECT_HUB_TOOLKIT = /^[a-z0-9][a-z0-9_-]{0,199}$/;
+
+/** Connect Hub lists every toolkit on the MCP server and the caller's own accounts.
+ * Keep only account identity and status; a malformed inventory is an error, never empty. */
+export async function discoverConnectHubApps(input: { call: McpCall; toolNames: string[]; managementUrl: string | null }): Promise<DiscoveredApp[]> {
+  if (!input.toolNames.includes("hub_list_connections")) throw new AggregatorDiscoveryUnavailableError("Connect Hub account discovery is unavailable on this server");
+  const payload = inventoryPayload(await input.call("hub_list_connections", {}));
+  if (!Array.isArray(payload.connected) || !Array.isArray(payload.available_toolkits)) throw new Error("Incomplete Connect Hub inventory");
+  const grouped = new Map<string, ComposioAppAccount[]>();
+  for (const value of payload.available_toolkits) {
+    const toolkit = string(value);
+    if (!toolkit || !CONNECT_HUB_TOOLKIT.test(toolkit)) throw new Error("Malformed Connect Hub toolkit");
+    grouped.set(toolkit, []);
+  }
+  for (const value of payload.connected) {
+    const account = record(value);
+    const id = string(account.id);
+    const toolkit = string(account.toolkit);
+    if (!id || id.length > 200 || !toolkit || !CONNECT_HUB_TOOLKIT.test(toolkit)) throw new Error("Malformed Connect Hub account");
+    const accounts = grouped.get(toolkit) ?? [];
+    if (accounts.some(item => item.id === id)) throw new Error("Duplicate Connect Hub account identity");
+    const raw = String(account.status ?? "").toUpperCase();
+    const app = resolveAggregatorApp("connecthub", toolkit);
+    accounts.push({ id, alias: string(account.identifier)?.slice(0, 100) ?? null, status: CONNECT_HUB_STATUSES.has(raw) ? raw : "UNVERIFIED",
+      isDefault: false, appSlug: app.slug, appName: app.name, managementUrl: input.managementUrl });
+    grouped.set(toolkit, accounts);
+  }
+  return [...grouped].map(([toolkit, accounts]) => ({ toolkit, accounts }));
+}
+
+/** hub_connect returns a one-time connect link; it is trusted only on the hub's own origin. */
+export function connectHubConnectLink(response: unknown, endpoint: string | URL): string | null {
+  inventoryPayload(response); // A provider error is a failure, not a missing link.
+  return extractRemoteMcpPending(response, "connecthub", "hub_connect", { endpoint })?.links[0]?.url ?? null;
 }

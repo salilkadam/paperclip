@@ -852,6 +852,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
     composio: aggregatorGateways.filter(connection => appConnectionSourceSlug(connection) === "composio"),
     arcade: aggregatorGateways.filter(connection => appConnectionSourceSlug(connection) === "arcade"),
     executor: aggregatorGateways.filter(connection => appConnectionSourceSlug(connection) === "executor"),
+    connecthub: aggregatorGateways.filter(connection => appConnectionSourceSlug(connection) === "connecthub"),
   }), [aggregatorGateways]);
   function changeQuery(value: string) {
     if (source === "paperclip" && !query.trim() && value.trim()) { setSource("all"); setExpandedSearch(true); }
@@ -1244,7 +1245,7 @@ export function ConnectorCard({
               const state = upstreamAccountState(connection, snapshot, account);
               const provider = snapshot.provider ?? (isAppAggregator(connection.config?.sourceTemplateKey) ? connection.config?.sourceTemplateKey : "composio");
               const providerName = AGGREGATOR_NAMES[provider];
-              const managementUrl = aggregatorManagementUrl(provider, account.managementUrl ?? (typeof connection.config?.managementUrl === "string" ? connection.config?.managementUrl : null));
+              const managementUrl = aggregatorManagementUrl(provider, account.managementUrl ?? (typeof connection.config?.managementUrl === "string" ? connection.config?.managementUrl : null), typeof connection.config?.url === "string" ? connection.config.url : null);
               const manage = () => onManageAggregator?.(row.upstreamCatalogApp!, connection.id);
               return <ConnectionAccountRowLayout key={`${connection.id}:${snapshot.toolkit}:${account.id}`} state={state} accountName={name}
                 source={<><AppLogo name={providerName} brandKey={provider} size={16} compact /><span>Managed by {providerName} ·</span><button type="button" className="max-w-full truncate hover:underline" onClick={() => onNavigate(`/apps/${connection.id}/permissions`)}>“{connection.name}”</button></>}

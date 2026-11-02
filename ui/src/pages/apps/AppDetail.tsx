@@ -59,7 +59,7 @@ import { IdentitiesSection } from "./app-detail/IdentitiesSection";
 import { PermissionsPanel } from "./app-detail/PermissionsPanel";
 import { AgentConnectionAccess } from "./app-detail/AgentConnectionAccess";
 import { ConnectedAggregatorApps } from "./app-detail/ConnectedAggregatorApps";
-import { isAppAggregator } from "@paperclipai/shared/aggregator-apps";
+import { isAppAggregator, aggregatorManagementUrl } from "@paperclipai/shared/aggregator-apps";
 import { actionPermissionMutation } from "./app-detail/action-permissions";
 import { RailwayAccessPanel } from "./app-detail/RailwayAccessPanel";
 import { ReviewPanel } from "./app-detail/ReviewPanel";
@@ -730,7 +730,10 @@ function StandardAppDetail({ renderActions, renderAgentSettings, renderConnectio
                 providerName={baseAppName} canReconnect={canReconnect} canDisconnect={grantsQuery.data?.capabilities.canConfigure === true}
                 busy={disconnectRemote.isPending}
                 onReconnect={() => navigate(`/apps/connect?source=${connection.config?.sourceTemplateKey}&reconnect=${connection.id}`)}
-                onManage={() => window.open(remoteMcpProviders[connection.config?.sourceTemplateKey as keyof typeof remoteMcpProviders].dashboardUrl, "_blank", "noopener,noreferrer")}
+                manageUrl={connection.config?.sourceTemplateKey === "connecthub"
+                  // Self-hosted: only a validated same-origin URL of this connection's hub; otherwise no button.
+                  ? aggregatorManagementUrl("connecthub", typeof connection.config?.managementUrl === "string" ? connection.config.managementUrl : null, typeof connection.config?.url === "string" ? connection.config.url : null)
+                  : remoteMcpProviders[connection.config?.sourceTemplateKey as keyof typeof remoteMcpProviders].dashboardUrl || null}
                 onDisconnect={() => disconnectRemote.mutateAsync()}
               />}
               </>}

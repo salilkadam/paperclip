@@ -1758,7 +1758,8 @@ export function toolAccessService(
           `${galleryEntry.name} does not accept a provider-generated connection URL`,
         );
       }
-      if (!(remoteMcpConnector && galleryEntry.slug === "executor") && !getAppDefinitionForUrl(input.link, [galleryEntry])) {
+      // Executor and Connect Hub are self-hosted: their endpoint is the operator's own address.
+      if (!(remoteMcpConnector && (galleryEntry.slug === "executor" || galleryEntry.slug === "connecthub")) && !getAppDefinitionForUrl(input.link, [galleryEntry])) {
         throw badRequest(
           `That connection URL does not belong to ${galleryEntry.name}`,
         );

@@ -70,6 +70,26 @@ describe("reviewed connector risk dispatch", () => {
     expect(classifyRisk({ name: "new_tool", annotations: { readOnlyHint: true } }, "braintrust")).toBe("write");
   });
 
+  it("reviews Connect Hub meta tools and holds router-mode hub_execute for review", () => {
+    const hub = connectorToolPolicy("connecthub");
+    expect(hub.sourceTemplateKey).toBe("connecthub");
+    expect(hub.quarantineNewEntries).toBe(false);
+    expect(hub.quarantineTool?.({ name: "hub_execute" })).toBe(true);
+    for (const name of ["hub_list_connections", "hub_connect", "github__github_create_issue"]) expect(hub.quarantineTool?.({ name })).toBe(false);
+    expect(classifyRisk({ name: "hub_execute", annotations: { readOnlyHint: false, destructiveHint: true } }, "connecthub")).toBe("destructive");
+    expect(classifyRisk({ name: "hub_connect" }, "connecthub")).toBe("write");
+    expect(classifyRisk({ name: "slack__slack_list_channels", annotations: { readOnlyHint: true } }, "connecthub")).toBe("read");
+    expect(classifyRisk({ name: "slack__slack_post_message", annotations: { readOnlyHint: false } }, "connecthub")).toBe("write");
+    // A readOnlyHint never downgrades an action that names a write verb (hub annotations are heuristic, and any
+    // custom server listing the hub tools is classified here).
+    expect(classifyRisk({ name: "slack__slack_send_message", annotations: { readOnlyHint: true } }, "connecthub")).toBe("write");
+    expect(classifyRisk({ name: "github__github_create_issue", annotations: { readOnlyHint: true } }, "connecthub")).toBe("write");
+    expect(classifyRisk({ name: "jira__transitionIssue", annotations: { readOnlyHint: true } }, "connecthub")).toBe("write");
+    // No other connector inherits it.
+    expect(connectorToolPolicy("composio").quarantineTool).toBeUndefined();
+    expect(connectorToolPolicy("custom").quarantineTool).toBeUndefined();
+  });
+
   it("retains generic risk behavior when the connector has no reviewed override", () => {
     expect(classifyRisk({ name: "get_object" }, "custom")).toBe("read");
     expect(classifyRisk({ name: "new_tool", annotations: { readOnlyHint: true } }, "custom")).toBe("read");
@@ -152,5 +172,43 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(refreshed.connection.config.quarantineNewEntries).toBe(true);
     expect(refreshed.connection.config.sourceTemplateKey).toBe("custom");
     expect(request).toHaveBeenCalled();
+  });
+
+  it("detects a custom Connect Hub server from its catalog and quarantines hub_execute", async () => {
+    const [company] = await db.insert(companies).values({ name: "Connect Hub detection fixture", issuePrefix: `CH${randomUUID().slice(0, 6)}` }).returning();
+    let tools: McpToolDescriptor[] = [
+      { name: "hub_list_connections", annotations: { readOnlyHint: true } },
+      { name: "hub_connect", annotations: { readOnlyHint: false, destructiveHint: false } },
+      { name: "hub_execute", annotations: { readOnlyHint: false, destructiveHint: true } },
+      { name: "github__github_list_repos", annotations: { readOnlyHint: true } },
+    ];
+    const request = vi.fn(async (_url: string, init: RequestInit) => {
+      const rpc = JSON.parse(String(init.body));
+      if (rpc.method === "initialize") return Response.json({ jsonrpc: "2.0", id: rpc.id,
+        result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "connect-hub/test", version: "1" } } });
+      if (rpc.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return Response.json({ jsonrpc: "2.0", id: rpc.id, result: { tools } });
+    });
+    const service = toolAccessService(db, { remoteHttpRequest: request, remoteHttpEndpointLookup: async () => [{ address: "8.8.8.8", family: 4 }] });
+    const actor = { actorType: "user" as const, actorId: "hub-reviewer" };
+    const connection = await service.createConnection(company.id, {
+      name: "GitHub (Connect Hub)", transport: "mcp_remote", enabled: true, status: "active",
+      config: { url: "https://hub.example/mcp" },
+    }, actor);
+    const initial = await service.refreshCatalog(connection.id, actor, { enableAllByDefault: true });
+    expect(initial.connection.config.sourceTemplateKey).toBe("connecthub");
+    expect(initial.catalog.find(tool => tool.toolName === "hub_execute")).toMatchObject({ riskLevel: "destructive", status: "quarantined" });
+    expect(initial.catalog.find(tool => tool.toolName === "hub_list_connections")).toMatchObject({ riskLevel: "read", status: "active" });
+    expect(initial.catalog.find(tool => tool.toolName === "github__github_list_repos")).toMatchObject({ riskLevel: "read", status: "active" });
+    // An unreviewed hub_execute stays quarantined on the next refresh.
+    const again = await service.refreshCatalog(connection.id, actor, { enableAllByDefault: true });
+    expect(again.catalog.find(tool => tool.toolName === "hub_execute")?.status).toBe("quarantined");
+
+    // A provider template is never reclassified, and a catalog without both hub tools is not a hub.
+    tools = [{ name: "hub_list_connections" }];
+    const other = await service.createConnection(company.id, {
+      name: "Not a hub", transport: "mcp_remote", enabled: true, status: "active", config: { url: "https://other.example/mcp" },
+    }, actor);
+    expect((await service.refreshCatalog(other.id, actor, { enableAllByDefault: true })).connection.config.sourceTemplateKey).toBeUndefined();
   });
 });
