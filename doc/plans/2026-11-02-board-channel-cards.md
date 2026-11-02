@@ -171,3 +171,17 @@ scoped and bound to the card message; UI-first races answer "already decided".
 | 6 | Reject woke the agent under `wake_assignee_on_accept`. | **Fixed.** |
 | 7 | Refusals show the generic deny text; the card keeps its buttons up to one sweep after a decision. | **Accepted**, owner: board; trigger: confusion reported from the board channel. A click on a decided card is refused. |
 | Q1 caveat | For tool actions the authority check runs in the claim transaction, not inside the gateway's commit. | **Accepted**, owner: board; the window is the gateway call; trigger: a role change racing a click. |
+
+## Stage 2 code review round 2 (Fable 5.1) and dispositions
+
+Confirmed by re-running the round-1 probes: concurrent clicks reach the gateway once (the plant now fails the
+test), gateway failures are recorded and never stuck, accept-only rejects wake nobody, addressed prompts have no
+buttons, the UI's accepted/rejected activity is written.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | The wake was queued inside the service's hook, before the service hands a human-assigned task back to the creator agent, so nobody was woken. | **Fixed:** the wake is queued after the service returns, to the task's assignee at that point (as the UI wakes the continuation issue's assignee). Test: human-assigned task, Approve from Slack → one wake to the creator agent; the stale-assignee plant fails it. |
+| 2 | After a gateway failure the sibling button stays live until the card settles. | **Accepted**, owner: board; the gateway serialises decisions; trigger: a second decision attempted after a failure. |
+| 3 | The new `chat.board_card_*` activities have no UI label. | **Accepted** (wording only; the parity action is written). |
+
+Review rounds: 2 of 2 (safety tier cap).
