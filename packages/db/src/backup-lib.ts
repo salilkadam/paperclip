@@ -461,14 +461,70 @@ async function waitForDumpPipelineExit(
   }
 }
 
+const pgUriParamEnvNames: Record<string, string> = {
+  sslmode: "PGSSLMODE",
+  sslrootcert: "PGSSLROOTCERT",
+  sslcert: "PGSSLCERT",
+  sslkey: "PGSSLKEY",
+  keepalives: "PGKEEPALIVES",
+  keepalives_idle: "PGKEEPALIVES_IDLE",
+  keepalives_interval: "PGKEEPALIVES_INTERVAL",
+  keepalives_count: "PGKEEPALIVES_COUNT",
+  application_name: "PGAPPNAME",
+  options: "PGOPTIONS",
+};
+
+/**
+ * A percent-encoded reserved character in the URL password — a literal "@" is
+ * typical for generated secrets — breaks libpq's URI parser, which splits the
+ * userinfo at the first "@" instead of the last one. pg_dump then resolves a
+ * "host" that still contains the tail of the password and aborts before
+ * connecting. Handing libpq discrete connection arguments plus PGPASSWORD
+ * removes the parsing ambiguity entirely and keeps the password out of
+ * world-readable argv. Returns null for anything that cannot be represented
+ * faithfully — keyword/value conninfo strings, socket paths, empty
+ * credentials, unmapped query parameters — so those keep the old pass-through.
+ */
+export function parsePgDumpConnectionArgs(connectionString: string): { args: string[]; env: Record<string, string> } | null {
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(connectionString)) {
+    return null;
+  }
+  try {
+    const url = new URL(connectionString);
+    const dbname = decodeURIComponent(url.pathname.replace(/^\//, ""));
+    if (!url.hostname || !url.username || !dbname) {
+      return null;
+    }
+    const args = [`--host=${url.hostname}`, `--username=${decodeURIComponent(url.username)}`, `--dbname=${dbname}`];
+    if (url.port) {
+      args.splice(1, 0, `--port=${url.port}`);
+    }
+    const env: Record<string, string> = {};
+    if (url.password) {
+      env.PGPASSWORD = decodeURIComponent(url.password);
+    }
+    for (const [param, value] of url.searchParams) {
+      const envName = pgUriParamEnvNames[param];
+      if (!envName) {
+        return null;
+      }
+      env[envName] = value;
+    }
+    return { args, env };
+  } catch {
+    return null;
+  }
+}
+
 async function runPgDumpBackup(opts: {
   connectionString: string;
   backupFile: string;
   connectTimeout: number;
 }): Promise<void> {
   const pgDumpBin = process.env.PAPERCLIP_PG_DUMP_PATH || "pg_dump";
+  const parsedConn = parsePgDumpConnectionArgs(opts.connectionString);
   const pgDumpArgs = [
-    `--dbname=${opts.connectionString}`,
+    ...(parsedConn ? parsedConn.args : [`--dbname=${opts.connectionString}`]),
     "--format=plain",
     "--clean",
     "--if-exists",
@@ -478,6 +534,7 @@ async function runPgDumpBackup(opts: {
   const env = {
     ...process.env,
     PGCONNECT_TIMEOUT: String(opts.connectTimeout),
+    ...(parsedConn ? parsedConn.env : {}),
   };
 
   const compressor = hasPosixShell() ? resolveExternalCompressor() : null;

@@ -4,7 +4,7 @@ import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
-import { createBufferedTextFileWriter, runDatabaseBackup, runDatabaseRestore } from "./backup-lib.js";
+import { createBufferedTextFileWriter, parsePgDumpConnectionArgs, runDatabaseBackup, runDatabaseRestore } from "./backup-lib.js";
 import { ensurePostgresDatabase } from "./client.js";
 import {
   EMBEDDED_POSTGRES_TEST_TIMEOUT_MS,
@@ -72,6 +72,38 @@ describe("createBufferedTextFileWriter", () => {
     await writer.close();
 
     expect(fs.readFileSync(outputPath, "utf8")).toBe(lines.join("\n"));
+  });
+});
+
+describe("parsePgDumpConnectionArgs", () => {
+  it("splits a URL whose password contains encoded reserved characters", () => {
+    // libpq parses the userinfo at the first "@", so passing this URL as
+    // --dbname made pg_dump resolve a bogus host and abort before connecting.
+    const parsed = parsePgDumpConnectionArgs("postgres://svc%40team:p%40ss%23word@pg.db.svc:6432/bionicorg?sslmode=require");
+    expect(parsed).not.toBeNull();
+    expect(parsed?.args).toEqual(["--host=pg.db.svc", "--port=6432", "--username=svc@team", "--dbname=bionicorg"]);
+    expect(parsed?.args.join(" ")).not.toContain("://");
+    expect(parsed?.env).toEqual({ PGPASSWORD: "p@ss#word", PGSSLMODE: "require" });
+  });
+
+  it("omits the port and password when the URL leaves them out", () => {
+    const parsed = parsePgDumpConnectionArgs("postgresql://svc@localhost/backup");
+    expect(parsed?.args).toEqual(["--host=localhost", "--username=svc", "--dbname=backup"]);
+    expect(parsed?.env).toEqual({});
+  });
+
+  it("keeps the old pass-through for keyword/value conninfo and socket paths", () => {
+    expect(parsePgDumpConnectionArgs("host=localhost port=5432 dbname=bionicorg")).toBeNull();
+    expect(parsePgDumpConnectionArgs("postgres:///bionicorg?host=/var/run/postgresql")).toBeNull();
+  });
+
+  it("keeps the old pass-through for query parameters it cannot map", () => {
+    expect(parsePgDumpConnectionArgs("postgres://u:pw@h:5432/db?pool_timeout=10")).toBeNull();
+  });
+
+  it("keeps the old pass-through for malformed URLs and undecodable secrets", () => {
+    expect(parsePgDumpConnectionArgs("postgres://u:p%%4w@h:5432/db")).toBeNull();
+    expect(parsePgDumpConnectionArgs("postgres://u:pw@h:5432")).toBeNull();
   });
 });
 
