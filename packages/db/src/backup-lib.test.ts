@@ -184,6 +184,29 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     });
   }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
 
+  it("surfaces compressor failures from the off-loop dump pipeline", async () => {
+    const connectionString = await createTempDatabase();
+    const backupDir = createTempDir("pg-dump-compressor-failure-");
+    const payload = "-- compressor failure\nSELECT 1;\n";
+    const payloadFile = path.join(backupDir, "payload.sql");
+    fs.writeFileSync(payloadFile, payload);
+    const dumpPath = writePgDumpFixture(backupDir, `cat '${payloadFile}'`);
+    const gzipFixture = path.join(backupDir, "gzip-fixture");
+    // Availability probe (gzip --version) succeeds; the real compression
+    // invocation dies, which the shell pipeline must report despite the
+    // shell's own exit code only covering the last pipeline stage.
+    fs.writeFileSync(gzipFixture, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = \"--version\" ] && exit 0; done\nprintf 'gzip fixture died\\n' >&2\nexit 8\n", { mode: 0o700 });
+
+    await withBackupCliEnv({ PAPERCLIP_PG_DUMP_PATH: dumpPath, PAPERCLIP_GZIP_PATH: gzipFixture }, async () => {
+      await expect(runDatabaseBackup({
+        connectionString, backupDir,
+        retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+        backupEngine: "pg_dump",
+      })).rejects.toThrow(/compressor failed with exit code 8: gzip fixture died/);
+      expect(fs.readdirSync(backupDir).filter(name => name.endsWith(".sql.gz"))).toEqual([]);
+    });
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
   it("preserves identity generation, sequence options and progress in JavaScript backups", async () => {
     const source = await createTempDatabase();
     const target = await createSiblingDatabase(source, "identity_restore_target");

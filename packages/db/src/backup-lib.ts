@@ -1,8 +1,9 @@
-import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { open as openFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 import postgres from "postgres";
@@ -327,12 +328,15 @@ let cachedExternalCompressor: { key: string; compressor: ExternalCompressor | nu
 
 /**
  * The hourly backup runs inside the request-serving process. Piping pg_dump
- * through the zlib stream compresses on the serving event loop, which stalls
- * health probes and traffic for the duration of the dump (observed as probe
- * blackouts during the scheduled window). When an external gzip is available
- * we hand it the dump stream and lower its CPU priority, so deflation never
- * lands on the loop. Returns null when none can be probed and the caller
- * falls back to the in-process pipeline.
+ * through the zlib stream compresses on the serving event loop, and even
+ * handing the archive to an external gzip through Node's stream plumbing
+ * still pumps every dumped byte through that loop (observed as probe
+ * blackouts through the whole scheduled window even with the external
+ * compressor in place). When an external gzip is available the caller wires
+ * pg_dump and the compressor as a real OS pipeline in a child shell — see
+ * runPgDumpBackup — so neither the deflation nor the archive bytes land on
+ * the loop. Returns null when none can be probed and the caller falls back
+ * to the in-process pipeline.
  */
 function resolveExternalCompressor(): ExternalCompressor | null {
   const gzipBin = process.env.PAPERCLIP_GZIP_PATH || "gzip";
@@ -360,6 +364,103 @@ function resolveExternalCompressor(): ExternalCompressor | null {
   return compressor;
 }
 
+let cachedPosixShell: boolean | undefined;
+
+/**
+ * The off-loop dump pipeline is POSIX-only: it asks /bin/sh to wire pg_dump
+ * and the compressor together with a real OS pipe.
+ */
+function hasPosixShell(): boolean {
+  if (cachedPosixShell === undefined) {
+    cachedPosixShell = false;
+    if (process.platform !== "win32") {
+      try {
+        cachedPosixShell = spawnSync("/bin/sh", ["-c", "exit 0"], { stdio: "ignore" }).status === 0;
+      } catch {
+        // Probe failure just means the shell pipeline is unavailable.
+      }
+    }
+  }
+  return cachedPosixShell;
+}
+
+let cachedDumpPriority: { key: string; prefix: string[] } | undefined;
+
+/**
+ * pg_dump keeps a core busy while it streams a large schema, and under a
+ * cgroup CPU bandwidth cap the serving loop starves until the quota refills
+ * when the dump outpaces it. Lowering the dump to idle priority alongside
+ * the compressor makes the request path win the refilled slices.
+ */
+function resolveDumpPriority(pgDumpBin: string): string[] {
+  const key = `${process.platform}|${pgDumpBin}`;
+  if (cachedDumpPriority?.key === key) return cachedDumpPriority.prefix;
+  const candidates: string[][] = process.platform === "win32"
+    ? []
+    : [
+        ["nice", "-n", "19", "ionice", "-c", "3"],
+        ["nice", "-n", "19"],
+      ];
+  let prefix: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      if (spawnSync(candidate[0]!, [...candidate.slice(1), pgDumpBin, "--version"], { stdio: "ignore" }).status === 0) {
+        prefix = candidate;
+        break;
+      }
+    } catch {
+      // Probe failure just means this candidate is unavailable.
+    }
+  }
+  cachedDumpPriority = { key, prefix };
+  return prefix;
+}
+
+function shellQuote(word: string): string {
+  return `'${word.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Waits for the shell that runs the dump pipeline and reports which child
+ * broke. POSIX sh has no pipefail, so the shell's own exit code only covers
+ * the compressor; pg_dump's status is read back from the side file the
+ * pipeline writes, keeping failure semantics identical to the old
+ * two-spawn version.
+ */
+async function waitForDumpPipelineExit(
+  child: ReturnType<typeof spawn>,
+  report: { statusFile: string; dumpLabel: string; compressorLabel: string },
+): Promise<void> {
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr = appendCapturedStderr(stderr, chunk);
+  });
+
+  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+
+  if (result.signal) {
+    throw new Error(`${report.dumpLabel} pipeline exited via ${result.signal}${stderr.trim() ? `: ${stderr.trim()}` : ""}`);
+  }
+
+  let dumpStatus: number | null = null;
+  try {
+    dumpStatus = Number.parseInt(readFileSync(report.statusFile, "utf8").trim(), 10);
+  } catch {
+    dumpStatus = null;
+  }
+  if (dumpStatus === null || Number.isNaN(dumpStatus)) dumpStatus = 127;
+
+  if (dumpStatus !== 0) {
+    throw new Error(`${report.dumpLabel} failed with exit code ${dumpStatus}${stderr.trim() ? `: ${stderr.trim()}` : ""}`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`${report.compressorLabel} failed with exit code ${result.code ?? "unknown"}${stderr.trim() ? `: ${stderr.trim()}` : ""}`);
+  }
+}
+
 async function runPgDumpBackup(opts: {
   connectionString: string;
   backupFile: string;
@@ -379,36 +480,46 @@ async function runPgDumpBackup(opts: {
     PGCONNECT_TIMEOUT: String(opts.connectTimeout),
   };
 
-  const compressor = resolveExternalCompressor();
+  const compressor = hasPosixShell() ? resolveExternalCompressor() : null;
   if (compressor) {
     const gzipBin = process.env.PAPERCLIP_GZIP_PATH || "gzip";
-    const dump = spawn(pgDumpBin, pgDumpArgs, { stdio: ["ignore", "pipe", "pipe"], env });
-    const outFile = openSync(opts.backupFile, "w");
+    const statusFile = resolve(tmpdir(), `paperclip-backup-status-${randomUUID()}`);
+    // Wire pg_dump and the compressor as a real OS pipeline inside a child
+    // shell: the archive bytes move child-to-child in the kernel and the
+    // serving process only waits for the exit. The shell's status only
+    // covers the compressor (POSIX sh has no pipefail, and the runtime
+    // image has no mkfifo or bash), so pg_dump reports its status through a
+    // side file for the failure semantics in waitForDumpPipelineExit.
+    const dumpCommand = [...resolveDumpPriority(pgDumpBin).map(shellQuote), '"$PB_DUMP_BIN"'].join(" ");
+    const compressorCommand = [compressor.command, ...compressor.args].map(shellQuote).join(" ");
+    const pipelineScript = [
+      `{ ${dumpCommand} "$@"; echo "$?" > "$PB_STATUS_FILE"; } | ${compressorCommand} > "$PB_BACKUP_FILE"`,
+      `gz_status=$?`,
+      `dump_status=$(cat "$PB_STATUS_FILE" 2>/dev/null || echo 127)`,
+      `[ "$dump_status" = 0 ] || exit 1`,
+      `exit "$gz_status"`,
+    ].join("\n");
+    const pipelineChild = spawn("/bin/sh", ["-c", pipelineScript, "paperclip-backup", ...pgDumpArgs], {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: {
+        ...env,
+        PB_DUMP_BIN: pgDumpBin,
+        PB_STATUS_FILE: statusFile,
+        PB_BACKUP_FILE: opts.backupFile,
+      },
+    });
     try {
-      const gzip = spawn(compressor.command, compressor.args, { stdio: ["pipe", outFile, "pipe"] });
-      // A compressor that exits early surfaces via its own exit code below;
-      // the write side may then reject with EPIPE, which must stay silent.
-      gzip.stdin?.on("error", () => { /* reported by exit code */ });
-      if (!dump.stdout || !gzip.stdin) {
-        throw new Error("pg_dump and gzip must expose connected stdio pipes");
-      }
-      dump.stdout.on("error", () => { /* reported by exit code */ });
-      dump.stdout.pipe(gzip.stdin);
-      // If pg_dump's stdout never reaches EOF (spawn failure, destroyed
-      // stream), the compressor must still see EOF instead of waiting on the
-      // pipe forever. "close" fires only after the stream is fully consumed,
-      // so ending gzip's input there cannot truncate the archive.
-      const endGzipInput = () => { gzip.stdin?.end(); };
-      dump.stdout.once("close", endGzipInput);
-      dump.once("error", endGzipInput);
-      const results = await Promise.allSettled([
-        waitForChildExit(dump, pgDumpBin),
-        waitForChildExit(gzip, `${basename(gzipBin)} compressor`),
-      ]);
-      if (results[0]!.status === "rejected") throw results[0]!.reason;
-      if (results[1]!.status === "rejected") throw results[1]!.reason;
+      await waitForDumpPipelineExit(pipelineChild, {
+        statusFile,
+        dumpLabel: pgDumpBin,
+        compressorLabel: `${basename(gzipBin)} compressor`,
+      });
     } finally {
-      closeSync(outFile);
+      try {
+        unlinkSync(statusFile);
+      } catch {
+        // The side file is best-effort cleanup only.
+      }
     }
     return;
   }
