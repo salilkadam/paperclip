@@ -202,7 +202,11 @@ RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
   && apt-get update \
   && apt-get install -y --no-install-recommends openssh-client jq unzip postgresql-client \
   && rm -rf /var/lib/apt/lists/* \
-  && curl -fsSL https://composio.dev/install | sh \
+  # Pinned version + retries: the installer's unpinned path resolves the
+  # latest release via unauthenticated api.github.com, which intermittently
+  # fails from CI egress IPs (rate limits / transient blocks). 0.6.0 = last
+  # verified stable release; bump deliberately.
+  && for attempt in 1 2 3; do curl -fsSL https://composio.dev/install | sh -s -- 0.6.0 && break; echo "composio install attempt ${attempt} failed"; [ "${attempt}" = 3 ] && exit 1; sleep 20; done \
   && mkdir -p /opt/composio \
   && mv /root/.composio/composio /opt/composio/composio \
   && chmod 0755 /opt/composio/composio \
