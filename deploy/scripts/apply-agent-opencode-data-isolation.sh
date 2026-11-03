@@ -22,7 +22,10 @@
 set -euo pipefail
 
 APP_NS=bionicorg
-DB_POD=pg-ceph-7
+# The CNPG primary moves on failover (pg-ceph-7 was primary until 2026-11): find it.
+DB_POD="${DB_POD:-$(kubectl -n pg get pods -l cnpg.io/instanceRole=primary -o jsonpath='{.items[0].metadata.name}')}"
+[ -n "$DB_POD" ] || { echo "no CNPG primary found in namespace pg" >&2; exit 1; }
+echo "database pod: $DB_POD (primary)"
 DB_NS=pg
 DB=bionicorg
 COMPANY=62d63984-df6c-49be-981c-1273f68a451c

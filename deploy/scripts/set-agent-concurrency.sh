@@ -24,7 +24,9 @@ set -euo pipefail
 COMPANY_ID="${COMPANY_ID:-62d63984-df6c-49be-981c-1273f68a451c}"   # Reliora Inc
 MAX_CONCURRENT_RUNS="${MAX_CONCURRENT_RUNS:-1}"
 PG_NS="${PG_NS:-pg}"
-PG_POD="${PG_POD:-pg-ceph-7}"           # CNPG primary
+# The CNPG primary moves on failover (pg-ceph-7 was primary until 2026-11): find it.
+PG_POD="${PG_POD:-$(kubectl -n pg get pods -l cnpg.io/instanceRole=primary -o jsonpath='{.items[0].metadata.name}')}"
+[ -n "$PG_POD" ] || { echo "no CNPG primary found in namespace ${PG_NS}" >&2; exit 1; }
 PG_DB="${PG_DB:-bionicorg}"
 PG_USER="${PG_USER:-postgres}"
 
