@@ -82,7 +82,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AGGREGATOR_APP_CATALOG, aggregatorAppIdentity, findComposioCatalogApp, type AggregatorAppCatalogEntry } from "@paperclipai/shared/aggregator-app-catalog";
+import { AGGREGATOR_APP_CATALOG, aggregatorAppIdentity, findComposioCatalogApp, type AggregatorAppCatalogEntry, type AggregatorAppRoute } from "@paperclipai/shared/aggregator-app-catalog";
 import { AggregatorConnectDialog, aggregatorAppConnectHref } from "./AggregatorConnectDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { buildCompanyUserProfileMap } from "@/lib/company-members";
@@ -267,6 +267,20 @@ function rowRank(row: ConnectorRowModel): number {
   )
     return 2;
   return isInstalled(row) ? 1 : 0;
+}
+
+/** A row as seen under one aggregator's tab: that aggregator's accounts and route only, never another aggregator's. */
+function scopeRowToProvider(row: ConnectorRowModel, provider: AggregatorAppRoute["provider"]): ConnectorRowModel {
+  if (row.slug === provider) return row;
+  const routes = row.aggregatorApp?.routes.filter((route) => route.provider === provider);
+  return {
+    ...row,
+    // Paperclip's own (native) connections stay; only other aggregators' accounts and routes are hidden.
+    upstreamApps: row.upstreamApps?.filter((app) => (app.provider ?? "composio") === provider),
+    ...(row.aggregatorApp && routes
+      ? { aggregatorApp: { ...row.aggregatorApp, routes }, description: `Connect through ${AGGREGATOR_NAMES[provider]}.` }
+      : {}),
+  };
 }
 
 function isInstalled(row: ConnectorRowModel) {
@@ -811,9 +825,12 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
         || row.aggregatorApp?.routes.some(route => route.provider === source)
       );
     });
-    if (!trimmed) return scoped;
+    // Under a provider tab, a row shows only that provider: its accounts, its route and its gateway connection.
+    // Otherwise an app reached through Connect Hub would show (and "Manage") the person's Composio account.
+    const providerScoped = isAppAggregator(source) ? scoped.map((row) => scopeRowToProvider(row, source)) : scoped;
+    if (!trimmed) return providerScoped;
     const terms = normalizeConnectionQuery(trimmed).split(" ").filter(Boolean);
-    return scoped.filter((row) => {
+    return providerScoped.filter((row) => {
       const text = normalizeConnectionQuery([row.name, row.slug, row.description,
         ...(row.aggregatorApp?.aliases ?? []), ...row.connections.map((connection) => connection.name),
         ...(row.upstreamApps ?? []).flatMap(app => app.accounts.map(account => account.alias)),
