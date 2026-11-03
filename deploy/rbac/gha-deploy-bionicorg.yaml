@@ -34,3 +34,32 @@ metadata:
   annotations:
     kubernetes.io/service-account.name: gha-deploy-bionic
 type: kubernetes.io/service-account-token
+---
+# The chart renders two CLUSTER-scoped objects (Namespace/bionicorg and
+# ClusterSecretStore/vault-backend); the namespaced `admin` RoleBinding above
+# cannot touch those. This minimal ClusterRole grants exactly what helm needs
+# to get/adopt/patch them (including during --atomic rollbacks).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gha-deploy-bionic-cluster
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["clustersecretstores"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gha-deploy-bionic-cluster
+subjects:
+  - kind: ServiceAccount
+    name: gha-deploy-bionic
+    namespace: bionicorg
+roleRef:
+  kind: ClusterRole
+  name: gha-deploy-bionic-cluster
+  apiGroup: rbac.authorization.k8s.io
