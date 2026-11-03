@@ -269,17 +269,27 @@ function rowRank(row: ConnectorRowModel): number {
   return isInstalled(row) ? 1 : 0;
 }
 
-/** A row as seen under one aggregator's tab: that aggregator's accounts and route only, never another aggregator's. */
+/** Which aggregator an account snapshot came from. One rule for filtering, scoping and labels. */
+const snapshotProvider = (snapshot: { provider?: AggregatorAppSnapshot["provider"] }) => snapshot.provider ?? "composio";
+
+/** A row as seen under one aggregator's tab: that aggregator's accounts and route only, never another aggregator's.
+ *  An app the aggregator can serve (including apps Paperclip also connects natively, such as GitHub or Slack) becomes a
+ *  plain "Connect through <provider>" row, so its button, Manage dialog and account lines all use that provider. */
 function scopeRowToProvider(row: ConnectorRowModel, provider: AggregatorAppRoute["provider"]): ConnectorRowModel {
-  if (row.slug === provider) return row;
-  const routes = row.aggregatorApp?.routes.filter((route) => route.provider === provider);
+  const upstreamApps = row.upstreamApps?.filter((app) => snapshotProvider(app) === provider);
+  const catalog = row.aggregatorApp ?? row.upstreamCatalogApp;
+  const routes = catalog?.routes.filter((route) => route.provider === provider) ?? [];
+  if (!catalog || routes.length === 0) return { ...row, upstreamApps };
+  const scoped = { ...catalog, routes };
   return {
     ...row,
-    // Paperclip's own (native) connections stay; only other aggregators' accounts and routes are hidden.
-    upstreamApps: row.upstreamApps?.filter((app) => (app.provider ?? "composio") === provider),
-    ...(row.aggregatorApp && routes
-      ? { aggregatorApp: { ...row.aggregatorApp, routes }, description: `Connect through ${AGGREGATOR_NAMES[provider]}.` }
-      : {}),
+    // Paperclip's own native connections belong to the Paperclip tab, not to this provider's.
+    connections: [],
+    chatEndpoints: [],
+    aggregatorApp: scoped,
+    upstreamCatalogApp: scoped,
+    upstreamApps,
+    description: `Connect through ${AGGREGATOR_NAMES[provider]}.`,
   };
 }
 
@@ -821,13 +831,20 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
       if (source === "paperclip") return !row.aggregatorApp || isInstalled(row);
       return isAppAggregator(source) && (
         row.slug === source && isInstalled(row)
-        || row.upstreamApps?.some(snapshot => snapshot.provider === source && snapshot.accounts.length > 0)
+        || row.upstreamApps?.some(snapshot => snapshotProvider(snapshot) === source && snapshot.accounts.length > 0)
         || row.aggregatorApp?.routes.some(route => route.provider === source)
+        // Connect Hub is the org's own hub: its tab also lists apps Paperclip connects natively (GitHub, Gmail, Slack,
+        // Jira…), so they can be connected through it. Other aggregators keep native apps on the Paperclip tab.
+        || source === "connecthub" && row.upstreamCatalogApp?.routes.some(route => route.provider === source)
       );
     });
     // Under a provider tab, a row shows only that provider: its accounts, its route and its gateway connection.
     // Otherwise an app reached through Connect Hub would show (and "Manage") the person's Composio account.
-    const providerScoped = isAppAggregator(source) ? scoped.map((row) => scopeRowToProvider(row, source)) : scoped;
+    // Re-rank after scoping: another provider's accounts must not lift a row on this provider's tab.
+    const providerScoped = isAppAggregator(source)
+      ? scoped.map((row) => scopeRowToProvider(row, source)).sort((left, right) => rowRank(right) - rowRank(left)
+        || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }) || left.key.localeCompare(right.key))
+      : scoped;
     if (!trimmed) return providerScoped;
     const terms = normalizeConnectionQuery(trimmed).split(" ").filter(Boolean);
     return providerScoped.filter((row) => {
@@ -1168,7 +1185,7 @@ export function ConnectorCard({
             <h2 className="text-sm font-semibold text-foreground">{row.name}</h2>
             {row.aggregatorApp?.routes.map((route) => {
               const providerName = AGGREGATOR_NAMES[route.provider];
-              const managedSnapshot = row.upstreamApps?.find(app => (app.provider ?? "composio") === route.provider && app.accounts.length > 0);
+              const managedSnapshot = row.upstreamApps?.find(app => snapshotProvider(app) === route.provider && app.accounts.length > 0);
               const managed = Boolean(managedSnapshot);
               const label = `${managed ? "Manage" : "Connect"} ${row.name} through ${providerName}, a third-party service`;
               return <Tooltip key={route.provider}><TooltipTrigger asChild>
@@ -1179,7 +1196,7 @@ export function ConnectorCard({
             })}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {row.aggregatorApp && row.upstreamApps?.some(app => app.accounts.length > 0) ? `Accounts managed in ${[...new Set(row.upstreamApps?.map(app => AGGREGATOR_NAMES[app.provider ?? "composio"]))].join(" and ")}.` : row.description}
+            {row.aggregatorApp && row.upstreamApps?.some(app => app.accounts.length > 0) ? `Accounts managed in ${[...new Set(row.upstreamApps?.map(app => AGGREGATOR_NAMES[snapshotProvider(app)]))].join(" and ")}.` : row.description}
           </p>
         </div>
         {copilotMethod && <Button

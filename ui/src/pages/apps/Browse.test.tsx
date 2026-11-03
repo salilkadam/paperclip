@@ -472,6 +472,24 @@ describe("Connectors landing page", () => {
     expect(row.querySelector('button[aria-label="Connect Remote App through Connect Hub, a third-party service"]')).toBeTruthy();
   });
 
+  it("lists natively connectable apps under Connect Hub and connects them through the hub", async () => {
+    aggregatorCatalogMock.push(indexedApp("Notion", ["composio", "connecthub"]));
+    listGalleryMock.mockResolvedValue({ apps: ["notion", "composio", "connecthub"].map(getAppStoreDefinition) });
+    listApplicationsMock.mockResolvedValue({ applications: [application(), application({ id: "hub-app", name: "Connect Hub", metadata: { sourceTemplateKey: "connecthub" } })] });
+    listConnectionsMock.mockResolvedValue({ connections: [connection({ name: "Native Notion" }), connection({ id: "hub-gw", applicationId: "hub-app", name: "Hub", config: { sourceTemplateKey: "connecthub" } })] });
+    listComposioAppsMock.mockResolvedValue({ apps: [{ provider: "connecthub", appSlug: "notion", appName: "Notion", connectionId: "hub-gw", toolkit: "notion", status: "not_connected", accounts: [] }] });
+    await renderBrowse(false);
+    await clickButton("Connect Hub", container);
+    const row = container.querySelector('[data-app-slug="notion"]')!;
+    expect(row).toBeTruthy();
+    expect(row.textContent).toContain("Connect through Connect Hub.");
+    // The native connection stays on the Paperclip tab; here the row is the hub route.
+    expect(row.textContent).not.toContain("Native Notion");
+    expect(row.querySelector('button[aria-label="Connect Notion through Connect Hub, a third-party service"]')).toBeTruthy();
+    await clickButton("Paperclip", container);
+    expect(container.querySelector('[data-app-slug="notion"]')?.textContent).toContain("Native Notion");
+  });
+
   it("does not reuse another viewing user's managed-account cache", async () => {
     composioFixture();
     const client = await renderBrowse(false);
