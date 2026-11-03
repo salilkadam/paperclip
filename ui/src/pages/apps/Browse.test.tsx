@@ -349,7 +349,7 @@ describe("Connectors landing page", () => {
     expect(container.querySelector('[aria-label="Manage Assistant Connection (MCP)"]')).not.toBeNull();
   });
 
-  function indexedApp(name: string, providers: ("composio" | "arcade" | "executor")[] = ["composio"]): AggregatorAppCatalogEntry {
+  function indexedApp(name: string, providers: ("composio" | "arcade" | "executor" | "connecthub")[] = ["composio"]): AggregatorAppCatalogEntry {
     const slug = name.toLowerCase().replaceAll(" ", "-");
     return { name, slug, aliases: [slug], routes: providers.map((provider) => ({
       provider, toolkit: slug, logoUrl: `https://logos.example.com/${slug}.svg`, docsUrl: `https://docs.${provider}.dev/${slug}`,
@@ -451,6 +451,45 @@ describe("Connectors landing page", () => {
     expect(container.querySelector('[data-app-slug="notion"]')?.textContent).toContain("Native Notion");
   });
 
+  it("shows only the selected provider's accounts and route under its tab", async () => {
+    aggregatorCatalogMock.push(indexedApp("Remote App", ["composio", "connecthub"]));
+    listGalleryMock.mockResolvedValue({ apps: ["composio", "connecthub"].map(getAppStoreDefinition) });
+    listApplicationsMock.mockResolvedValue({ applications: ["composio", "connecthub"].map((provider) => application({ id: `${provider}-app`, name: provider, metadata: { sourceTemplateKey: provider } })) });
+    listConnectionsMock.mockResolvedValue({ connections: ["composio", "connecthub"].map((provider) => connection({ id: `${provider}-gw`, applicationId: `${provider}-app`, name: `${provider} gateway`, config: { sourceTemplateKey: provider } })) });
+    // The person has a Composio account for the app and none through Connect Hub.
+    listComposioAppsMock.mockImplementation((id: string) => ({ apps: [{ provider: id === "composio-gw" ? "composio" : "connecthub", appSlug: "remote-app", appName: "Remote App", connectionId: id, toolkit: "remote-app", checkedAt: new Date().toISOString(),
+      status: id === "composio-gw" ? "connected" : "not_connected",
+      accounts: id === "composio-gw" ? [{ id: "acct", alias: "Work", status: "ACTIVE", isDefault: false }] : [] }] }));
+    await renderBrowse(false);
+    expect(container.querySelector('[data-app-slug="remote-app"]')?.textContent).toContain("Managed by Composio");
+
+    await clickButton("Connect Hub", container);
+    const row = container.querySelector('[data-app-slug="remote-app"]')!;
+    expect(row).toBeTruthy();
+    expect(row.textContent).toContain("Connect through Connect Hub.");
+    expect(row.textContent).not.toContain("Composio");
+    expect(row.querySelector('button[aria-label^="Manage"]')).toBeNull();
+    expect(row.querySelector('button[aria-label="Connect Remote App through Connect Hub, a third-party service"]')).toBeTruthy();
+  });
+
+  it("lists natively connectable apps under Connect Hub and connects them through the hub", async () => {
+    aggregatorCatalogMock.push(indexedApp("Notion", ["composio", "connecthub"]));
+    listGalleryMock.mockResolvedValue({ apps: ["notion", "composio", "connecthub"].map(getAppStoreDefinition) });
+    listApplicationsMock.mockResolvedValue({ applications: [application(), application({ id: "hub-app", name: "Connect Hub", metadata: { sourceTemplateKey: "connecthub" } })] });
+    listConnectionsMock.mockResolvedValue({ connections: [connection({ name: "Native Notion" }), connection({ id: "hub-gw", applicationId: "hub-app", name: "Hub", config: { sourceTemplateKey: "connecthub" } })] });
+    listComposioAppsMock.mockResolvedValue({ apps: [{ provider: "connecthub", appSlug: "notion", appName: "Notion", connectionId: "hub-gw", toolkit: "notion", status: "not_connected", accounts: [] }] });
+    await renderBrowse(false);
+    await clickButton("Connect Hub", container);
+    const row = container.querySelector('[data-app-slug="notion"]')!;
+    expect(row).toBeTruthy();
+    expect(row.textContent).toContain("Connect through Connect Hub.");
+    // The native connection stays on the Paperclip tab; here the row is the hub route.
+    expect(row.textContent).not.toContain("Native Notion");
+    expect(row.querySelector('button[aria-label="Connect Notion through Connect Hub, a third-party service"]')).toBeTruthy();
+    await clickButton("Paperclip", container);
+    expect(container.querySelector('[data-app-slug="notion"]')?.textContent).toContain("Native Notion");
+  });
+
   it("does not reuse another viewing user's managed-account cache", async () => {
     composioFixture();
     const client = await renderBrowse(false);
@@ -479,7 +518,9 @@ describe("Connectors landing page", () => {
     expect(row.textContent).toContain("Native");
     for (const provider of ["Composio", "Arcade", "Executor"]) expect(row.textContent).toContain(`Managed by ${provider}`);
     await clickButton("Arcade", container);
-    expect(container.querySelectorAll('[data-app-slug="notion"] button[aria-label="Manage Work connection"]')).toHaveLength(4);
+    // A provider tab shows that provider's accounts only: the two Arcade gateways.
+    expect(container.querySelectorAll('[data-app-slug="notion"] button[aria-label="Manage Work connection"]')).toHaveLength(2);
+    expect(container.querySelector('[data-app-slug="notion"]')?.textContent).not.toContain("Managed by Composio");
     expect(container.querySelector('[data-app-slug="notion"] button[aria-label="Connect Notion"]')).toBeNull();
   });
 
