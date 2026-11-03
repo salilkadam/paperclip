@@ -1,15 +1,26 @@
 # RBAC for GitHub Actions deployments of bionic-org (ci-cd.yml).
 #
 # The runner authenticates with a long-lived token from this SA (stored as the
-# K8S_DEPLOY_TOKEN repo secret). The RoleBinding to the built-in `admin`
-# ClusterRole is namespaced to bionicorg: helm needs to manage every object
-# the chart renders (deployments, secrets incl. sh.helm.release.*, services,
-# ingresses, ExternalSecrets, ...) but nothing outside this namespace.
+# K8S_DEPLOY_TOKEN repo secret). The wildcard Role below is namespaced to
+# bionicorg only: helm must manage every object the chart renders
+# (deployments, secrets incl. sh.helm.release.*, services, ingresses, and the
+# cert-manager / external-secrets / VPA CRDs the built-in `admin` ClusterRole
+# does not know about), but nothing outside this namespace.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: gha-deploy-bionic
   namespace: bionicorg
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gha-deploy-bionic-helm
+  namespace: bionicorg
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -21,8 +32,8 @@ subjects:
     name: gha-deploy-bionic
     namespace: bionicorg
 roleRef:
-  kind: ClusterRole
-  name: admin
+  kind: Role
+  name: gha-deploy-bionic-helm
   apiGroup: rbac.authorization.k8s.io
 ---
 # Long-lived static token for the SA (what K8S_DEPLOY_TOKEN holds).
