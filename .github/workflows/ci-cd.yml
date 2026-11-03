@@ -1,0 +1,107 @@
+# CI/CD for the Bionic deployment of Paperclip (bionicorg namespace on the
+# org's k3s cluster), following the org-standard pattern (see MarketingCRM).
+#
+# Every push to main builds the production image (same build as
+# deploy/scripts/build-and-push.sh: `docker build --target production`) and
+# pushes docker.io/docker4zerocool/bionic:<commit-sha>.
+#
+# The deploy job runs helm upgrade --install with --atomic, which waits for
+# the rollout and AUTOMATICALLY rolls the release back to the previous
+# revision if the new pods never become healthy (helm's built-in auto-revert,
+# equivalent to the rollout undo in the kubectl-based repos).
+#
+# Secrets: DOCKERHUB_USERNAME/DOCKERHUB_TOKEN (push; same account as the
+#   ESO-synced dockerhub-pull-secret, vault secret/shared/dockerhub),
+#   K8S_DEPLOY_TOKEN (SA gha-deploy-bionic, bionicorg namespace only; see
+#   deploy/rbac/gha-deploy-bionicorg.yaml).
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: paperclip-bionic
+  cancel-in-progress: false
+
+env:
+  REGISTRY: docker.io
+  IMAGE_ORG: docker4zerocool
+  IMAGE_NAME: bionic
+
+jobs:
+  images:
+    name: Build & push image
+    runs-on: k3s-salilkadam
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build & push
+        run: |
+          TAG=${GITHUB_SHA::7}
+          docker build -t $REGISTRY/$IMAGE_ORG/$IMAGE_NAME:$TAG . --target production
+          docker push $REGISTRY/$IMAGE_ORG/$IMAGE_NAME:$TAG
+          # dind on this runner shares the daemon; keep the node clean like build-and-push.sh does
+          docker rmi $REGISTRY/$IMAGE_ORG/$IMAGE_NAME:$TAG || true
+
+  deploy:
+    name: Deploy to bionicorg (auto-revert on failure)
+    runs-on: k3s-salilkadam
+    needs: images
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubectl + helm
+        run: |
+          ARCH=$(dpkg --print-architecture)
+          curl -sL -o "$HOME/kubectl" "https://dl.k8s.io/release/v1.30.5/bin/linux/$ARCH/kubectl"
+          chmod +x "$HOME/kubectl" && sudo mv "$HOME/kubectl" /usr/local/bin/kubectl
+          curl -sL "https://get.helm.sh/helm-v3.15.4-linux-$ARCH.tar.gz" | tar xz -C "$HOME"
+          sudo mv "$HOME/linux-$ARCH/helm" /usr/local/bin/helm
+
+      - name: Configure kubeconfig (in-cluster API, scoped SA token)
+        run: |
+          mkdir -p "$HOME/.kube"
+          cat > "$HOME/.kube/config" <<KUBEEOF
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - name: k3s
+              cluster:
+                server: https://kubernetes.default.svc
+                insecure-skip-tls-verify: true
+          users:
+            - name: gha-deploy
+              user:
+                token: ${{ secrets.K8S_DEPLOY_TOKEN }}
+          contexts:
+            - name: default
+              context:
+                cluster: k3s
+                user: gha-deploy
+          current-context: default
+          KUBEEOF
+
+      - name: Helm upgrade (atomic = auto-rollback on failed rollout)
+        run: |
+          TAG=${GITHUB_SHA::7}
+          # Same release/chart/namespace as deploy/scripts/deploy.sh. No --set
+          # for anything but image.tag: helm reuses the values stored in the
+          # live release, so we never clobber hand-tuned config.
+          helm upgrade --install bionic-org ./deploy/helm/bionic-org \
+            --namespace bionicorg \
+            --set "image.tag=${TAG}" \
+            --atomic --timeout 15m
+          kubectl -n bionicorg rollout status deployment/bionic-org --timeout=120s
+          echo "::notice::deployed docker4zerocool/bionic:${TAG} to bionicorg (rollback armed via --atomic)"
+
+      - name: Verify release state
+        if: always()
+        run: |
+          helm -n bionicorg history bionic-org --max 3 || true
+          kubectl -n bionicorg get deploy/bionic-org pods -o wide 2>/dev/null \
+            || kubectl -n bionicorg get pods -o wide
