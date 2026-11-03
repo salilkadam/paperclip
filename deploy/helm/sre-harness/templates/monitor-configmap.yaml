@@ -83,9 +83,36 @@ data:
     # Dispatch hook: WARN/FAIL summons one remediation engineer (bounded:
     # one at a time, at most one per throttle window). The remediation
     # job re-reads this verdict itself; we only pull the trigger here.
+    #
+    # The verdict used to be the whole trigger, and that closed a loop with
+    # nobody standing outside it. A remediation engineer that dies on its own
+    # deadline leaves a Failed job labelled component=remediate; the sweep's
+    # supersession rule cannot retire it (the remediate CronJob is suspended,
+    # so no newer Completed run of that component will ever exist); so every
+    # sweep for the next 24h - the job's TTL - called WARN on a platform that
+    # was serving fine, and each throttle window summoned a fresh engineer for
+    # another 90 minutes to chase the absence of the previous one. Seen on
+    # 2026-11-03: 20 consecutive sweeps all WARN, three engineers dispatched,
+    # nothing wrong with Paperclip.
+    #
+    # The sweep now states in words whether an engineer is needed and the
+    # trigger requires that word. Missing line means no dispatch, which is the
+    # safe direction inside a loop the harness is a party to: the operator
+    # still gets the verdict plus the note below and pulls the trigger by hand.
     DISPATCH_NOTE=""
+    DISPATCH_WANTED=0
     if [ "${REMEDIATION_ENABLED:-false}" = "true" ] && \
        printf '%s\n' "$DSH_FINAL" | grep -qE 'PAPERCLIP HEALTH: (WARN|FAIL)'; then
+      DISPATCH_LINE=$(printf '%s\n' "$DSH_FINAL" | grep -m1 -iE 'DISPATCH:[[:space:]]*(yes|no)' || true)
+      if printf '%s\n' "$DISPATCH_LINE" | grep -qiE 'DISPATCH:[[:space:]]*yes'; then
+        DISPATCH_WANTED=1
+      else
+        # Loud on purpose: a WARN that asks for nobody has to read as a
+        # decision, not as a silent gap where an engineer used to appear.
+        DISPATCH_NOTE="no engineer dispatched; the sweep did not request one (manual: kubectl create job <name> --from=cronjob/sre-harness-remediate)"
+      fi
+    fi
+    if [ "$DISPATCH_WANTED" = "1" ]; then
       ACTIVE=$(kubectl get jobs -l app.kubernetes.io/component=remediate \
         -o jsonpath='{.items[*].status.active}' 2>/dev/null || true)
       LAST=$(kubectl get jobs -l app.kubernetes.io/component=remediate \

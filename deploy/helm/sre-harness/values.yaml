@@ -257,6 +257,19 @@ monitor:
        superseded failure as stale history: mention it in one bullet, but
        it must not, alone or with other benign signals, make the verdict
        WARN or FAIL.
+       Self-loop rule: a Failed job labelled
+       `app.kubernetes.io/component=remediate` is the remediation engineer's
+       own run, not a Paperclip workload. The supersession rule cannot help
+       it: that CronJob is intentionally suspended and only ever started by
+       a dispatch, so no newer Completed run of that component is coming and
+       the failure would hold every later sweep at WARN forever. Never let
+       it move PAPERCLIP HEALTH by itself and never request an engineer for
+       it (DISPATCH: no) - the engineer summoned for it is the same job that
+       just died. Report it on the HARNESS line so the operator still sees a
+       remediation that failed, and read what it got done from
+       `kubectl -n bionicorg get cm sre-harness-run-log -o jsonpath='{.data.runs}'`:
+       a deadline kill deletes the pod, so `kubectl logs job/...` answers
+       nothing there.
     6. reliora.ai (namespace reliora-website, read-only):
        `curl -fsS -m 10 -o /dev/null https://reliora.ai/healthz` and
        `curl -fsS -m 10 -o /dev/null https://reliora.ai/_site-pricing.html`
@@ -272,6 +285,22 @@ monitor:
     PAPERCLIP HEALTH: OK
     PAPERCLIP HEALTH: WARN
     PAPERCLIP HEALTH: FAIL
+    Then exactly two more lines, in this order, one option each:
+    HARNESS: OK
+    HARNESS: WARN
+    DISPATCH: yes
+    DISPATCH: no
+    PAPERCLIP HEALTH scores the Paperclip platform only (checks 1-4 and 6).
+    HARNESS: WARN is for the monitor machinery itself - a Failed monitor,
+    approvals or remediate job, a run that died on its own deadline. Keeping
+    those apart is what stops a broken remediation from being read as a
+    broken product.
+    DISPATCH is the only thing that summons a remediation engineer, so say
+    it deliberately: yes only when the platform verdict is WARN or FAIL for
+    a problem that is live right now, after you have dropped everything the
+    rules above call transient, stale, superseded or already covered by an
+    open fix. Harness self-failures are never a reason (DISPATCH: no); only
+    a human decides who fixes the harness.
     Then at most 6 short evidence bullets (what/where/count). OK means every
     check passed. WARN means degraded but serving (e.g. recent restarts,
     benign-looking errors, unresolved warnings). FAIL means the API is unhealthy,
