@@ -11,6 +11,7 @@ import { notifyChatDeliveryWork } from "../../chat-work-notifications.js";
 import {
   githubMessageAddressesAnotherRecipient,
 } from "../../chat-github-events.js";
+import { slackMessageAddressesAnotherBot } from "../slack/addressed-elsewhere.js";
 
 import {
   createHash,
@@ -187,9 +188,18 @@ export function createInboundAdmission(db: Db, options: InboundAdmissionOptions)
           companyId: endpoint.companyId,
           botUsername: currentEndpoint.botUsername,
         }, message.text));
-      const accepting = endpointAccepting && destinationAccepting && !githubAddressedElsewhere && !mentionRequired;
+      // A channel post that @mentions another of the company's Slack bots is that agent's, even for a bot
+      // that answers unmentioned posts (the board voice).
+      const slackAddressedElsewhere =
+        endpointAccepting &&
+        !mentionRequired &&
+        endpoint.provider === "slack" &&
+        !thread.isDM &&
+        !addressed &&
+        (await slackMessageAddressesAnotherBot(tx, endpoint, message.raw));
+      const accepting = endpointAccepting && destinationAccepting && !githubAddressedElsewhere && !mentionRequired && !slackAddressedElsewhere;
       const redactDestinationDelivery =
-        githubAddressedElsewhere || mentionRequired || (!accepting && thread.isDM) ||
+        githubAddressedElsewhere || mentionRequired || slackAddressedElsewhere || (!accepting && thread.isDM) ||
 
         (!thread.isDM &&
           (endpoint.provider === "microsoft-teams" ||
@@ -205,6 +215,8 @@ export function createInboundAdmission(db: Db, options: InboundAdmissionOptions)
           ? "GitHub message explicitly addresses a different recipient"
           : mentionRequired
             ? "Message did not @mention the bot"
+          : slackAddressedElsewhere
+            ? "Slack message @mentions another of the company's bots"
           : endpoint.provider === "telegram" && !thread.isDM && !addressed
             ? "Message did not address the agent"
             : "Destination is not enabled in Paperclip";
