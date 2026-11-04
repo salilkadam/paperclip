@@ -76,10 +76,11 @@ Agents run as child processes inside the `bionic-org` container and share one id
 - **Working agents** never post to Slack or the board. They report on the task they were given; the C-level they report to posts what is needed.
 - `setup-agent-job-function-access.sh` writes both rules into the agents' `AGENTS.md`: the C-level section, and a new `reporting-line` section for every working agent. `setup-reliora-website-routing.sh` routes pages Content Marketer → CMO → CIO → Sr. Engineer.
 - **Connect Hub** (router mode) runs each app action through one of three tools, each limited by the hub to one risk class: `hub_read` (read-only actions), `hub_execute` (writes; it refuses destructive ones) and `hub_execute_destructive` (deletes, archives, raw API calls and anything else the hub marks destructive). The hub takes the class from each piece's own READ/SEARCH/WRITE/DESTRUCTIVE label where there is one, and otherwise from the action name. `deploy/scripts/setup-connecthub-governance.sh` writes the company policies, matching the app on the `tool` argument:
-  - C-level agents may write only to Drive and Slack.
+  - Through the hub, C-level agents may write only to Google Drive, Docs, Sheets and Slides.
   - Working agents may not post to Slack.
-  - Nobody posts to Reddit or Stack Exchange. Nobody acts in Slack as the person who connected it: no "send as user", no custom sender name or picture, no status or profile changes.
-  - Slack and GitHub are closed to everyone by default and opened only for C-level agents (Slack) and engineering (GitHub), so an agent hired after the last run gets neither.
+  - Nobody posts to Reddit or Stack Exchange.
+  - **Slack (owner, 2026-11-04): one Paperclip Slack bot per key C-level agent.** No agent writes to Slack through the hub, so none can post as the person who connected Slack there. Reading Slack through `hub_read` stays allowed.
+  - GitHub is closed to everyone by default and opened only for engineering, so an agent hired after the last run gets no GitHub.
   - In router mode only `hub_connect` creates a connect link, so connecting an app always goes through the board.
   - GitHub writes are for engineering only.
   - These need the board: anything destructive, connecting an app, social publishing (including Google Business Profile) and external email.
