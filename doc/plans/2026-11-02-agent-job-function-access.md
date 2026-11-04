@@ -75,8 +75,17 @@ Agents run as child processes inside the `bionic-org` container and share one id
 - **C-level agents** read everything and write to Google Drive and **Slack** (their channels and the board channel). They assign work in their function to their own agents, and work in another function to the **peer C-level** who owns it, never to that C-level's agents. Example: a web page from the CMO or Content Marketer goes to the CIO, who assigns the Sr. Engineer.
 - **Working agents** never post to Slack or the board. They report on the task they were given; the C-level they report to posts what is needed.
 - `setup-agent-job-function-access.sh` writes both rules into the agents' `AGENTS.md`: the C-level section, and a new `reporting-line` section for every working agent. `setup-reliora-website-routing.sh` routes pages Content Marketer → CMO → CIO → Sr. Engineer.
-- **Connect Hub** runs every app through `hub_execute`, so it gets its own company policies: `deploy/scripts/setup-connecthub-governance.sh` (C-level: Drive and Slack writes only; working agents: no Slack, no community posts, board approval for social publishing, external email, destructive actions, raw API calls and connecting apps; GitHub writes for engineering only). Reads go through the hub's `hub_read`, which Paperclip classifies as a read.
-- **Fixed:** both scripts located their marker section with jq `index`, which counts bytes, then cut with string slicing, which counts characters. Any `AGENTS.md` with multi-byte text (—, …, “”) was cut in the wrong place, which damaged the markers in Reliora's CMO file. The scripts now split on the markers, and stop on a damaged file instead of making it worse.
+- **Connect Hub** (router mode) runs each app action through one of three tools, each limited by the hub to one risk class: `hub_read` (read-only actions), `hub_execute` (writes; it refuses destructive ones) and `hub_execute_destructive` (deletes, archives, raw API calls and anything else the hub marks destructive). The hub takes the class from each piece's own READ/SEARCH/WRITE/DESTRUCTIVE label where there is one, and otherwise from the action name. `deploy/scripts/setup-connecthub-governance.sh` writes the company policies, matching the app on the `tool` argument:
+  - C-level agents may write only to Drive and Slack.
+  - Working agents may not post to Slack.
+  - Nobody posts to Reddit or Stack Exchange, or posts to Slack as a person.
+  - GitHub writes are for engineering only.
+  - These need the board: anything destructive, connecting an app, social publishing (including Google Business Profile) and external email.
+  - No policy touches `hub_read`, so everyone can read.
+  - The server rejects `|` in policy patterns, so each app or verb is a separate policy. The script checks every pattern the same way before writing.
+  - The script refuses a direct-mode hub server, and a hub too old to have `hub_execute_destructive`.
+- **Fixed:** the job-function script now writes the `AGENTS.md` rules before the step that skips a company with no Workspace connection, so Bionic gets them too. Its check that C-level agents have no open writes no longer counts the hub's `hub_execute`, which the hub script governs and proves app by app.
+- **Fixed:** both scripts located their marker section with jq `index`, which counts bytes, then cut with string slicing, which counts characters. Any `AGENTS.md` with multi-byte text (—, …, “”) was cut in the wrong place, which damaged the markers in Reliora's CMO file. The scripts now split on the markers, and stop on a damaged file instead of making it worse: a section that appears twice, or whose END comes before its BEGIN, counts as damaged.
 
 Live state found on 2026-11-04 (read-only check):
 

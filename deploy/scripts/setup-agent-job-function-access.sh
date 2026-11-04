@@ -141,8 +141,13 @@ ensure_instructions() {
       | ([match("<!-- (BEGIN|END) bionic-org:[a-z-]+ -->"; "g")] | length) as $whole
       | ([match("<!-- BEGIN bionic-org:([a-z-]+) -->"; "g") | .captures[0].string]) as $begins
       | ([match("<!-- END bionic-org:([a-z-]+) -->"; "g") | .captures[0].string]) as $ends
+      | . as $doc
       | ($all == $whole) and (contains("<!-- BEGIN bionic-<") | not)
-        and (($begins | sort) == ($ends | sort)) and (($begins | unique | length) == ($begins | length));
+        and (($begins | sort) == ($ends | sort)) and (($begins | unique | length) == ($begins | length))
+        # each section once, with its END after its BEGIN (an END first would make the replace drop the tail)
+        and all($begins[]; ("<!-- BEGIN bionic-org:" + . + " -->") as $B | ("<!-- END bionic-org:" + . + " -->") as $E
+              | ($doc | split($B)) as $parts
+              | ($parts | length) == 2 and ($parts[0] | contains($E) | not) and ($parts[1] | split($E) | length) == 2);
     ($b + "\n" + $s + $e) as $block
     | if ($c | org_markers_ok | not) then "CORRUPT"
       elif ($c | contains($b)) then
@@ -203,6 +208,13 @@ while read -r cid; do
   log "  C-level: $(jq -r --argjson c "$clevel" '[.[] | select(.id | IN($c[])) | .name] | join(", ")' <<<"$agents")"
   log "  engineering: $(jq -r --argjson c "$engineers" '[.[] | select(.id | IN($c[])) | .name] | join(", ")' <<<"$agents")"
   if [[ "$(jq length <<<"$clevel")" -eq 0 ]]; then pending "no C-level agents found, skipped"; continue; fi
+
+  # The instructions are the owner's rules whatever tools the company has, so they are written before any
+  # tool precondition below can skip the company (a company with no Workspace connection still gets them).
+  while read -r aid; do ensure_instructions "$aid"; done < <(jq -r '.[]' <<<"$clevel")
+  # Every working agent (not C-level; engineering included) gets the reporting-line section.
+  workers="$(jq -c --argjson c "$clevel" '[.[] | select(.id | IN($c[]) | not) | .id]' <<<"$agents")"
+  while read -r aid; do ensure_instructions "$aid" "$WORK/reporting.md" reporting-line; done < <(jq -r '.[]' <<<"$workers")
 
   conns="$(api GET "/companies/$cid/tools/connections" | jq '(if type=="array" then . else .connections end) | [.[] | select(.status=="active")]')"
   ws="$(jq -r --arg n "$WORKSPACE_CONN" '[.[] | select(.name==$n)][0].id // empty' <<<"$conns")"
@@ -297,21 +309,20 @@ while read -r cid; do
     ensure_installs "$readconn" "$others"
   fi
 
-  while read -r aid; do ensure_instructions "$aid"; done < <(jq -r '.[]' <<<"$clevel")
-  # Every working agent (not C-level; engineering included) gets the reporting-line section.
-  workers="$(jq -c --argjson c "$clevel" '[.[] | select(.id | IN($c[]) | not) | .id]' <<<"$agents")"
-  while read -r aid; do ensure_instructions "$aid" "$WORK/reporting.md" reporting-line; done < <(jq -r '.[]' <<<"$workers")
-
   if (( DRY )); then continue; fi
   log "  proving"
   while read -r conn; do
     cid_conn="$(jq -r .id <<<"$conn")"
     while read -r aid; do
       access="$(api GET "/tool-connections/$cid_conn/test-agents/$aid/access")"
-      open="$(jq -r --argjson t "$DRIVE_WRITE_TOOLS" --arg x "${BOARD_REPORT_TOOLS:-}" --arg ws "$ws" --arg c "$cid_conn" '
+      # Connect Hub's hub_execute is allowed per app (Drive and Slack only) on its "tool" argument;
+      # setup-connecthub-governance.sh writes and proves that, so it is not an open write here.
+      hub="$(jq -r '(.config.sourceTemplateKey // .transportConfig.sourceTemplateKey // "") == "connecthub"' <<<"$conn")"
+      open="$(jq -r --argjson t "$DRIVE_WRITE_TOOLS" --arg x "${BOARD_REPORT_TOOLS:-}" --arg ws "$ws" --arg c "$cid_conn" --argjson hub "$hub" '
         ($x | split(" ")) as $rep
         | [.access.tools[] | select(.risk != "read" and .decision == "allowed")
            | select((.toolName | IN($rep[])) | not)
+           | select(($hub and .toolName == "hub_execute") | not)
            | select(($c == $ws and (.toolName | IN($t[]))) | not) | .toolName] | join(", ")' <<<"$access")"
       [[ -z "$open" ]] || die "$cname: agent $aid can still write without the board on $(jq -r .name <<<"$conn"): $open"
       misread="$(jq -r --arg m "$MUTATING_NAME" --arg r "$READ_NAME" '[.access.tools[] | select(.risk == "read" and .decision == "allowed"

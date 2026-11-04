@@ -89,8 +89,13 @@ ensure_section() {
       | ([match("<!-- (BEGIN|END) bionic-org:[a-z-]+ -->"; "g")] | length) as $whole
       | ([match("<!-- BEGIN bionic-org:([a-z-]+) -->"; "g") | .captures[0].string]) as $begins
       | ([match("<!-- END bionic-org:([a-z-]+) -->"; "g") | .captures[0].string]) as $ends
+      | . as $doc
       | ($all == $whole) and (contains("<!-- BEGIN bionic-<") | not)
-        and (($begins | sort) == ($ends | sort)) and (($begins | unique | length) == ($begins | length));
+        and (($begins | sort) == ($ends | sort)) and (($begins | unique | length) == ($begins | length))
+        # each section once, with its END after its BEGIN (an END first would make the replace drop the tail)
+        and all($begins[]; ("<!-- BEGIN bionic-org:" + . + " -->") as $B | ("<!-- END bionic-org:" + . + " -->") as $E
+              | ($doc | split($B)) as $parts
+              | ($parts | length) == 2 and ($parts[0] | contains($E) | not) and ($parts[1] | split($E) | length) == 2);
     ($b + "\n" + $s + $e) as $block
     | if ($c | org_markers_ok | not) then "CORRUPT"
       elif ($c | contains($b)) then
