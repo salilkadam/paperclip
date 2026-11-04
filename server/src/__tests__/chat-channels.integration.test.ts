@@ -9499,6 +9499,10 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect(f.wakeup).toHaveBeenCalledTimes(1);
       await sendTopLevel(f, "8120.3", { mentioned: true, raw: plainRaw("8120.3", "UBOARD", { text: `<@${f.botId}> and <@U0CLOBOT> both` }) });
       expect(f.wakeup).toHaveBeenCalledTimes(2);
+      // A paused bot cannot answer, so a post for it stays with this one.
+      await db.update(chatEndpoints).set({ status: "paused" }).where(eq(chatEndpoints.botExternalId, "U0CLOBOT"));
+      await sendTopLevel(f, "8120.4", { raw: plainRaw("8120.4", "UBOARD", { text: "<@U0CLOBOT|clo-reliora> hello" }) });
+      expect(f.wakeup).toHaveBeenCalledTimes(3);
     });
 
     it("never lets trust override Require at-mention", async () => {

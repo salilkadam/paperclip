@@ -5,7 +5,7 @@
 # it prints what C-level agents would lose and which routines they own.
 #
 # The rule: C-level agents delegate, review and strategize. They read everything
-# and write only to Google Drive and Slack. They assign work to their own agents,
+# and write only to Google Drive and Slack (Slack through their own Slack bot). They assign work to their own agents,
 # and cross-functional work to the peer C-level who owns it. Working agents report
 # through their C-level and never post to Slack themselves. Repo writes belong to
 # the engineering agents. (Owner: 2026-11-02, Slack and routing 2026-11-04.)
@@ -316,12 +316,12 @@ while read -r cid; do
     cid_conn="$(jq -r .id <<<"$conn")"
     while read -r aid; do
       access="$(api GET "/tool-connections/$cid_conn/test-agents/$aid/access")"
-      # Connect Hub's hub_execute is allowed per app (Drive and Slack only) on its "tool" argument;
+      # Connect Hub's hub_execute is allowed per app (Google Drive only) on its "tool" argument;
       # setup-connecthub-governance.sh writes and proves that. It is not an open write here only while that
       # script's C-level block is in place for this connection and this agent.
       hub="$(jq -r --arg c "$cid_conn" --arg a "$aid" --argjson pol "$hubpolicies" '
         ((.config.sourceTemplateKey // .transportConfig.sourceTemplateKey // "") == "connecthub")
-        and any($pol[]; .enabled and .name == "connect-hub: C-level agents write only to Drive and Slack"
+        and any($pol[]; .enabled and .name == "connect-hub: C-level agents write only to Google Drive"
           and .policyType == "block" and .selectors.connectionId == $c and (.selectors.agentIds // [] | index($a)))' <<<"$conn")"
       open="$(jq -r --argjson t "$DRIVE_WRITE_TOOLS" --arg x "${BOARD_REPORT_TOOLS:-}" --arg ws "$ws" --arg c "$cid_conn" --argjson hub "$hub" '
         ($x | split(" ")) as $rep
