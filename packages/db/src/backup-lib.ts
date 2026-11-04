@@ -385,22 +385,25 @@ async function runPgDumpBackup(opts: {
     const dump = spawn(pgDumpBin, pgDumpArgs, { stdio: ["ignore", "pipe", "pipe"], env });
     const outFile = openSync(opts.backupFile, "w");
     try {
-      const gzip = spawn(compressor.command, compressor.args, { stdio: ["pipe", outFile, "pipe"] });
-      // A compressor that exits early surfaces via its own exit code below;
-      // the write side may then reject with EPIPE, which must stay silent.
-      gzip.stdin?.on("error", () => { /* reported by exit code */ });
-      if (!dump.stdout || !gzip.stdin) {
-        throw new Error("pg_dump and gzip must expose connected stdio pipes");
+      if (!dump.stdout) {
+        throw new Error("pg_dump and gzip must be connected by an OS pipe");
       }
-      dump.stdout.on("error", () => { /* reported by exit code */ });
-      dump.stdout.pipe(gzip.stdin);
-      // If pg_dump's stdout never reaches EOF (spawn failure, destroyed
-      // stream), the compressor must still see EOF instead of waiting on the
-      // pipe forever. "close" fires only after the stream is fully consumed,
-      // so ending gzip's input there cannot truncate the archive.
-      const endGzipInput = () => { gzip.stdin?.end(); };
-      dump.stdout.once("close", endGzipInput);
-      dump.once("error", endGzipInput);
+      // Pass pg_dump's stdout handle straight into the compressor's stdin so
+      // spawn() dups the same pipe fd into the gzip process. Dump bytes then
+      // travel kernel-to-kernel between the two children. Wiring gzip.stdin
+      // and piping through Node instead (the earlier shape) still pumped
+      // every byte through this process's event loop — for the whole dump
+      // window — which starved /health and timed out readiness probes even
+      // though the deflate CPU itself was a de-prioritized external process.
+      const gzip = spawn(compressor.command, compressor.args, { stdio: [dump.stdout, outFile, "pipe"] });
+      // A compressor that exits early surfaces via its own exit code below;
+      // the shared pipe may then reject with EPIPE, which must stay silent.
+      dump.stdout.on("error", () => { /* reported by exit codes */ });
+      // Once the fd is duped into the compressor, this process must stop
+      // reading its copy of the pipe: a second reader would steal bytes from
+      // gzip. Destroying it also lets gzip see EOF the moment pg_dump exits,
+      // without this process ever writing or ending anything.
+      dump.stdout.destroy();
       const results = await Promise.allSettled([
         waitForChildExit(dump, pgDumpBin),
         waitForChildExit(gzip, `${basename(gzipBin)} compressor`),

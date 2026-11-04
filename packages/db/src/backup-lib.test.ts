@@ -151,6 +151,54 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     });
   }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
 
+  it("streams pg_dump output to the compressor through one OS pipe, not through this process", async () => {
+    const connectionString = await createTempDatabase();
+    const backupDir = createTempDir("pg-dump-os-pipe-");
+    // ~114MB: far past any pipe/socketpair buffer. The pump shape costs this
+    // process measurable CPU per byte transferred; the OS-pipe shape leaves
+    // it idle. That CPU and event-loop occupancy is exactly what starved
+    // /health readiness probes during hourly backups in production.
+    const line = "INSERT INTO fixture VALUES (1234567890123456789012345678901234567890);";
+    const payload = `${Array.from({ length: 2_000_000 }, () => line).join("\n")}\n`;
+    const payloadFile = path.join(backupDir, "payload.sql");
+    fs.writeFileSync(payloadFile, payload);
+    const dumpEndFile = path.join(backupDir, "dump-stdout-end");
+    const gzipEndFile = path.join(backupDir, "gzip-stdin-end");
+    // fd 3 is duped before the recording redirect, so it still points at the
+    // inherited stdout handle when readlink inspects it (redirecting fd 1
+    // first would make readlink report the recording file instead).
+    const dumpPath = writePgDumpFixture(backupDir,
+      `exec 3>&1\nreadlink /proc/self/fd/3 > '${dumpEndFile}' 2>/dev/null || true\ncat '${payloadFile}'`);
+    const gzipWrapper = path.join(backupDir, "gzip-fixture");
+    fs.writeFileSync(gzipWrapper,
+      `#!/bin/sh\nreadlink /proc/self/fd/0 > '${gzipEndFile}' 2>/dev/null || true\nexec gzip "$@"\n`, { mode: 0o700 });
+
+    await withBackupCliEnv({ PAPERCLIP_PG_DUMP_PATH: dumpPath, PAPERCLIP_GZIP_PATH: gzipWrapper }, async () => {
+      const cpuBefore = process.cpuUsage();
+      const backup = await runDatabaseBackup({
+        connectionString, backupDir,
+        retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+        backupEngine: "pg_dump",
+      });
+      const cpu = process.cpuUsage(cpuBefore);
+      expect(gunzipSync(fs.readFileSync(backup.backupFile)).toString()).toBe(payload);
+      // Both ends of the transfer must be OS pipe endpoints (libuv child
+      // stdio uses socketpairs on Linux). The availability probe runs with
+      // /dev/null stdio, so recorded endpoint inodes can only come from the
+      // real compression run. On hosts without /proc/self/fd this evidence
+      // is absent; the CPU budget below still holds everywhere.
+      if (fs.existsSync(dumpEndFile) && fs.existsSync(gzipEndFile)) {
+        expect(fs.readFileSync(dumpEndFile, "utf8").trim()).toMatch(/^(pipe|socket):\[\d+\]$/);
+        expect(fs.readFileSync(gzipEndFile, "utf8").trim()).toMatch(/^(pipe|socket):\[\d+\]$/);
+      }
+      // The invariant itself: pg_dump's stdout handle is duped into the
+      // compressor at spawn, the parent's copy is destroyed, and the kernel
+      // moves the bytes. Pumping 114MB through Node instead costs this
+      // process hundreds of milliseconds of CPU — far above this budget.
+      expect((cpu.user + cpu.system) / 1000).toBeLessThan(100);
+    });
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
   it("falls back to the in-process pipeline when no external gzip is available", async () => {
     const connectionString = await createTempDatabase();
     const backupDir = createTempDir("pg-dump-internal-gzip-");
