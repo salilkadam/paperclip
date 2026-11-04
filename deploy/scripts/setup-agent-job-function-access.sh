@@ -5,7 +5,10 @@
 # it prints what C-level agents would lose and which routines they own.
 #
 # The rule: C-level agents delegate, review and strategize. They read everything
-# and write only to Google Drive. Repo writes belong to the engineering agents.
+# and write only to Google Drive and Slack. They assign work to their own agents,
+# and cross-functional work to the peer C-level who owns it. Working agents report
+# through their C-level and never post to Slack themselves. Repo writes belong to
+# the engineering agents. (Owner: 2026-11-02, Slack and routing 2026-11-04.)
 #
 # Per company it:
 #   1. ensures two company policies, by exact name, over the C-level agents:
@@ -123,17 +126,30 @@ ensure_installs() {
   api PUT "/tool-connections/$conn/installs" "$WORK/i.json" >/dev/null
 }
 
-# ensure_instructions AGENT_ID: replace or append the delegation section.
+# ensure_instructions AGENT_ID [SECTION_FILE MARKER_NAME]: replace or append a marker section
+# (default: the C-level delegation section).
 ensure_instructions() {
-  local aid="$1" cur content next
+  local aid="$1" file="${2:-$WORK/section.md}" b="$BEGIN" e="$END" cur content next
+  if [[ -n "${3:-}" ]]; then b="<!-- BEGIN bionic-org:$3 -->"; e="<!-- END bionic-org:$3 -->"; fi
   cur="$(api GET "/agents/$aid/instructions-bundle/file?path=AGENTS.md")"
   content="$(jq -r '.content // ""' <<<"$cur")"
-  next="$(jq -rn --arg c "$content" --arg b "$BEGIN" --arg e "$END" --rawfile s "$WORK/section.md" '
+  next="$(jq -rn --arg c "$content" --arg b "$b" --arg e "$e" --rawfile s "$file" '
+    # Character-safe: jq index() counts bytes but slicing counts characters, which misplaced the cut in any
+    # AGENTS.md with multi-byte text and corrupted the markers. split() works on characters.
+    def org_markers_ok:
+      ([match("org:[a-z-]+ -->"; "g")] | length) as $all
+      | ([match("<!-- (BEGIN|END) bionic-org:[a-z-]+ -->"; "g")] | length) as $whole
+      | ([match("<!-- BEGIN bionic-org:([a-z-]+) -->"; "g") | .captures[0].string]) as $begins
+      | ([match("<!-- END bionic-org:([a-z-]+) -->"; "g") | .captures[0].string]) as $ends
+      | ($all == $whole) and (contains("<!-- BEGIN bionic-<") | not)
+        and (($begins | sort) == ($ends | sort)) and (($begins | unique | length) == ($begins | length));
     ($b + "\n" + $s + $e) as $block
-    | if ($c | contains($b)) then
-        ($c | index($b)) as $i | ($c | index($e)) as $j
-        | $c[:$i] + $block + $c[($j + ($e | length)):]
+    | if ($c | org_markers_ok | not) then "CORRUPT"
+      elif ($c | contains($b)) then
+        ($c | split($b)) as $p | ($p[1] | split($e)) as $q
+        | $p[0] + $block + ($q[1:] | join($e))
       else ($c | sub("\\s+$"; "")) + "\n\n" + $block + "\n" end')"
+  if [[ "$next" == "CORRUPT" ]]; then pending "agent $aid: AGENTS.md has damaged bionic-org markers; repair them in Paperclip (Agents > Instructions), then re-run"; return; fi
   if [[ "$next" == "$content" ]]; then log "  instructions ok: $aid"; return; fi
   log "  instructions update: $aid"
   (( DRY )) && return
@@ -142,14 +158,24 @@ ensure_instructions() {
   api PUT "/agents/$aid/instructions-bundle/file" "$WORK/f.json" >/dev/null
 }
 
+cat > "$WORK/reporting.md" <<'EOF'
+## Your reporting line (owner's rule)
+
+- Do the work of your function with your own tools.
+- **Do not post to Slack or the board yourself.** Put status updates, results and anything the board or a channel should see on the task you were given, for the agent who assigned it. The C-level you report to posts what is needed.
+- **Work outside your function:** ask the agent you report to. They route it to the C-level who owns that function. Do not create tasks for another team's agents yourself.
+EOF
+
 cat > "$WORK/section.md" <<'EOF'
 ## Your job function (owner's rule)
 
 You delegate, review, strategize and answer to the board. You do not do tactical execution.
 
-- **You may write only** to Google Drive (documents) and your own agent memory. You can read everything.
-- **Repo, website and code changes:** create a task for the Sr. Engineer or a member of the development team. Do not ask for GitHub access. Repo writes are their job function.
-- **Blogs, marketing material, decks and collateral:** create a task for the Content Marketer or the agent the CMO designates.
+- **You may write only** to Google Drive (documents), Slack (your channels and the board channel) and your own agent memory. You can read everything.
+- **Work in your function:** create a task for an agent who reports to you, with write access to the tools it needs.
+- **Work in another function:** create a task for the C-level who owns that function, never for their agents directly. For example, a website or code change from marketing goes to the CIO, who assigns the Sr. Engineer or the development team. Do not ask for GitHub access: repo writes are engineering's job function.
+- **Blogs, marketing material, decks and collateral** belong to the CMO's team (the Content Marketer or the agent the CMO designates).
+- **Your team reports through you.** Your agents do not post to Slack or the board; they report on your task, and you post what the board or a channel needs.
 - Review the result when the task comes back. A missing write permission is expected: delegate, do not report it as a blocker.
 - **One new task per deliverable.** Never route new work through an existing task, and never through a closed one: its assignee has finished and will not look at it again.
 - **Check what you wait on.** Each time you wake, check the status of every task you are waiting on. If one is done or cancelled without your deliverable, open a new task at once. Never wait more than a day on a hand-off without checking it.
@@ -272,6 +298,9 @@ while read -r cid; do
   fi
 
   while read -r aid; do ensure_instructions "$aid"; done < <(jq -r '.[]' <<<"$clevel")
+  # Every working agent (not C-level; engineering included) gets the reporting-line section.
+  workers="$(jq -c --argjson c "$clevel" '[.[] | select(.id | IN($c[]) | not) | .id]' <<<"$agents")"
+  while read -r aid; do ensure_instructions "$aid" "$WORK/reporting.md" reporting-line; done < <(jq -r '.[]' <<<"$workers")
 
   if (( DRY )); then continue; fi
   log "  proving"

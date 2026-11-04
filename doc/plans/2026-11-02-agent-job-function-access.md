@@ -69,3 +69,23 @@ The script's proof therefore fails only on a write a C-level agent can make with
 ## Not built: cluster access
 
 Agents run as child processes inside the `bionic-org` container and share one identity. `bionic-org-sa` is not a per-agent identity, and `paperclip-agent-web-sa` does not automount a token. Per-agent cluster access needs its own design.
+
+## Update (owner, 2026-11-04): Slack, routing and Connect Hub
+
+- **C-level agents** read everything and write to Google Drive and **Slack** (their channels and the board channel). They assign work in their function to their own agents, and work in another function to the **peer C-level** who owns it, never to that C-level's agents. Example: a web page from the CMO or Content Marketer goes to the CIO, who assigns the Sr. Engineer.
+- **Working agents** never post to Slack or the board. They report on the task they were given; the C-level they report to posts what is needed.
+- `setup-agent-job-function-access.sh` writes both rules into the agents' `AGENTS.md`: the C-level section, and a new `reporting-line` section for every working agent. `setup-reliora-website-routing.sh` routes pages Content Marketer → CMO → CIO → Sr. Engineer.
+- **Connect Hub** runs every app through `hub_execute`, so it gets its own company policies: `deploy/scripts/setup-connecthub-governance.sh` (C-level: Drive and Slack writes only; working agents: no Slack, no community posts, board approval for social publishing, external email, destructive actions, raw API calls and connecting apps; GitHub writes for engineering only). Reads go through the hub's `hub_read`, which Paperclip classifies as a read.
+- **Fixed:** both scripts located their marker section with jq `index`, which counts bytes, then cut with string slicing, which counts characters. Any `AGENTS.md` with multi-byte text (—, …, “”) was cut in the wrong place, which damaged the markers in Reliora's CMO file. The scripts now split on the markers, and stop on a damaged file instead of making it worse.
+
+Live state found on 2026-11-04 (read-only check):
+
+| | Bionic | Reliora |
+|---|---|---|
+| C-level policies (Drive allow, write block) | **Not applied** | Applied, all 5 C-level agents |
+| GitHub | One connection, **installed company-wide** (C-level can use `git`/`gh`) | Split: write for Sr. Engineer, QA, Kubernetes Engineer; read-only for the rest |
+| Google Workspace connection | **None** | Loc-Google Workspace, company-wide |
+| Connect Hub | Company-wide, **no policies** | Company-wide, **no policies** |
+| Slack | CEO and CMO bots (chat channels) | CEO and CMO bots (chat channels) |
+| Trust rules | None | None |
+| `AGENTS.md` delegation sections | None | Present; CMO file has **damaged markers** (repair by hand) |

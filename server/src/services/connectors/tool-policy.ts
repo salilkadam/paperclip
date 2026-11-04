@@ -76,6 +76,8 @@ const TRYPOST_TOOL_RISK: Record<string, ToolRiskLevel> = Object.fromEntries([
 // carry the hub's MCP annotations; without a read-only hint they are writes.
 const CONNECT_HUB_TOOL_RISK: Record<string, ToolRiskLevel> = {
   hub_list_connections: "read", hub_list_options: "read", hub_search_tools: "read", hub_get_tool_schema: "read",
+  // hub_read refuses any tool the hub does not mark read-only, so it is a read like the other lookups.
+  hub_read: "read",
   hub_connect: "write", hub_execute: "destructive",
 };
 function connectHubRisk(tool: ToolDescriptor): ToolRiskLevel {
