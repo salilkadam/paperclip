@@ -78,6 +78,12 @@ describe("reviewed connector risk dispatch", () => {
     for (const name of ["hub_list_connections", "hub_connect", "github__github_create_issue"]) expect(hub.quarantineTool?.({ name })).toBe(false);
     expect(classifyRisk({ name: "hub_execute", annotations: { readOnlyHint: false, destructiveHint: true } }, "connecthub")).toBe("destructive");
     expect(classifyRisk({ name: "hub_connect" }, "connecthub")).toBe("write");
+    // hub_read only runs tools the hub marks read-only: a read, and not held for review like hub_execute.
+    expect(classifyRisk({ name: "hub_read", annotations: { readOnlyHint: true } }, "connecthub")).toBe("read");
+    expect(hub.quarantineTool?.({ name: "hub_read" })).toBe(false);
+    // hub_execute_destructive runs only destructive tools; held for review like hub_execute.
+    expect(classifyRisk({ name: "hub_execute_destructive", annotations: { readOnlyHint: false, destructiveHint: true } }, "connecthub")).toBe("destructive");
+    expect(hub.quarantineTool?.({ name: "hub_execute_destructive" })).toBe(true);
     expect(classifyRisk({ name: "slack__slack_list_channels", annotations: { readOnlyHint: true } }, "connecthub")).toBe("read");
     expect(classifyRisk({ name: "slack__slack_post_message", annotations: { readOnlyHint: false } }, "connecthub")).toBe("write");
     // A readOnlyHint never downgrades an action that names a write verb (hub annotations are heuristic, and any

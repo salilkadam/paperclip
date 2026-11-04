@@ -76,7 +76,11 @@ const TRYPOST_TOOL_RISK: Record<string, ToolRiskLevel> = Object.fromEntries([
 // carry the hub's MCP annotations; without a read-only hint they are writes.
 const CONNECT_HUB_TOOL_RISK: Record<string, ToolRiskLevel> = {
   hub_list_connections: "read", hub_list_options: "read", hub_search_tools: "read", hub_get_tool_schema: "read",
-  hub_connect: "write", hub_execute: "destructive",
+  // hub_read refuses any tool the hub does not mark read-only, so it is a read like the other lookups.
+  hub_read: "read",
+  // hub_execute refuses destructive tools on a current hub, but an older hub runs anything through it, so it keeps
+  // the worst case. hub_execute_destructive runs only tools the hub marks destructive (deletes, raw API calls).
+  hub_connect: "write", hub_execute: "destructive", hub_execute_destructive: "destructive",
 };
 function connectHubRisk(tool: ToolDescriptor): ToolRiskLevel {
   const reviewed = CONNECT_HUB_TOOL_RISK[tool.name];
@@ -142,7 +146,7 @@ const reviewedPolicies: ReviewedToolPolicy[] = [
   })),
   { sourceTemplateKey: "enterpret", quarantineNewEntries: true, classifyRisk: enterpretRisk },
   { sourceTemplateKey: "braintrust", quarantineNewEntries: true, classifyRisk: braintrustRisk },
-  { sourceTemplateKey: "connecthub", quarantineNewEntries: false, classifyRisk: connectHubRisk, quarantineTool: tool => tool.name === "hub_execute" },
+  { sourceTemplateKey: "connecthub", quarantineNewEntries: false, classifyRisk: connectHubRisk, quarantineTool: tool => tool.name === "hub_execute" || tool.name === "hub_execute_destructive" },
 ];
 
 const bySource = new Map(reviewedPolicies.map(policy => [policy.sourceTemplateKey, policy]));

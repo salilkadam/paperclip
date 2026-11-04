@@ -69,3 +69,36 @@ The script's proof therefore fails only on a write a C-level agent can make with
 ## Not built: cluster access
 
 Agents run as child processes inside the `bionic-org` container and share one identity. `bionic-org-sa` is not a per-agent identity, and `paperclip-agent-web-sa` does not automount a token. Per-agent cluster access needs its own design.
+
+## Update (owner, 2026-11-04): Slack, routing and Connect Hub
+
+- **C-level agents** read everything and write to Google Drive and **Slack** (their channels and the board channel). They assign work in their function to their own agents, and work in another function to the **peer C-level** who owns it, never to that C-level's agents. Example: a web page from the CMO or Content Marketer goes to the CIO, who assigns the Sr. Engineer.
+- **Working agents** never post to Slack or the board. They report on the task they were given; the C-level they report to posts what is needed.
+- `setup-agent-job-function-access.sh` writes both rules into the agents' `AGENTS.md`: the C-level section, and a new `reporting-line` section for every working agent. `setup-reliora-website-routing.sh` routes pages Content Marketer → CMO → CIO → Sr. Engineer.
+- **Connect Hub** (router mode) runs each app action through one of three tools, each limited by the hub to one risk class: `hub_read` (read-only actions), `hub_execute` (writes; it refuses destructive ones) and `hub_execute_destructive` (deletes, archives, raw API calls and anything else the hub marks destructive). The hub takes the class from each piece's own READ/SEARCH/WRITE/DESTRUCTIVE label where there is one, and otherwise from the action name. `deploy/scripts/setup-connecthub-governance.sh` writes the company policies, matching the app on the `tool` argument:
+  - Through the hub, C-level agents may write only to Google Drive, Docs, Sheets and Slides.
+  - Working agents may not post to Slack.
+  - Nobody posts to Reddit or Stack Exchange.
+  - **Slack (owner, 2026-11-04): one Paperclip Slack bot per key C-level agent.** No agent writes to Slack through the hub, so none can post as the person who connected Slack there. Reading Slack through `hub_read` stays allowed.
+  - GitHub is closed to everyone by default and opened only for engineering, so an agent hired after the last run gets no GitHub.
+  - In router mode only `hub_connect` creates a connect link, so connecting an app always goes through the board.
+  - GitHub writes are for engineering only.
+  - These need the board: anything destructive, connecting an app, social publishing (including Google Business Profile) and external email.
+  - No policy touches `hub_read`, so everyone can read.
+  - The server rejects `|` in policy patterns, so each app or verb is a separate policy. The script checks every pattern the same way before writing.
+  - The script refuses a direct-mode hub server, and a hub too old to have `hub_execute_destructive`.
+  - Deploying the new hub puts `hub_execute` back on hold in Paperclip, because its definition changed. C-level Drive and Slack writes stop until the board reviews it again.
+- **Fixed:** the job-function script now writes the `AGENTS.md` rules before the step that skips a company with no Workspace connection, so Bionic gets them too. Its check that C-level agents have no open writes skips the hub's `hub_execute` only while the hub script's C-level block is in place for that connection and agent.
+- **Fixed:** both scripts located their marker section with jq `index`, which counts bytes, then cut with string slicing, which counts characters. Any `AGENTS.md` with multi-byte text (—, …, “”) was cut in the wrong place, which damaged the markers in Reliora's CMO file. The scripts now split on the markers, and stop on a damaged file instead of making it worse: a section that appears twice, or whose END comes before its BEGIN, counts as damaged.
+
+Live state found on 2026-11-04 (read-only check):
+
+| | Bionic | Reliora |
+|---|---|---|
+| C-level policies (Drive allow, write block) | **Not applied** | Applied, all 5 C-level agents |
+| GitHub | One connection, **installed company-wide** (C-level can use `git`/`gh`) | Split: write for Sr. Engineer, QA, Kubernetes Engineer; read-only for the rest |
+| Google Workspace connection | **None** | Loc-Google Workspace, company-wide |
+| Connect Hub | Company-wide, **no policies** | Company-wide, **no policies** |
+| Slack | CEO and CMO bots (chat channels) | CEO and CMO bots (chat channels) |
+| Trust rules | None | None |
+| `AGENTS.md` delegation sections | None | Present; CMO file has **damaged markers** (repair by hand) |

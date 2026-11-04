@@ -14,6 +14,5 @@ permissions:
 jobs:
   ci:
     if: github.event.action != 'labeled' || github.event.label.name == 'profile-ci'
-    # Master requires CODEOWNERS review for .github/**, including this workflow.
-    # The AWS runner group permits pr-trusted.yml@refs/heads/master.
-    uses: paperclipai/paperclip/.github/workflows/pr-trusted.yml@master
+    # This repository's own CI definition, from the same commit as the PR (not an upstream copy).
+    uses: ./.github/workflows/pr-trusted.yml

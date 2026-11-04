@@ -168,5 +168,25 @@
     "dir": "ui",
     "name": "@paperclipai/ui",
     "publishFromCi": true
+  },
+  {
+    "dir": "packages/plugins/plugin-ghost-blog",
+    "name": "@paperclipai/plugin-ghost-blog",
+    "publishFromCi": false
+  },
+  {
+    "dir": "packages/plugins/plugin-loc-agentmail",
+    "name": "@paperclipai/plugin-loc-agentmail",
+    "publishFromCi": false
+  },
+  {
+    "dir": "packages/plugins/plugin-loc-letta",
+    "name": "@paperclipai/plugin-loc-letta",
+    "publishFromCi": false
+  },
+  {
+    "dir": "packages/plugins/sandbox-providers/ssh-docker",
+    "name": "@paperclipai/plugin-ssh-docker",
+    "publishFromCi": false
   }
 ]

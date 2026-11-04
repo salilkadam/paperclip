@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # setup-reliora-website-routing.sh — tell Reliora's agents how a page reaches
-# reliora.ai (owner, 2026-11-02): the CMO routes it, the Content Marketer writes
-# the copy, and engineering builds it in Reliora-Inc/reliora-website to match the
-# existing site. Idempotent. Run with --dry-run first.
+# reliora.ai (owner, 2026-11-02; through the CIO, 2026-11-04): the Content Marketer
+# writes the copy, the CMO routes the build to the CIO, and the CIO assigns engineering,
+# which builds it in Reliora-Inc/reliora-website to match the existing site. Idempotent. Run with --dry-run first.
 #
 # It replaces or appends one marker-delimited section in each agent's AGENTS.md.
 # GitHub access itself comes from setup-agent-job-function-access.sh.
@@ -49,26 +49,31 @@ api() {
 cat > "$WORK/engineer.md" <<'EOF'
 ## Reliora website (reliora.ai)
 
-You build and ship pages on reliora.ai. The repository is https://github.com/Reliora-Inc/reliora-website. The Content Marketer supplies the copy.
+You build and ship pages on reliora.ai. The repository is https://github.com/Reliora-Inc/reliora-website. Page work comes to you from the CIO, with copy from the Content Marketer.
 
 - Follow `docs/adding-a-page.md` in that repository, and read `docs/brand/BRAND-GUIDE.md` first. A page must match the existing site: use the existing classes and tokens, not new colours, fonts or layouts.
 - `npm run build` must pass. Put desktop and phone screenshots of the new page and the page you modelled it on in the pull request.
 - Blog posts go through Ghost, not this repository.
 - A merge to `main` deploys the site: GitHub Actions on the `k3s-reliora` runners builds the image and rolls it out, and reverts a rollout that fails. You do not deploy by hand. Run `npm run build` (which runs the site's checks) before you open the pull request.
-- After the merge, open the page on https://reliora.ai and check it. If it is not live after 15 minutes, report it to the board with the commit. Do not call a page done until you have seen it live.
+- After the merge, open the page on https://reliora.ai and check it. Report the result on the CIO's task (live, or not live after 15 minutes, with the commit); the CIO reports onward. Do not post to Slack or the board yourself. Do not call a page done until you have seen it live.
 EOF
 cat > "$WORK/marketer.md" <<'EOF'
 ## Reliora website (reliora.ai)
 
 - You write the copy for website pages. You do not write to the repository. Follow the brand guide: `docs/brand/BRAND-GUIDE.md` in https://github.com/Reliora-Inc/reliora-website.
-- Create a task for the Sr. Engineer with the final copy for each page, and the page on the site it should resemble. Engineering builds and deploys it so that it matches the existing site.
+- Give the final copy for each page, and the page on the site it should resemble, to the CMO on the CMO's task. The CMO routes the build to the CIO, who assigns engineering. Do not create tasks for engineering yourself.
 - Blog posts stay yours: they go through Ghost, not this repository.
 - Do not report missing GitHub write access as a blocker. It is expected.
 EOF
 cat > "$WORK/cmo.md" <<'EOF'
 ## Reliora website (reliora.ai)
 
-A new page goes like this: the Content Marketer writes the copy, and the Sr. Engineer builds and deploys it in https://github.com/Reliora-Inc/reliora-website so that it matches the existing site. You route the work and review the page when it is live on reliora.ai.
+A new page goes like this: the Content Marketer writes the copy; you create a task for the CIO with that copy; the CIO assigns the Sr. Engineer, who builds and deploys it in https://github.com/Reliora-Inc/reliora-website so that it matches the existing site. You review the page when the CIO reports it live on reliora.ai. Do not assign engineering directly.
+EOF
+cat > "$WORK/cio.md" <<'EOF'
+## Reliora website (reliora.ai)
+
+Website pages come to you from the CMO, with copy from the Content Marketer. Create one task per page for the Sr. Engineer (the repository is https://github.com/Reliora-Inc/reliora-website). When the engineer reports the page live, or not live, report it back on the CMO's task.
 EOF
 
 # ensure_section AGENT_ID SECTION_FILE: replace or append the marker section.
@@ -77,11 +82,27 @@ ensure_section() {
   cur="$(api GET "/agents/$aid/instructions-bundle/file?path=AGENTS.md")"
   content="$(jq -r '.content // ""' <<<"$cur")"
   next="$(jq -rn --arg c "$content" --arg b "$BEGIN" --arg e "$END" --rawfile s "$file" '
+    # Character-safe: jq index() counts bytes but slicing counts characters, which misplaced the cut in any
+    # AGENTS.md with multi-byte text and corrupted the markers. split() works on characters.
+    def org_markers_ok:
+      ([match("org:[a-z-]+ -->"; "g")] | length) as $all
+      | ([match("<!-- (BEGIN|END) bionic-org:[a-z-]+ -->"; "g")] | length) as $whole
+      | ([match("<!-- BEGIN bionic-org:([a-z-]+) -->"; "g") | .captures[0].string]) as $begins
+      | ([match("<!-- END bionic-org:([a-z-]+) -->"; "g") | .captures[0].string]) as $ends
+      | . as $doc
+      | ($all == $whole) and (contains("<!-- BEGIN bionic-<") | not)
+        and (($begins | sort) == ($ends | sort)) and (($begins | unique | length) == ($begins | length))
+        # each section once, with its END after its BEGIN (an END first would make the replace drop the tail)
+        and all($begins[]; ("<!-- BEGIN bionic-org:" + . + " -->") as $B | ("<!-- END bionic-org:" + . + " -->") as $E
+              | ($doc | split($B)) as $parts
+              | ($parts | length) == 2 and ($parts[0] | contains($E) | not) and ($parts[1] | split($E) | length) == 2);
     ($b + "\n" + $s + $e) as $block
-    | if ($c | contains($b)) then
-        ($c | index($b)) as $i | ($c | index($e)) as $j
-        | $c[:$i] + $block + $c[($j + ($e | length)):]
+    | if ($c | org_markers_ok | not) then "CORRUPT"
+      elif ($c | contains($b)) then
+        ($c | split($b)) as $p | ($p[1] | split($e)) as $q
+        | $p[0] + $block + ($q[1:] | join($e))
       else ($c | sub("\\s+$"; "")) + "\n\n" + $block + "\n" end')"
+  [[ "$next" != "CORRUPT" ]] || die "agent $aid: AGENTS.md has damaged bionic-org markers; repair them in Paperclip (Agents > Instructions), then re-run"
   if [[ "$next" == "$content" ]]; then log "  ok: $aid"; return; fi
   log "  update: $aid"
   (( DRY )) && return
@@ -102,11 +123,13 @@ one() { # one NAME ROLE-FILTER: the single agent matching, or die
 cmo="$(one CMO '.role == "cmo"')"
 marketer="$(one "Content Marketer" '.name == "Content Marketer"')"
 sr="$(one "Sr. Engineer" '.name == "Sr. Engineer"')"
-log "CMO $cmo, Content Marketer $marketer, Sr. Engineer $sr"
-# check all three before the first change
-for a in "$cmo" "$marketer" "$sr"; do api GET "/agents/$a/instructions-bundle/file?path=AGENTS.md" >/dev/null; done
+cio="$(one CIO '.name == "CIO"')"
+log "CMO $cmo, CIO $cio, Content Marketer $marketer, Sr. Engineer $sr"
+# check all four before the first change
+for a in "$cmo" "$cio" "$marketer" "$sr"; do api GET "/agents/$a/instructions-bundle/file?path=AGENTS.md" >/dev/null; done
 
 ensure_section "$cmo" "$WORK/cmo.md"
 ensure_section "$marketer" "$WORK/marketer.md"
+ensure_section "$cio" "$WORK/cio.md"
 ensure_section "$sr" "$WORK/engineer.md"
 log "done"

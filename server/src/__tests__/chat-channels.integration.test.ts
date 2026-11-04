@@ -9479,6 +9479,32 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect(await readChatConversationsByEndpointId(f.endpoint.id)).toEqual([]);
     });
 
+    it("leaves a post that @mentions another of the company's bots to that bot", async () => {
+      // Production 2026-11-04: "@clo-reliora hello" in #reliora-board was answered by the CEO bot, the
+      // trusted board voice, because nothing told it the post was addressed to the CLO's bot.
+      const f = await boardFixture();
+      const [row] = await db.select().from(chatEndpoints).where(eq(chatEndpoints.id, f.endpoint.id));
+      expect(row.providerAccountId).toBeTruthy();
+      const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, row.connectionId));
+      const { id: _cid, ...connectionCopy } = connection;
+      const [cloConnection] = await db.insert(toolConnections).values({ ...connectionCopy, name: "Slack — CLO", uid: `chat-slack-${randomUUID()}` }).returning();
+      const { id: _id, ...copy } = row;
+      await db.insert(chatEndpoints).values({ ...copy, connectionId: cloConnection.id, publicId: `clo-${randomUUID()}`, botExternalId: "U0CLOBOT", botUsername: "clo-bot" });
+      await sendTopLevel(f, "8120.1", { raw: plainRaw("8120.1", "UBOARD", { text: "<@U0CLOBOT|clo-reliora> hello" }) });
+      expect(f.wakeup).not.toHaveBeenCalled();
+      expect(await deliveryFor(f.endpoint.id, "8120.1")).toMatchObject({ state: "filtered", redactedError: "Slack message @mentions another of the company's bots" });
+      expect(await notices(f.endpoint.id)).toEqual([]);
+      // Mentioning a person is not addressing another bot, and mentioning this bot too keeps the post here.
+      await sendTopLevel(f, "8120.2", { raw: plainRaw("8120.2", "UBOARD", { text: "<@U0SOMEONE> please review" }) });
+      expect(f.wakeup).toHaveBeenCalledTimes(1);
+      await sendTopLevel(f, "8120.3", { mentioned: true, raw: plainRaw("8120.3", "UBOARD", { text: `<@${f.botId}> and <@U0CLOBOT> both` }) });
+      expect(f.wakeup).toHaveBeenCalledTimes(2);
+      // A paused bot cannot answer, so a post for it stays with this one.
+      await db.update(chatEndpoints).set({ status: "paused" }).where(eq(chatEndpoints.botExternalId, "U0CLOBOT"));
+      await sendTopLevel(f, "8120.4", { raw: plainRaw("8120.4", "UBOARD", { text: "<@U0CLOBOT|clo-reliora> hello" }) });
+      expect(f.wakeup).toHaveBeenCalledTimes(3);
+    });
+
     it("never lets trust override Require at-mention", async () => {
       const f = await boardFixture({ requireAtMention: true });
       await sendTopLevel(f, "8106.1");
