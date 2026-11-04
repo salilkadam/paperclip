@@ -311,13 +311,18 @@ while read -r cid; do
 
   if (( DRY )); then continue; fi
   log "  proving"
+  hubpolicies="$(api GET "/companies/$cid/tools/policies" | jq -c 'if type=="array" then . else .policies end')"
   while read -r conn; do
     cid_conn="$(jq -r .id <<<"$conn")"
     while read -r aid; do
       access="$(api GET "/tool-connections/$cid_conn/test-agents/$aid/access")"
       # Connect Hub's hub_execute is allowed per app (Drive and Slack only) on its "tool" argument;
-      # setup-connecthub-governance.sh writes and proves that, so it is not an open write here.
-      hub="$(jq -r '(.config.sourceTemplateKey // .transportConfig.sourceTemplateKey // "") == "connecthub"' <<<"$conn")"
+      # setup-connecthub-governance.sh writes and proves that. It is not an open write here only while that
+      # script's C-level block is in place for this connection and this agent.
+      hub="$(jq -r --arg c "$cid_conn" --arg a "$aid" --argjson pol "$hubpolicies" '
+        ((.config.sourceTemplateKey // .transportConfig.sourceTemplateKey // "") == "connecthub")
+        and any($pol[]; .enabled and .name == "connect-hub: C-level agents write only to Drive and Slack"
+          and .policyType == "block" and .selectors.connectionId == $c and (.selectors.agentIds // [] | index($a)))' <<<"$conn")"
       open="$(jq -r --argjson t "$DRIVE_WRITE_TOOLS" --arg x "${BOARD_REPORT_TOOLS:-}" --arg ws "$ws" --arg c "$cid_conn" --argjson hub "$hub" '
         ($x | split(" ")) as $rep
         | [.access.tools[] | select(.risk != "read" and .decision == "allowed")

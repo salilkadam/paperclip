@@ -19,24 +19,29 @@
 #
 # Per Connect Hub connection (lower priority = evaluated first; the first matching policy decides). "exec" means
 # hub_execute and hub_execute_destructive:
-#    8 block      exec on Reddit, on Stack Exchange                 everyone (community posts are human-only)
-#    8 block      exec on Slack with sendAsUser / reactAsUser set, or sendAsBot set to anything but true;
-#                 Slack profile changes                              everyone (never post as the person who connected)
-#    8 block      exec on Slack                                     working agents (they report through their C-level)
-#    8 block      exec on GitHub                                    everyone but engineering
-#    8 block      exec outside Google Drive/Docs/Sheets/Slides and Slack            C-level agents
+#    6 block      exec on Reddit, on Stack Exchange                 everyone (community posts are human-only)
+#    6 block      exec on Slack with sendAsUser / reactAsUser set, sendAsBot set to anything but true, or a custom
+#                 username / profilePicture; Slack profile and status changes      everyone (never act as a person)
+#    7 allow      hub_execute on Slack (C-level), on GitHub (engineering); their destructive Slack/GitHub actions
+#                 ask the board
+#    7 block      exec outside Google Drive/Docs/Sheets/Slides and Slack            C-level agents
+#    8 block      exec on Slack, on GitHub                          everyone else, including agents hired later
 #    9 ask first  hub_connect                                       everyone (a person connects each app)
 #    9 ask first  hub_execute_destructive                           everyone, C-level included
-#   10 allow      hub_execute                                       C-level agents (only Drive and Slack get here)
+#   10 allow      hub_execute                                       C-level agents (only Drive gets here)
 #   21 ask first  exec on LinkedIn, Facebook Pages, Instagram, YouTube, Google Business Profile   publishing
 #   21 ask first  hub_execute sending, replying, forwarding or requesting approval in Gmail       external email
-#   22 allow      hub_execute on GitHub                             engineering agents
 # Anything else follows the agent's installs (their function's tools). The server accepts no "|" in a pattern, so
-# each app or verb is its own policy, and "outside" is a chain of negative lookaheads.
+# each app or verb is its own policy, and "outside" is a chain of negative lookaheads. In router mode only
+# hub_connect makes a connect link, so the board gate on connecting an app cannot be bypassed.
+#
+# Deploying a hub that changes hub_execute's definition puts it back on hold in Paperclip: C-level Drive and
+# Slack writes stop until the board reviews it (Apps > Connect Hub > Tools). Refresh and review right after the
+# deploy.
 #
 # C-level and engineering are classified exactly as setup-agent-job-function-access.sh does (role ceo/cto/cmo/cfo,
 # a "Chief ... Officer" title or a C?O name; engineering = role engineer/devops/qa). Re-run after each hire: the
-# agent lists are explicit. A policy that exists with a different type, priority, selectors or conditions (or
+# agent lists are explicit: an agent hired later gets no Slack or GitHub until then. A policy that exists with a different type, priority, selectors or conditions (or
 # disabled) is updated in place; an older "connect-hub: ..." policy this version no longer wants is disabled.
 #
 # Before writing, each connection's catalog must be a router-mode hub that has hub_execute_destructive (an older
@@ -51,6 +56,7 @@
 # member of the companies (`paperclipai token board create --name connecthub-governance --ttl-days 1`).
 # Usage: deploy/scripts/setup-connecthub-governance.sh [--company-id <id>] [--dry-run]
 set -euo pipefail
+shopt -s inherit_errexit # a failure inside $(...) stops the script too
 
 API="${PAPERCLIP_API_URL:-https://org.baisoln.com}"
 ONLY_COMPANY=""; DRY=0
@@ -97,13 +103,14 @@ gmail_re() { printf '^gmail\\.(?!(?:gmail_)?create_draft)(?:.*[_-])?%s(?:[_-].*)
 EMAIL_VERBS="send reply forward request_approval"
 
 # desired_policies CONNECTION CLEVEL_IDS ENGINEER_IDS WORKER_IDS -> JSON array.
-desired_policies() {
+desired_policies() { # (WORKER_IDS is unused since Slack and GitHub are closed to everyone by default)
   local social email
   social="$(for a in $SOCIAL_APPS; do jq -cn --arg a "$a" --arg re "$(app_re "$a")" '[$a, $re]'; done | jq -cs .)"
   email="$(for v in $EMAIL_VERBS; do jq -cn --arg v "$v" --arg re "$(gmail_re "$v")" '[$v, $re]'; done | jq -cs .)"
   jq -n --arg conn "$1" --argjson c "$2" --argjson e "$3" --argjson w "$4" --argjson social "$social" --argjson email "$email" \
     --arg reddit "$(app_re reddit)" --arg stackex "$(app_re stackexchange)" --arg slack "$(app_re slack)" \
-    --arg slackprofile "$(app_re slack 'slack-update-profile$')" --arg github "$(app_re github)" \
+    --arg slackprofile "$(app_re slack '(?:slack-)?update[_-]profile$')" --arg slackstatus "$(app_re slack '(?:slack-)?set[_-]user[_-]status$')" \
+    --arg github "$(app_re github)" \
     --arg notc "$NOT_C_LEVEL_APP" '
     def exec: ["hub_execute", "hub_execute_destructive"];
     def p($name; $desc; $type; $prio; $tools; $agents; $args):
@@ -111,31 +118,47 @@ desired_policies() {
         selectors: ({ toolNames: $tools, connectionId: $conn } + (if $agents then { agentIds: $agents } else {} end)),
         conditions: (if $args then { arguments: $args } else null end) };
     def tool($re): { fieldMatches: { tool: $re } };
-    [ p("no Reddit posting"; "Owner: replies on Reddit are human-posted; agents draft them."; "block"; 8; exec; null; tool($reddit)),
-      p("no Stack Exchange posting"; "Owner: answers on Stack Exchange are human-posted; agents draft them."; "block"; 8; exec; null; tool($stackex)),
-      p("no Slack posts as a person (sendAsUser)"; "Slack posts go out as the bot, never as the person who connected Slack.";
-        "block"; 8; exec; null; tool($slack) + { fieldExists: ["arguments.sendAsUser"], fieldNotEquals: { "arguments.sendAsUser": false } }),
-      p("no Slack reactions as a person (reactAsUser)"; "Slack reactions come from the bot, never from the person who connected Slack.";
-        "block"; 8; exec; null; tool($slack) + { fieldExists: ["arguments.reactAsUser"], fieldNotEquals: { "arguments.reactAsUser": false } }),
-      p("no Slack posts as a person (sendAsBot)"; "Slack posts go out as the bot: sendAsBot may only be left out or true.";
-        "block"; 8; exec; null; tool($slack) + { fieldExists: ["arguments.sendAsBot"], fieldNotEquals: { "arguments.sendAsBot": true } }),
+    def slack_off($name; $desc; $args): p($name; $desc; "block"; 6; exec; null; tool($slack) + $args);
+    [ p("no Reddit posting"; "Owner: replies on Reddit are human-posted; agents draft them."; "block"; 6; exec; null; tool($reddit)),
+      p("no Stack Exchange posting"; "Owner: answers on Stack Exchange are human-posted; agents draft them."; "block"; 6; exec; null; tool($stackex)),
+      slack_off("no Slack posts as a person (sendAsUser)"; "Slack posts go out as the bot, never as the person who connected Slack.";
+        { fieldExists: ["arguments.sendAsUser"], fieldNotEquals: { "arguments.sendAsUser": false } }),
+      slack_off("no Slack reactions as a person (reactAsUser)"; "Slack reactions come from the bot, never from the person who connected Slack.";
+        { fieldExists: ["arguments.reactAsUser"], fieldNotEquals: { "arguments.reactAsUser": false } }),
+      slack_off("no Slack posts as a person (sendAsBot)"; "Slack posts go out as the bot: sendAsBot may only be left out or true.";
+        { fieldExists: ["arguments.sendAsBot"], fieldNotEquals: { "arguments.sendAsBot": true } }),
+      slack_off("no custom Slack sender name"; "Posts show the bot name: an agent sets no username, so it cannot pose as a person.";
+        { fieldExists: ["arguments.username"] }),
+      slack_off("no custom Slack sender picture"; "Posts show the bot picture: an agent sets no profilePicture, so it cannot pose as a person.";
+        { fieldExists: ["arguments.profilePicture"] }),
       p("no Slack profile changes"; "An agent never edits the Slack profile of the person who connected Slack.";
-        "block"; 8; exec; null; tool($slackprofile)),
+        "block"; 6; exec; null; tool($slackprofile)),
+      p("no Slack status changes"; "An agent never sets the Slack status of the person who connected Slack.";
+        "block"; 6; exec; null; tool($slackstatus)),
+      # Slack and GitHub are closed to everyone at 8, so an agent hired after this run is blocked until it is
+      # classified; these open them for the agents whose job it is (writes allowed, destructive needs the board).
+      p("C-level agents post to Slack"; "Owner: C-level agents post to their channels and the board channel.";
+        "allow"; 7; ["hub_execute"]; $c; tool($slack)),
+      p("C-level destructive Slack actions need the board"; "Deleting or leaving in Slack needs board approval.";
+        "require_approval"; 7; ["hub_execute_destructive"]; $c; tool($slack)),
+      p("engineering agents write to GitHub"; "Repo writes are the engineering job function.";
+        "allow"; 7; ["hub_execute"]; $e; tool($github)),
+      p("engineering destructive GitHub actions need the board"; "Deletes, locks and raw API calls on GitHub need board approval.";
+        "require_approval"; 7; ["hub_execute_destructive"]; $e; tool($github)),
       p("Slack goes through your C-level"; "Owner: working agents report status on their task; the C-level they report to posts to Slack.";
-        "block"; 8; exec; $w + $e; tool($slack)),
+        "block"; 8; exec; null; tool($slack)),
       p("GitHub writes belong to engineering"; "Create a task for engineering (through your C-level for cross-functional work). Read GitHub with hub_read.";
-        "block"; 8; exec; $c + $w; tool($github)),
+        "block"; 8; exec; null; tool($github)),
       p("C-level agents write only to Drive and Slack"; "Owner: C-level agents read everything (hub_read) and write only to Google Drive and Slack; they assign other work.";
-        "block"; 8; exec; $c; tool($notc)),
+        "block"; 7; exec; $c; tool($notc)),
       p("connecting an app needs the board"; "A person connects each app; the board approves first.";
         "require_approval"; 9; ["hub_connect"]; null; null),
       p("destructive actions need the board"; "Deletes, archives, raw API calls and every other action the hub marks destructive need board approval, for every agent.";
         "require_approval"; 9; ["hub_execute_destructive"]; null; null),
-      p("C-level agents write to Google Drive and Slack"; "Owner: C-level agents write to Google Drive and Slack (everything else is blocked at priority 8).";
+      p("C-level agents write to Google Drive and Slack"; "Owner: C-level agents write to Google Drive and Slack (everything else is blocked at priority 7).";
         "allow"; 10; ["hub_execute"]; $c; null) ]
     + [ $social[] as [$app, $re] | p("publishing to \($app) needs the board"; "Agents draft; the board approves each post."; "require_approval"; 21; exec; null; tool($re)) ]
     + [ $email[] as [$verb, $re] | p("Gmail \($verb) needs the board"; "Email that leaves the company needs board approval; drafts do not."; "require_approval"; 21; ["hub_execute"]; null; tool($re)) ]
-    + [ p("engineering agents write to GitHub"; "Repo writes are the engineering job function."; "allow"; 22; ["hub_execute"]; $e; tool($github)) ]
     # An agent list must never be empty: an empty agentIds selector would match nobody or everybody.
     | map(select(.selectors.agentIds == null or (.selectors.agentIds | length) > 0))'
 }
@@ -168,7 +191,7 @@ ensure_policy() { # ensure_policy CID EXISTING_JSON WANT_JSON
   fi
 }
 
-# probe CID CONN AGENT LABEL TOOL PARAMS_JSON EXPECTED_DECISION
+# probe CID CONN AGENT LABEL TOOL PARAMS_JSON EXPECTED_DECISION [POLICY_NAME_FOR_A_BLOCK]
 # "off" counts only when a policy denied it; "allowed" or "off" for an agent without access is reported, not fatal.
 probe() {
   local cid="$1" conn="$2" agent="$3" label="$4" tool="$5" params="$6" want="$7" resp decision ar reason
@@ -186,6 +209,13 @@ probe() {
   fi
   [[ "$decision" == "$want" && ( "$want" != off || "$reason" == deny_policy_block ) ]] ||
     die "probe '$label' on connection $conn: expected $want, got $decision${reason:+ ($reason)}: $(head -c 300 <<<"$resp")"
+  # A block must come from the policy meant to give it (the server returns that policy's description).
+  if [[ "$want" == off && -n "${8:-}" ]]; then
+    local expect
+    expect="$(jq -r --arg n "connect-hub: $8" '.[] | select(.name == $n) | .description' <<<"$desired")"
+    [[ "$(jq -r '.error.message // empty' <<<"$resp")" == "$expect" ]] ||
+      die "probe '$label': blocked, but not by \"connect-hub: $8\": $(jq -r '.error.message // empty' <<<"$resp")"
+  fi
   log "  probe ok: $label -> $decision"
 }
 exec_args() { jq -cn --arg t "$1" --arg a "${2:-}" '{tool: $t, arguments: (if $a == "" then {} else ($a | fromjson) end)}'; }
@@ -204,8 +234,11 @@ check_catalog() {
   direct="$(jq -c '[.[] | select(.name | contains("__")) | .name][:5]' <<<"$cat")"
   [[ "$direct" == "[]" ]] || die "$1: connection $2 is a direct-mode hub server ($direct ...); these rules govern router mode only. Switch it to router mode"
   jq -e 'any(.name == "hub_execute")' >/dev/null <<<"$cat" || die "$1: connection $2 has no hub_execute; is it a router-mode Connect Hub server?"
-  jq -e 'any(.name == "hub_execute_destructive")' >/dev/null <<<"$cat" ||
-    die "$1: connection $2 has no hub_execute_destructive: its hub is too old and runs deletes through hub_execute. Deploy the current hub, then re-run"
+  if ! jq -e 'any(.name == "hub_execute_destructive")' >/dev/null <<<"$cat"; then
+    local why="connection $2 has no hub_execute_destructive: its hub is too old and runs deletes through hub_execute"
+    (( DRY )) && { log "  WARNING: $why (or the catalog is stale; a live run refreshes it first)" >&2; echo held; return; }
+    die "$1: $why. Deploy the current hub, then re-run"
+  fi
   jq -e 'any(.name == "hub_read")' >/dev/null <<<"$cat" || log "  WARNING: no hub_read on connection $2: C-level agents cannot read other apps" >&2
   if jq -e '[.[] | select(.name == "hub_execute" or .name == "hub_execute_destructive") | .status] | all(. == "active")' >/dev/null <<<"$cat"
   then echo ready; else echo held; fi
@@ -224,7 +257,7 @@ total=0; unproven=0; pending=()
 for cid in $(jq -r '.[].id' <<<"$companies"); do
   cname="$(jq -r --arg id "$cid" '.[]|select(.id==$id)|.name' <<<"$companies")"
   conns="$(api GET "/companies/$cid/tools/connections" |
-    jq '[(.connections // .)[] | select(.status=="active" and ((.config.sourceTemplateKey // "") == "connecthub"))]')"
+    jq '[(.connections // .)[] | select(.status=="active" and ((.config.sourceTemplateKey // .transportConfig.sourceTemplateKey // "") == "connecthub"))]')"
   if [[ "$(jq length <<<"$conns")" -eq 0 ]]; then log "$cname: no active Connect Hub connection, skipped"; continue; fi
   agents="$(api GET "/companies/$cid/agents" | jq '[(if type=="array" then . else .agents end)[] | select(.status != "terminated")]')"
   clevel="$(jq -c '[.[] | select((.role | IN("ceo","cto","cmo","cfo"))
@@ -260,22 +293,26 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
     if [[ -n "$cl" ]]; then
       probe "$cid" "$conn" "$cl" "C-level writes to Slack"         $X  "$(exec_args slack.zz_governance_probe)" allowed
       probe "$cid" "$conn" "$cl" "C-level writes to Drive"         $X  "$(exec_args google-drive.zz_governance_probe)" allowed
-      probe "$cid" "$conn" "$cl" "C-level writes to GitHub"        $X  "$(exec_args github.zz_governance_probe)" off
-      probe "$cid" "$conn" "$cl" "C-level writes to another app"   $X  "$(exec_args todoist.zz_governance_probe)" off
+      probe "$cid" "$conn" "$cl" "C-level writes to GitHub"        $X  "$(exec_args github.zz_governance_probe)" off "C-level agents write only to Drive and Slack"
+      probe "$cid" "$conn" "$cl" "C-level writes to another app"   $X  "$(exec_args todoist.zz_governance_probe)" off "C-level agents write only to Drive and Slack"
       probe "$cid" "$conn" "$cl" "C-level deletes in Drive"        $XD "$(exec_args google-drive.zz_governance_probe)" ask_first
-      probe "$cid" "$conn" "$cl" "C-level posts to Slack as a person" $X "$(exec_args slack.zz_governance_probe '{"sendAsUser":true}')" off
-      probe "$cid" "$conn" "$cl" "C-level sets sendAsBot to \"no\"" $X  "$(exec_args slack.zz_governance_probe '{"sendAsBot":"no"}')" off
+      probe "$cid" "$conn" "$cl" "C-level deletes in Slack"        $XD "$(exec_args slack.zz_governance_probe)" ask_first
+      probe "$cid" "$conn" "$cl" "C-level posts to Slack as a person" $X "$(exec_args slack.zz_governance_probe '{"sendAsUser":true}')" off "no Slack posts as a person (sendAsUser)"
+      probe "$cid" "$conn" "$cl" "C-level sets sendAsBot to \"no\"" $X  "$(exec_args slack.zz_governance_probe '{"sendAsBot":"no"}')" off "no Slack posts as a person (sendAsBot)"
+      probe "$cid" "$conn" "$cl" "C-level posts under a person's name" $X "$(exec_args slack.zz_governance_probe '{"username":"A Person"}')" off "no custom Slack sender name"
+      probe "$cid" "$conn" "$cl" "C-level sets the person's Slack status" $X "$(exec_args slack.set_user_status)" off "no Slack status changes"
+      probe "$cid" "$conn" "$cl" "C-level edits the person's Slack profile" $X "$(exec_args slack.update_profile)" off "no Slack profile changes"
     fi
     if [[ -n "$wk" ]]; then
-      probe "$cid" "$conn" "$wk" "worker posts to Slack"           $X  "$(exec_args slack.zz_governance_probe)" off
-      probe "$cid" "$conn" "$wk" "worker raw-calls Slack"          $XD "$(exec_args slack.custom_api_call)" off
-      probe "$cid" "$conn" "$wk" "worker posts to Reddit"          $X  "$(exec_args reddit.zz_governance_probe)" off
-      probe "$cid" "$conn" "$wk" "worker deletes on Reddit"        $XD "$(exec_args reddit.zz_governance_probe)" off
+      probe "$cid" "$conn" "$wk" "worker posts to Slack"           $X  "$(exec_args slack.zz_governance_probe)" off "Slack goes through your C-level"
+      probe "$cid" "$conn" "$wk" "worker raw-calls Slack"          $XD "$(exec_args slack.custom_api_call)" off "Slack goes through your C-level"
+      probe "$cid" "$conn" "$wk" "worker posts to Reddit"          $X  "$(exec_args reddit.zz_governance_probe)" off "no Reddit posting"
+      probe "$cid" "$conn" "$wk" "worker deletes on Reddit"        $XD "$(exec_args reddit.zz_governance_probe)" off "no Reddit posting"
       probe "$cid" "$conn" "$wk" "worker publishes to LinkedIn"    $X  "$(exec_args linkedin.zz_governance_probe)" ask_first
       probe "$cid" "$conn" "$wk" "worker posts on Google Business" $X  "$(exec_args google-my-business.zz_governance_probe)" ask_first
       probe "$cid" "$conn" "$wk" "worker sends Gmail"              $X  "$(exec_args gmail.zz_governance_probe_send)" ask_first
-      probe "$cid" "$conn" "$wk" "worker writes to GitHub"         $X  "$(exec_args github.zz_governance_probe)" off
-      probe "$cid" "$conn" "$wk" "worker deletes on GitHub"        $XD "$(exec_args github.zz_governance_probe)" off
+      probe "$cid" "$conn" "$wk" "worker writes to GitHub"         $X  "$(exec_args github.zz_governance_probe)" off "GitHub writes belong to engineering"
+      probe "$cid" "$conn" "$wk" "worker deletes on GitHub"        $XD "$(exec_args github.zz_governance_probe)" off "GitHub writes belong to engineering"
       probe "$cid" "$conn" "$wk" "worker deletes in another app"   $XD "$(exec_args todoist.zz_governance_probe)" ask_first
       probe "$cid" "$conn" "$wk" "worker uses another app"         $X  "$(exec_args todoist.zz_governance_probe)" allowed
       probe "$cid" "$conn" "$wk" "worker connects an app"          hub_connect '{"toolkit":"zz_governance_probe"}' ask_first
@@ -283,7 +320,7 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
     if [[ -n "$en" ]]; then
       probe "$cid" "$conn" "$en" "engineer writes to GitHub"       $X  "$(exec_args github.zz_governance_probe)" allowed
       probe "$cid" "$conn" "$en" "engineer deletes on GitHub"      $XD "$(exec_args github.zz_governance_probe)" ask_first
-      probe "$cid" "$conn" "$en" "engineer posts to Slack"         $X  "$(exec_args slack.zz_governance_probe)" off
+      probe "$cid" "$conn" "$en" "engineer posts to Slack"         $X  "$(exec_args slack.zz_governance_probe)" off "Slack goes through your C-level"
     fi
     total=$((total + 1))
   done
