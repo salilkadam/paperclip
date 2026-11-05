@@ -198,7 +198,19 @@ WORKDIR /app
 # process — hourly multi-minute event-loop starvation, /health probe
 # timeouts, and liveness restarts of an otherwise healthy pod.
 RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
-  && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest \
+  # The CI runner's downloads time out now and then (2026-11-04: claude's native binary,
+  # Composio's checksums, Chromium), so every download in this layer retries. The agent
+  # CLIs ship their native binaries as OPTIONAL dependencies, which npm skips WITHOUT an
+  # error when the download fails; claude then keeps a stub with no shebang that Bun
+  # cannot exec (ENOEXEC) and /bin/sh runs as a script. So each CLI must run, claude must
+  # print its real version line, and the image is never shipped with a CLI that cannot start.
+  && export npm_config_fetch_retries=5 npm_config_fetch_retry_mintimeout=20000 npm_config_fetch_retry_maxtimeout=120000 \
+  && for attempt in 1 2 3; do \
+       npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest \
+       && claude --version 2>&1 | grep -q "(Claude Code)" && claude --version && codex --version && opencode --version && gemini --version && kimi --version && break; \
+       [ "${attempt}" = 3 ] && echo "an agent CLI still cannot run after 3 installs" && exit 1; \
+       echo "agent CLI install attempt ${attempt} incomplete; reinstalling"; npm uninstall --global @anthropic-ai/claude-code @openai/codex opencode-ai @google/gemini-cli @moonshot-ai/kimi-code; sleep 15; \
+     done \
   && apt-get update \
   && apt-get install -y --no-install-recommends openssh-client jq unzip postgresql-client \
   && rm -rf /var/lib/apt/lists/* \
@@ -206,7 +218,18 @@ RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
   # latest release via unauthenticated api.github.com, which intermittently
   # fails from CI egress IPs (rate limits / transient blocks). 0.6.0 = last
   # verified stable release; bump deliberately.
-  && for attempt in 1 2 3; do curl -fsSL https://composio.dev/install | sh -s -- 0.6.0 && break; echo "composio install attempt ${attempt} failed"; [ "${attempt}" = 3 ] && exit 1; sleep 20; done \
+  # The installer is downloaded first: `curl | sh` succeeds even when curl fails (sh reads
+  # nothing), so the retry never ran. It ends with an agent plugin setup the image does not
+  # use (only the CLI binary below is kept); when that step fails after the CLI installed,
+  # the binary is good and is kept.
+  && for attempt in 1 2 3; do \
+       rm -rf /root/.composio; \
+       curl -fsSL --retry 3 --retry-delay 5 --max-time 120 https://composio.dev/install -o /tmp/composio-install.sh \
+       && { sh /tmp/composio-install.sh 0.6.0 || { [ -x /root/.composio/composio ] && echo "composio CLI installed; its agent plugin setup failed and is not used here"; }; } \
+       && /root/.composio/composio --version && break; \
+       echo "composio install attempt ${attempt} failed"; [ "${attempt}" = 3 ] && exit 1; sleep 20; \
+     done \
+  && rm -f /tmp/composio-install.sh \
   && mkdir -p /opt/composio \
   && mv /root/.composio/composio /opt/composio/composio \
   && chmod 0755 /opt/composio/composio \
@@ -224,7 +247,9 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg python3-pip python3-pil python3-numpy python3-boto3 \
   && pip3 install --no-cache-dir --break-system-packages playwright \
-  && python3 -m playwright install --with-deps chromium \
+  # Chromium is ~170 MB from cdn.playwright.dev; the default 30 s connection timeout failed
+  # every try in CI on 2026-11-04. Allow 5 minutes per download and retry the install.
+  && for attempt in 1 2 3; do PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=300000 python3 -m playwright install --with-deps chromium && break; echo "chromium install attempt ${attempt} failed"; [ "${attempt}" = 3 ] && exit 1; sleep 20; done \
   && chown -R node:node /opt/ms-playwright \
   && chmod -R a+rX /opt/ms-playwright \
   && rm -rf /var/lib/apt/lists/*
