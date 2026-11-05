@@ -102,7 +102,11 @@ ensure_section() {
         ($c | split($b)) as $p | ($p[1] | split($e)) as $q
         | $p[0] + $block + ($q[1:] | join($e))
       else ($c | sub("\\s+$"; "")) + "\n\n" + $block + "\n" end')"
-  [[ "$next" != "CORRUPT" ]] || die "agent $aid: AGENTS.md has damaged bionic-org markers; repair them in Paperclip (Agents > Instructions), then re-run"
+  if [[ "$next" == "CORRUPT" ]]; then
+    echo "agent $aid: marker lines in AGENTS.md:" >&2
+    grep -n 'org:\|bionic-' <<<"$content" | cut -c1-160 | sed 's/^/  /' >&2 || true
+    die "agent $aid: AGENTS.md has damaged bionic-org markers; repair them in Paperclip (Agents > Instructions), then re-run"
+  fi
   if [[ "$next" == "$content" ]]; then log "  ok: $aid"; return; fi
   log "  update: $aid"
   (( DRY )) && return

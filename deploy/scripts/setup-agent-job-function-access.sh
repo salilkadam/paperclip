@@ -94,6 +94,17 @@ api() {
   cat "$WORK/resp"
 }
 
+# agents_md AGENT_ID -> the AGENTS.md file JSON, or nothing when the agent has no instructions
+# bundle (its adapter reads no AGENTS.md). Any other error is fatal, as in api.
+agents_md() {
+  local code
+  code="$(curl -sS -o "$WORK/resp" -w '%{http_code}' -H @"$WORK/auth" -H 'User-Agent: paperclip-job-function/1' \
+    --max-time 120 "$API/api/agents/$1/instructions-bundle/file?path=AGENTS.md")" || die "GET AGENTS.md of $1: transport error"
+  if [[ "$code" == 404 ]] && grep -q 'instructions bundle is not configured' "$WORK/resp"; then return 0; fi
+  [[ "$code" =~ ^2 ]] || die "GET AGENTS.md of $1 -> HTTP $code: $(head -c 400 "$WORK/resp")"
+  cat "$WORK/resp"
+}
+
 # ensure_policy CID EXISTING_JSON WANT_JSON: create, or update in place if drifted.
 ensure_policy() {
   local cid="$1" existing="$2" want="$3" name have
@@ -131,7 +142,11 @@ ensure_installs() {
 ensure_instructions() {
   local aid="$1" file="${2:-$WORK/section.md}" b="$BEGIN" e="$END" cur content next
   if [[ -n "${3:-}" ]]; then b="<!-- BEGIN bionic-org:$3 -->"; e="<!-- END bionic-org:$3 -->"; fi
-  cur="$(api GET "/agents/$aid/instructions-bundle/file?path=AGENTS.md")"
+  cur="$(agents_md "$aid")"
+  if [[ -z "$cur" ]]; then
+    pending "agent $aid has no instructions bundle, so its ${3:-job-function} section is not written. Give it one in Paperclip (Agents > Instructions), then re-run"
+    return
+  fi
   content="$(jq -r '.content // ""' <<<"$cur")"
   next="$(jq -rn --arg c "$content" --arg b "$b" --arg e "$e" --rawfile s "$file" '
     # Character-safe: jq index() counts bytes but slicing counts characters, which misplaced the cut in any
@@ -154,7 +169,11 @@ ensure_instructions() {
         ($c | split($b)) as $p | ($p[1] | split($e)) as $q
         | $p[0] + $block + ($q[1:] | join($e))
       else ($c | sub("\\s+$"; "")) + "\n\n" + $block + "\n" end')"
-  if [[ "$next" == "CORRUPT" ]]; then pending "agent $aid: AGENTS.md has damaged bionic-org markers; repair them in Paperclip (Agents > Instructions), then re-run"; return; fi
+  if [[ "$next" == "CORRUPT" ]]; then
+    pending "agent $aid: AGENTS.md has damaged bionic-org markers; repair them in Paperclip (Agents > Instructions), then re-run. Marker lines:"
+    grep -n 'org:\|bionic-' <<<"$content" | cut -c1-160 | sed 's/^/[job-function]       /' || true
+    return
+  fi
   if [[ "$next" == "$content" ]]; then log "  instructions ok: $aid"; return; fi
   log "  instructions update: $aid"
   (( DRY )) && return
@@ -243,7 +262,6 @@ while read -r cid; do
   # Everything below that can abort runs before the first change, so a bad
   # precondition cannot leave a company half-applied.
   while read -r aid; do
-    api GET "/agents/$aid/instructions-bundle/file?path=AGENTS.md" >/dev/null
     access="$(api GET "/tool-connections/$ws/test-agents/$aid/access")"
     jq -e --argjson t "$DRIVE_WRITE_TOOLS" '[.access.tools[] | select(.toolName | IN($t[]))] | length == ($t | length)' <<<"$access" >/dev/null \
       || die "$cname: agent $aid does not see the Drive write tools. Is $WORKSPACE_CONN healthy and installed? Nothing was changed for this company"
