@@ -1,8 +1,7 @@
-import { mkdtempSync, mkfifoSync, utimesSync, writeFileSync, rmSync } from "node:fs";
-import { open as fsOpen } from "node:fs/promises";
+import { mkdtempSync, utimesSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   inspectDatabaseBackupHealth,
@@ -10,6 +9,24 @@ import {
 } from "./database-backup-health.js";
 
 const NOW = new Date("2026-11-05T08:00:00.000Z");
+
+// A never-resolving fsp.readFile models a saturated mount (e.g. NFS serving
+// hundreds of megabytes of hourly pg_dump writes while kubelet probes
+// /health). The mock only swaps readFile; every other fs call stays real, so
+// the sweep runs against real temp directories and can only block at the
+// marker read.
+const hangControl = vi.hoisted(() => ({ readFileHangs: false }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) =>
+      hangControl.readFileHangs
+        ? new Promise<never>(() => {})
+        : (actual.readFile as (...a: unknown[]) => Promise<unknown>)(...args),
+  } as typeof actual;
+});
 
 function makeBackupDir(backupAgeMinutes: number) {
   const dir = mkdtempSync(join(tmpdir(), "db-backup-health-"));
@@ -23,28 +40,14 @@ function makeBackupDir(backupAgeMinutes: number) {
 
 describe("inspectDatabaseBackupHealth", () => {
   let dir: string | undefined;
-  let hangingFifos: string[] = [];
 
   beforeEach(() => {
+    hangControl.readFileHangs = false;
     resetDatabaseBackupHealthInspectionCache();
   });
 
-  afterEach(async () => {
-    // A pending fsp.readFile on a FIFO parks a libuv threadpool thread until a
-    // writer arrives. Open and close a writer side so the thread is released
-    // even though the timed-out sweep promise stays pending forever.
-    await Promise.all(hangingFifos.map(async (fifo) => {
-      try {
-        const handle = await Promise.race([
-          fsOpen(fifo, "w"),
-          new Promise<undefined>((resolveTimer) => setTimeout(() => resolveTimer(undefined), 2_000)),
-        ]);
-        await handle?.close();
-      } catch {
-        // best effort
-      }
-    }));
-    hangingFifos = [];
+  afterEach(() => {
+    hangControl.readFileHangs = false;
     if (dir) rmSync(dir, { recursive: true, force: true });
     dir = undefined;
     resetDatabaseBackupHealthInspectionCache();
@@ -112,20 +115,9 @@ describe("inspectDatabaseBackupHealth", () => {
     expect(result.warnings.map((w) => w.code)).toEqual(["database_backup_missing"]);
   });
 
-  // A FIFO with no writer makes fsp.readFile block indefinitely — a
-  // deterministic stand-in for a saturated mount (e.g. NFS serving a
-  // multi-hundred-MB pg_dump write while kubelet probes /health).
-  function makeHangingAlertFile(parent: string) {
-    const fifo = join(parent, "hang.failure");
-    mkfifoSync(fifo);
-    hangingFifos.push(fifo);
-    return fifo;
-  }
-
   it("serves the cached healthy result when a sweep exceeds its budget", async () => {
     const made = makeBackupDir(10);
     dir = made.dir;
-    const alertFile = makeHangingAlertFile(dir);
 
     const good = await inspectDatabaseBackupHealth({
       enabled: true,
@@ -134,6 +126,10 @@ describe("inspectDatabaseBackupHealth", () => {
       now: NOW,
     });
     expect(good.status).toBe("ok");
+
+    const alertFile = join(dir, "db-backup-to-s3.failure");
+    writeFileSync(alertFile, "upload rejected");
+    hangControl.readFileHangs = true;
 
     const start = Date.now();
     const degraded = await inspectDatabaseBackupHealth({
@@ -156,7 +152,9 @@ describe("inspectDatabaseBackupHealth", () => {
   it("falls back to check_failed when a sweep times out with no cached result", async () => {
     const made = makeBackupDir(10);
     dir = made.dir;
-    const alertFile = makeHangingAlertFile(dir);
+    const alertFile = join(dir, "db-backup-to-s3.failure");
+    writeFileSync(alertFile, "upload rejected");
+    hangControl.readFileHangs = true;
 
     const result = await inspectDatabaseBackupHealth({
       enabled: true,
@@ -169,13 +167,13 @@ describe("inspectDatabaseBackupHealth", () => {
 
     expect(result.status).toBe("warning");
     expect(result.warnings.map((w) => w.code)).toEqual(["database_backup_check_failed"]);
+    expect(result.warnings[0]?.message).toContain("timed out");
     expect(result.latestBackup).toBeNull();
   });
 
   it("ignores an expired cached result after a timeout", async () => {
     const made = makeBackupDir(10);
     dir = made.dir;
-    const alertFile = makeHangingAlertFile(dir);
 
     await inspectDatabaseBackupHealth({
       enabled: true,
@@ -184,6 +182,10 @@ describe("inspectDatabaseBackupHealth", () => {
       now: NOW,
     });
     await new Promise((resolveTimer) => setTimeout(resolveTimer, 5));
+
+    const alertFile = join(dir, "db-backup-to-s3.failure");
+    writeFileSync(alertFile, "upload rejected");
+    hangControl.readFileHangs = true;
 
     const result = await inspectDatabaseBackupHealth({
       enabled: true,
