@@ -106,8 +106,11 @@ fi
 # Why --json + tail instead of OUT="$(dsh ...)": a buffered command
 # substitution holds the whole session in memory, so when the job is killed on
 # activeDeadlineSeconds the pod dies with zero output and the run is
-# undebuggable. Streaming each event line to container stdout means `kubectl
-# logs` always shows how far the engineer actually got.
+# undebuggable. Streaming each event line to container stdout means
+# `kubectl logs` can show how far the engineer actually got -- when the
+# apiserver's proxy to this pod's node kubelet answers at all (2026-11-09:
+# one node answered 502 to every proxy read while still scheduling pods,
+# which is exactly when this stream had to be durable some other way).
 DSH_LOG=/tmp/dsh-events.jsonl
 : > "$DSH_LOG"
 DSH_STARTED_AT="$(date +%s)"
@@ -120,7 +123,9 @@ DSH_TAIL=
 DSH_HB=
 
 # Evidence must outlive the pod. On a deadline kill the Job controller deletes
-# the pod in the same second, so `kubectl logs` is unreadable afterwards and
+# the pod in the same second, so `kubectl logs` is unreadable afterwards (and
+# on a node whose kubelet proxy is a 502 black hole it is unreadable
+# immediately -- 2026-11-09) and
 # the run reports nothing at all. The SIGTERM grace window is the last chance
 # to say anything, so report how far the session got before we exit.
 # session_summary builds (but does not send) a "how far did it get" digest of
@@ -193,7 +198,17 @@ record_run() {
   # $3 (optional): "running" for in-flight beats -- same run, rewritten in
   # place, rc still unknown; anything else means the run's final record.
   RUN_LOG="$DSH_LOG" RUN_STARTED_AT="$DSH_STARTED_AT" RUN_RC="$DSH_RC" \
-    RUN_COMPONENT="$DSH_PROFILE" RUN_TERMINATED="$1" RUN_EXCERPT="$2" RUN_MODE="${3:-final}" RUN_CM="sre-harness-run-log" node -e '
+    RUN_COMPONENT="$DSH_PROFILE" RUN_TERMINATED="$1" RUN_EXCERPT="$2" RUN_MODE="${3:-final}" \
+    RUN_NODE="$(kubectl get pod "$HOSTNAME" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)" \
+    RUN_LOGREADABLE="$(kubectl logs "$HOSTNAME" --tail=1 >/dev/null 2>&1 && echo yes || echo no)" \
+    RUN_CM="sre-harness-run-log" node -e '
+    # HOSTNAME is the pod name under kubelet (set-exported, not a subshell
+    # assignment) and every record_run call sits inside $0, so kubectl here
+    # reads this pod itself -- exactly what the probe below is about. The
+    # job/monitor pods mount the SA token explicitly into the well-known
+    # path even though automount is off, so kubectl works here; both reads
+    # end in || true / || no, so a kubectl-less environment degrades to
+    # empty fields instead of failing the record.
     const fs = require("fs");
     const https = require("https");
     const SA = "/var/run/secrets/kubernetes.io/serviceaccount/";
@@ -220,6 +235,14 @@ record_run() {
       events: events,
       toolCalls: tools,
       excerpt: String(process.env.RUN_EXCERPT || "").replace(/\s+/g, " ").slice(0, 500),
+      // Self-locating evidence. `kubectl logs` on this pod travels the
+      // apiserver->kubelet proxy of the node it landed on, and a node whose
+      // proxy is a 502 black hole (2026-11-09) silently destroys the job-log
+      // forensic path for every run it hosts. Record the node and whether
+      // this pod's own log read answered, so a reader can tell "no evidence"
+      // from "evidence unreadable on node X" without probing first.
+      node: process.env.RUN_NODE || "",
+      logReadable: process.env.RUN_LOGREADABLE || "",
     };
     const api = (method, path, body, ctype, done) => {
       const r = https.request({

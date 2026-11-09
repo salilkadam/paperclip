@@ -16,6 +16,16 @@ metadata:
 data:
   prompt.md: |
     {{- .Values.monitor.prompt | nindent 4 }}
+  # The kubelet-proxy probe from check 6, shipped as data next to the prompt
+  # it is referenced from, not via .Files.Get: a chart that renders outside
+  # its directory (a packaged .tgz, or a repo root other than the checkout
+  # layout) makes .Files.Get a render-time failure or an empty key, and an
+  # empty probe is exactly the silent-breakage class this chart keeps
+  # getting burned by. This copy must stay in sync with
+  # deploy/helm/sre-harness/probe-node-proxy.sh -- the chart test renders the
+  # ConfigMap and asserts it equals the script file, so drift fails CI.
+  probe-node-proxy.sh: |
+    {{- .Files.Get "probe-node-proxy.sh" | nindent 4 }}
   gpuai.patch.yml: |
     {{- include "sre-harness.gpuaiPatch" . | nindent 4 }}
   run.sh: |
@@ -141,7 +151,10 @@ data:
     fi
 
     # Record the verdict in the job log too, so evidence survives alongside
-    # the Slack post (kubectl logs job/... is the forensic path).
+    # the Slack post. The job log used to be "the forensic path" (kubectl logs
+    # job/...); on a node whose kubelet proxy black-holes (502 on every
+    # proxy read, 2026-11-09) it is unreadable by design, so the durable
+    # record is the run-log ConfigMap and the job log only when readable.
     printf '%s\n' "$DSH_FINAL"
     if [ -n "$DISPATCH_NOTE" ]; then
       # The dispatch decision belongs in the job log too. Without it, a reader

@@ -269,8 +269,44 @@ monitor:
        remediation that failed, and read what it got done from
        `kubectl -n bionicorg get cm sre-harness-run-log -o jsonpath='{.data.runs}'`:
        a deadline kill deletes the pod, so `kubectl logs job/...` answers
-       nothing there.
-    6. reliora.ai (namespace reliora-website, read-only):
+       nothing there - and on 2026-11-09 the run-log ConfigMap was the only
+       surviving evidence at all, because the API server's kubelet proxy on
+       the node hosting the monitor answered 502 to every log read (check 7
+       watches that path now).
+    6. kubelet-proxy reachability, read-only and cheap: run
+       `sh /config/probe-node-proxy.sh` (mounted from this ConfigMap; the
+       same logic applies if you do it by hand: `kubectl get nodes -o json`,
+       then per node `kubectl get --raw
+       "/api/v1/nodes/<INTERNAL-IP>:10250/proxy/healthz"`). Read the probe's
+       exit code AND its table; classify each node:
+       - 200 `ok`: the proxy path works on that node.
+       - a 401/403 reply (kubectl "is forbidden" / "(Forbidden)"): an auth
+         verdict. That is NORMAL for this ServiceAccount - it has no
+         nodes/proxy right, so today every node answers this way. It does
+         NOT prove the proxy works and does not prove it is broken: the
+         node is unjudged. Never flag a 401/403, never call those nodes
+         healthy either - say "blind by RBAC" if you mention them.
+       - any other status (502/503 from the proxy hop, 404 from something
+         else answering on the port, a 200 that is not `ok`) with the node
+         Ready and its pods starting: BLACK HOLE. The API server reaches
+         the kubelet port but the logs/exec/port-forward proxy is dead:
+         the node schedules and runs pods happily while every log read for
+         pods on it 502s. That is a HARNESS WARN (the harness loses its own
+         job logs and the operator loses live debugging on that node), NOT
+         a Paperclip FAIL - the workloads are healthy. Node/cluster-
+         infrastructure fault: never try to fix it from here, and do not
+         chase it with `kubectl exec` against pods on that node, which fail
+         the same way.
+       - dial-level failure (connection refused/timeout, no HTTP status at
+         all): only meaningful when at least one other node answered with a
+         real status - then that node's serving path is down: flag it. When
+         NO node answers with any status the probe reports PROBE-UNUSABLE
+         (exit 3): that is an environment problem, not a node verdict -
+         report kubelet-proxy state as UNKNOWN.
+       When any monitored log read answers 502, say so explicitly in the
+       report and name which node is blind, so the next reader goes to the
+       run-log ConfigMap instead of trusting an empty `kubectl logs`.
+    7. reliora.ai (namespace reliora-website, read-only):
        `curl -fsS -m 10 -o /dev/null https://reliora.ai/healthz` and
        `curl -fsS -m 10 -o /dev/null https://reliora.ai/_site-pricing.html`
        - either failing is FAIL. Then
@@ -337,6 +373,18 @@ remediate:
     - Read the triggering verdict first:
         kubectl -n bionicorg get jobs -l app.kubernetes.io/component=monitor --sort-by=.metadata.creationTimestamp
         kubectl -n bionicorg logs <newest monitor job>
+      If the log read answers 502/proxy error, the monitor pod landed on a
+      node whose kubelet proxy is broken (see monitor check 6; confirmed
+      2026-11-09): the verdict is NOT lost - read it from the durable
+      run-log ConfigMap instead:
+        kubectl -n bionicorg get cm sre-harness-run-log -o jsonpath='{.data.runs}'
+      The newest monitor line is the verdict that dispatched you. Same
+      fallback for any pod's logs on the blind node, including your own:
+      expect `kubectl logs`/`exec` to 502 there and do not burn the session
+      rediscovering it - use the run-log, events, and exec on pods on other
+      nodes. `sh /config/probe-node-proxy.sh` names which nodes are blind
+      (same exit codes and caveats as monitor check 6: 401/403 replies are
+      unjudged under this RBAC, not healthy).
     - bionicorg runs the platform (deploy/bionic-org). Postgres lives in the
       pg namespace: NEVER touch pg/ceph namespaces or any database data.
     - Git fork: salilkadam/paperclip on github.com; credential in $GIT_PAT;

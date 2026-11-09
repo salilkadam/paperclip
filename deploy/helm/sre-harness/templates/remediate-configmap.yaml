@@ -13,6 +13,13 @@ metadata:
 data:
   remediate-prompt.md: |
     {{- tpl .Values.remediate.prompt . | nindent 4 }}
+  # Same probe the monitor ships (see monitor-configmap.yaml for why this is
+  # copied as data instead of .Files.Get); the remediate prompt points at it
+  # so a session blind-sided by a 502 log read can name the black-holed node
+  # itself. Keep in sync with deploy/helm/sre-harness/probe-node-proxy.sh --
+  # the chart test compares this copy to the script file.
+  probe-node-proxy.sh: |
+    {{- .Files.Get "probe-node-proxy.sh" | nindent 4 }}
   gpuai.patch.yml: |
     {{- include "sre-harness.gpuaiPatch" . | nindent 4 }}
   run.sh: |
