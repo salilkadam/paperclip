@@ -37,32 +37,56 @@ the content. Pass `owner`, `repo`, `path`, and `ref` = the commit you are readin
 2. **What changed.** `list_commits` on each repository's default branch since
    the last-read commit. Also `get_latest_release` / `list_tags`. Note the new
    head commit; read everything below at that commit.
-3. **Read the changes that matter.** Skip tests-only and CI-only commits. For the
-   rest, `get_commit` shows the files; read the ones that change what the
-   product does: README, STATUS, ROADMAP, CHANGELOG, `docs/`, the catalogue of
-   checks and fixes, the Helm values (what is on by default), and the source of
-   any new or changed check, fixer or integration.
+ 3. **Read the changes that matter.** Skip tests-only and CI-only commits. For the
+    rest, `get_commit` shows the files; read the ones that change what the
+    product does: README, STATUS, ROADMAP, CHANGELOG, `docs/`, the catalogue of
+    checks and fixes, the Helm values (what is on by default), and the source of
+    any new or changed check, fixer or integration. **Also read the learn-path
+    surface** — the code and docs that let the product solve problems *outside*
+    the established fixers: the AI/propose interfaces (single-fix, multi-step
+    plan, runbook, deep-RCA investigator), the per-cluster learnt-knowledge layer
+    (what it stores and how it learns from operator outcomes), and any documented
+    path by which a researched problem+fix becomes a new policy/fixer signature.
+    These are what the daily scan's "learnable" bucket scores against, so they
+    must be in the notes even when they are `internal` or `planned`.
 4. **Update the facts** in `items.yaml`. One fact per entry:
 
-   ```yaml
-   - id: cap-027
-     fact: "One sentence, checkable."
-     category: capability   # capability | limit | safety | integration | positioning
-     status: shipped        # shipped | partial | planned
-     visibility: public     # public | internal
-     source: "repo/path/file.go"
-     as_of: 2026-11-02
-   ```
+    ```yaml
+    - id: cap-027
+      fact: "One sentence, checkable."
+      category: capability   # capability | limit | safety | integration | positioning | learn
+      status: shipped        # shipped | partial | planned
+      visibility: public     # public | internal
+      source: "repo/path/file.go"
+      as_of: 2026-11-02
+    ```
 
-   Never delete a fact: mark it `status: superseded` with `superseded_by: <id>`.
+    Never delete a fact: mark it `status: superseded` with `superseded_by: <id>`.
+
+    **Learn-path facts use `category: learn`.** Record the product's ability to
+    solve problems outside the established fixers, one fact per mechanism: the
+    propose/approve interface (what it can propose, the action kinds it is
+    allowed, the rollback and protected-namespace constraints), the learnt-
+    knowledge layer (what it stores, how it learns from operator outcomes), and
+    the path by which a researched problem+fix becomes a new policy/fixer
+    signature. Mark each with its true `status` and `visibility` — a propose
+    interface that exists in the proprietary repo is `internal`; a "proposes new
+    fixer signatures" path that is documented but not yet shipped is `planned`.
+    The daily scan needs these to score its "learnable" bucket, so do not skip
+    them because they are not a shipped fixer.
 5. **Rewrite `summary.md`** from the active facts (write `items.yaml` first, then
    `summary.md` last, each to a temporary name renamed into place, so the daily
    scan never reads half a rewrite), in this order:
    the `Last researched:` line with the date and each repository's commit;
-   a plain-English description; the "Problems it solves" table (the problem as a
-   practitioner would post it | what the product does | status | visibility |
-   evidence); search keywords (exact error strings and phrases people use, for
-   the daily scan); what it does **not** do; the safety model; how well proven.
+    a plain-English description; the "Problems it solves" table (the problem as a
+    practitioner would post it | what the product does | status | visibility |
+    evidence); **a "Beyond the fixers" section** — the learn-path: what the
+    product can propose or learn to fix outside the established fixers, the
+    constraints on it (action kinds, rollback, protected namespaces, human
+    approval), how it learns from operator outcomes, and the path by which a
+    researched problem+fix becomes a new policy/fixer signature, each with status
+    and visibility; search keywords (exact error strings and phrases people use,
+    for the daily scan); what it does **not** do; the safety model; how well proven.
 6. **Report in the task**: what changed this week in plain words (new
    capabilities, things that moved from planned to shipped, new limits), the
    commits read, and anything you could not classify. No raw ids; repository
