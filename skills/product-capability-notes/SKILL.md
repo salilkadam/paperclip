@@ -37,18 +37,25 @@ the content. Pass `owner`, `repo`, `path`, and `ref` = the commit you are readin
 2. **What changed.** `list_commits` on each repository's default branch since
    the last-read commit. Also `get_latest_release` / `list_tags`. Note the new
    head commit; read everything below at that commit.
- 3. **Read the changes that matter.** Skip tests-only and CI-only commits. For the
+  3. **Read the changes that matter.** Skip tests-only and CI-only commits. For the
     rest, `get_commit` shows the files; read the ones that change what the
     product does: README, STATUS, ROADMAP, CHANGELOG, `docs/`, the catalogue of
     checks and fixes, the Helm values (what is on by default), and the source of
-    any new or changed check, fixer or integration. **Also read the learn-path
-    surface** — the code and docs that let the product solve problems *outside*
-    the established fixers: the AI/propose interfaces (single-fix, multi-step
-    plan, runbook, deep-RCA investigator), the per-cluster learnt-knowledge layer
-    (what it stores and how it learns from operator outcomes), and any documented
-    path by which a researched problem+fix becomes a new policy/fixer signature.
-    These are what the daily scan's "learnable" bucket scores against, so they
-    must be in the notes even when they are `internal` or `planned`.
+    any new or changed check, fixer or integration.
+  3a. **Verify the learn-path is in the notes (every run, not just when it
+    changes).** The learn-path — the product's ability to solve problems *outside*
+    the established fixers — is a standing section of the notes, like the
+    "Problems it solves" table. Check whether `items.yaml` already has
+    `category: learn` facts and `summary.md` already has a "Beyond the fixers"
+    section. **If either is missing or stale, read the learn-path surface now**
+    (even if it did not change this week): the AI/propose interfaces (single-fix,
+    multi-step plan, runbook, deep-RCA investigator), the per-cluster
+    learnt-knowledge layer (what it stores and how it learns from operator
+    outcomes), and any documented path by which a researched problem+fix becomes
+    a new policy/fixer signature. These are what the daily scan's "learnable"
+    bucket scores against, so they must be in the notes even when they are
+    `internal` or `planned`. If the section is already present and current,
+    confirm it in your report and move on.
 4. **Update the facts** in `items.yaml`. One fact per entry:
 
     ```yaml
@@ -87,10 +94,12 @@ the content. Pass `owner`, `repo`, `path`, and `ref` = the commit you are readin
     researched problem+fix becomes a new policy/fixer signature, each with status
     and visibility; search keywords (exact error strings and phrases people use,
     for the daily scan); what it does **not** do; the safety model; how well proven.
-6. **Report in the task**: what changed this week in plain words (new
-   capabilities, things that moved from planned to shipped, new limits), the
-   commits read, and anything you could not classify. No raw ids; repository
-   names and file paths are fine.
+  6. **Report in the task**: what changed this week in plain words (new
+    capabilities, things that moved from planned to shipped, new limits), the
+    commits read, and anything you could not classify. **Also state whether the
+    "Beyond the fixers" section was already present and current, or was added /
+    updated this run** (and which learn-path facts were added or changed). No
+    raw ids; repository names and file paths are fine.
 
 ## Rules that keep the notes honest
 
