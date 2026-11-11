@@ -419,7 +419,7 @@ replaceConnectionGrantMembers: async (
     addConnectionInstallation: async (
       idOrUid: string,
       input: {
-        providerTenant?: { name?: string; externalId?: string };
+        providerTenant?: NonNullable<typeof connectionGrants.$inferInsert.providerTenant>;
         credentialSecretRefs?: typeof connectionGrants.$inferInsert.credentialSecretRefs;
         isDefault?: boolean;
       },
