@@ -475,7 +475,7 @@ export interface ConnectionTokenMintedResponse {
   providerTenantId?: string;
   externalSubject?: string;
   metadata?: Record<string, unknown>;
-  path: "exchange";
+  path: "exchange" | "github_app";
   token: string;
   tokenType: "Bearer" | string;
   expiresAt: string;

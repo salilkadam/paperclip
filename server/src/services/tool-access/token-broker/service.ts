@@ -30,7 +30,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 export function createConnectionTokenBroker(db: Db, { now, secrets, policySvc, audit, getConnectionRow, ensureDefaultOrganizationGrant }: TokenBrokerDependencies) {
   const { loadBrokerRunContext, enforceDefaultConnectionTokenRateLimit, hasExplicitConnectionTokenMintProfileGrant } = createTokenBrokerAdmission(db, now);
   const { recordConnectionTokenIssuance, auditConnectionTokenIssuance } = createTokenIssuanceRecorder(db, audit);
-  const mintExchangeConnectionToken = createConnectionTokenExchange(now, secrets);
+  const { mintExchangeConnectionToken, mintGitHubAppInstallationToken } = createConnectionTokenExchange(now, secrets);
   async function getConnectionApplication(
     connection: typeof toolConnections.$inferSelect,
   ) {
@@ -638,6 +638,117 @@ export function createConnectionTokenBroker(db: Db, { now, secrets, policySvc, a
               "The broker must not return stored upstream OAuth bearer tokens directly.",
           },
         );
+      }
+
+      if (path === "github_app") {
+        // GitHub App connections mint an *installation* token (JWT signed with
+        // the App's private key → /app/installations/:id/access_tokens). This is
+        // the identity that actually has read access to the org's repos; a user
+        // OAuth token on the same account does not. The installation id is
+        // carried on the grant's providerTenant.github.installationIds.
+        const installationIds = grant.providerTenant?.github?.installationIds ?? [];
+        const installationId = Number(installationIds[0]);
+        if (!Number.isFinite(installationId) || installationId <= 0) {
+          await fail(
+            409,
+            "GitHub App connection has no installation id; install the App on the target org",
+            "denied",
+            "github_app_installation_missing",
+            {
+              connection: { uid: connection.uid },
+              remediation: { action: "install_github_app" },
+            },
+          );
+        }
+        const appConnection = {
+          ...connection,
+          transportConfig: {
+            ...(connection.transportConfig ?? {}),
+            githubAppInstallationId: installationId,
+          },
+        };
+        try {
+          const minted = await mintGitHubAppInstallationToken(
+            {
+              connection: appConnection,
+              agentId: input.agentId,
+              runId: input.runId,
+              issueId: runContext.issueId,
+              ttlSeconds,
+            },
+            secrets,
+          );
+          const effectiveTtlSeconds = Math.max(
+            1,
+            Math.min(900, Math.ceil((minted.expiresAt.getTime() - now().getTime()) / 1000)),
+          );
+          const tokenHash = bearerTokenHash(minted.token);
+          await recordConnectionTokenIssuance({
+            companyId: connection.companyId,
+            applicationId: connection.applicationId,
+            connectionId: connection.id,
+            agentId: input.agentId,
+            runId: input.runId,
+            issueId: runContext.issueId,
+            projectId: runContext.projectId,
+            responsibleUserId: runContext.responsibleUserId,
+            path,
+            requestedScope,
+            issuedScope: minted.scope,
+            ttlSeconds: effectiveTtlSeconds,
+            expiresAt: minted.expiresAt,
+            tokenHash,
+            outcome: "success",
+            metadata: { tokenRef: tokenHash, tokenType: minted.tokenType },
+          });
+          await db
+            .update(connectionGrants)
+            .set({ lastUsedAt: new Date(), updatedAt: new Date() })
+            .where(eq(connectionGrants.id, grant.id));
+          await auditConnectionTokenIssuance({
+            companyId: connection.companyId,
+            connectionId: connection.id,
+            agentId: input.agentId,
+            runId: input.runId,
+            path,
+            outcome: "success",
+            details: {
+              ttlSeconds: effectiveTtlSeconds,
+              scopeCount: minted.scope.length,
+              tokenRef: tokenHash,
+            },
+          });
+          return {
+            status: "minted",
+            connectionId: connection.id,
+            connection: { id: connection.id, uid: connection.uid },
+            grantId: grant.id,
+            providerTenantId: grant.providerTenant?.externalId,
+            path: "github_app",
+            token: minted.token,
+            tokenType: minted.tokenType,
+            expiresAt: minted.expiresAt.toISOString(),
+            ttlSeconds: effectiveTtlSeconds,
+            scope: minted.scope,
+            attribution,
+          };
+        } catch (error) {
+          const details =
+            error instanceof HttpError && asRecord(error.details).code
+              ? asRecord(error.details)
+              : {};
+          const errorCode =
+            typeof details.code === "string" ? details.code : "mint_failed";
+          const outcome: ConnectionTokenIssuanceOutcome =
+            errorCode === "upstream_error" || errorCode === "upstream_token_missing"
+              ? "upstream_error"
+              : "failure";
+          await recordFailure(outcome, errorCode, {
+            ...details,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
       }
 
       const selectedGrant = grant;
