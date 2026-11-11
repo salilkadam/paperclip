@@ -336,6 +336,46 @@ export async function resolveManagedGitHubIdentitySelection(
   // make unrelated agents fail before their adapter starts and would also
   // suppress their otherwise-eligible legacy credential fallback.
   if (eligibleConnectionIds.size === 0) return { configured: false };
+
+  // GitHub App connections authenticate as an *installation* token, not a user
+  // OAuth token. The token broker mints that token from the App's private key +
+  // app id (vault secrets) and the installation id on the grant's
+  // providerTenant.github. A user/agent grant with a personal github.userId is
+  // the wrong identity for these — it 404s on the org's repos. So when the only
+  // eligible GitHub connection is a GitHub App, select its organization grant
+  // (which carries the installation id) and let the broker mint the
+  // installation token. This is the fix for the routing bug where an agent with
+  // only a GitHub App connection resolved to a personal OAuth identity that
+  // could not see the org's repos.
+  const eligibleConnections = githubConnections.filter((connection) =>
+    eligibleConnectionIds.has(connection.id),
+  );
+  const isGitHubAppConnection = (connection: (typeof githubConnections)[number]) => {
+    const refs = connection.credentialSecretRefs ?? [];
+    return (
+      refs.some((ref) => ref.configPath === "credentials.privateKey") &&
+      refs.some((ref) => ref.configPath === "credentials.appId")
+    );
+  };
+  const githubAppConnections = eligibleConnections.filter(isGitHubAppConnection);
+  if (githubAppConnections.length > 0 && githubAppConnections.length === eligibleConnections.length) {
+    const appConnection = githubAppConnections.find((c) => c.enabled && c.status === "active") ?? githubAppConnections[0];
+    const appGrants = await db.select().from(connectionGrants).where(and(
+      eq(connectionGrants.companyId, companyId),
+      eq(connectionGrants.connectionId, appConnection.id),
+      eq(connectionGrants.kind, "organization"),
+    ));
+    const appGrant = appGrants.find((g) => g.status === "active" && (g.providerTenant?.github?.installationIds?.length ?? 0) > 0);
+    if (appGrant) {
+      return { configured: true, identitySource: "dedicated", grant: appGrant };
+    }
+    return {
+      configured: true,
+      identitySource: "dedicated",
+      error: "The GitHub App connection has no active installation; install the App on the target org",
+    };
+  }
+
   const grants = await db.select().from(connectionGrants).where(and(
     eq(connectionGrants.companyId, companyId),
     inArray(connectionGrants.connectionId, [...eligibleConnectionIds]),

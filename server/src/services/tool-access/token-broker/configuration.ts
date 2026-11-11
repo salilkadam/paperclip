@@ -113,6 +113,28 @@ export function isPagesTokenConnection(
   );
 }
 
+/**
+ * A GitHub App connection carries the App's private key + app id as vault
+ * secrets (credentials.privateKey / credentials.appId) and authenticates as an
+ * *installation* token, not a user OAuth token. The token broker mints that
+ * installation token directly (JWT → /app/installations/:id/access_tokens), so
+ * it needs its own issuance path.
+ */
+export function isGitHubAppConnection(
+  connection: typeof toolConnections.$inferSelect,
+): boolean {
+  const config = asRecord(connection.config);
+  const transportConfig = asRecord(connection.transportConfig);
+  const isGitHub =
+    config.sourceTemplateKey === "github" ||
+    transportConfig.sourceTemplateKey === "github";
+  if (!isGitHub) return false;
+  const refs = connection.credentialSecretRefs ?? [];
+  const hasPrivateKey = refs.some((ref) => ref.configPath === "credentials.privateKey");
+  const hasAppId = refs.some((ref) => ref.configPath === "credentials.appId");
+  return hasPrivateKey && hasAppId;
+}
+
 export function inferConnectionTokenPath(
   connection: typeof toolConnections.$inferSelect,
   application?: typeof toolApplications.$inferSelect | null,
@@ -124,9 +146,11 @@ export function inferConnectionTokenPath(
   if (
     configuredPath === "exchange" ||
     configuredPath === "oauth_access" ||
-    configuredPath === "static"
+    configuredPath === "static" ||
+    configuredPath === "github_app"
   )
     return configuredPath;
+  if (isGitHubAppConnection(connection)) return "github_app";
   if (isPagesTokenConnection(connection, application)) return "exchange";
   if (
     readConfigString(broker, "tokenUrl") ||

@@ -1,3 +1,4 @@
+import { createSign, constants as cryptoConstants } from "node:crypto";
 import type { ActorInfo } from "../types.js";
 import { toolApplications, toolConnections } from "@paperclipai/db";
 import { badRequest, HttpError, unprocessable } from "../../../errors.js";
@@ -6,7 +7,7 @@ import { guardedRemoteHttpFetch } from "../../remote-http-fetch.js";
 import { secretService } from "../../secrets.js";
 
 import { tokenBrokerHttpFetchOptions } from "./endpoint-policy.js";
-import { readConfigString, readConfigStringArray, tokenBrokerConfig, isPagesTokenConnection, exchangeTokenUrl, pagesNamespaceFromScope } from "./configuration.js";
+import { readConfigString, readConfigStringArray, tokenBrokerConfig, isPagesTokenConnection, exchangeTokenUrl, pagesNamespaceFromScope, isGitHubAppConnection } from "./configuration.js";
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value))
     return value as Record<string, unknown>;
@@ -302,5 +303,143 @@ export function createConnectionTokenExchange(now: () => Date, secrets: ReturnTy
       scope: responseScope,
     };
   }
-  return mintExchangeConnectionToken;
+
+  /**
+   * Mint a GitHub App *installation* token. The connection carries the App's
+   * private key and app id as vault secrets (credentials.privateKey /
+   * credentials.appId); the grant's providerTenant.github carries the
+   * installation id(s) for the target org. We sign a short-lived JWT with the
+   * private key, exchange it for an installation token at
+   * /app/installations/:id/access_tokens, and return that token — which is what
+   * actually has read access to the org's repos (a user OAuth token on the same
+   * account does not, which is the routing bug this path fixes).
+   */
+  async function mintGitHubAppInstallationToken(
+    input: {
+      connection: typeof toolConnections.$inferSelect;
+      agentId: string;
+      runId: string;
+      issueId: string | null;
+      ttlSeconds: number;
+    },
+    secretClient: ReturnType<typeof secretService> = secrets,
+  ) {
+    const refs = input.connection.credentialSecretRefs ?? [];
+    const privateKeyRef = refs.find((ref) => ref.configPath === "credentials.privateKey");
+    const appIdRef = refs.find((ref) => ref.configPath === "credentials.appId");
+    if (!privateKeyRef || !appIdRef) {
+      throw unprocessable("GitHub App connection is missing its private key or app id", {
+        code: "github_app_credentials_missing",
+      });
+    }
+    const accessContext = accessContextForBroker({
+      connection: input.connection,
+      agentId: input.agentId,
+      runId: input.runId,
+      issueId: input.issueId,
+      configPath: "credentials.privateKey",
+    });
+    const [privateKey, appIdRaw] = await Promise.all([
+      secretClient.resolveSecretValue(
+        input.connection.companyId,
+        privateKeyRef.secretId,
+        privateKeyRef.versionSelector ?? "latest",
+        { accessContext, bindingContext: accessContext },
+      ),
+      secretClient.resolveSecretValue(
+        input.connection.companyId,
+        appIdRef.secretId,
+        appIdRef.versionSelector ?? "latest",
+        { accessContext, bindingContext: accessContext },
+      ),
+    ]);
+    const appId = Number(appIdRaw);
+    if (!Number.isFinite(appId) || appId <= 0) {
+      throw unprocessable("GitHub App app id is not a valid number", {
+        code: "github_app_appid_invalid",
+      });
+    }
+    // The installation id comes from the grant's providerTenant.github. The
+    // caller passes it through the connection's transportConfig for this mint.
+    const transportConfig = asRecord(input.connection.transportConfig);
+    const installationId = Number(
+      transportConfig.githubAppInstallationId ??
+        asRecord(transportConfig.githubApp).installationId,
+    );
+    if (!Number.isFinite(installationId) || installationId <= 0) {
+      throw unprocessable("GitHub App installation id is not configured", {
+        code: "github_app_installation_missing",
+      });
+    }
+    // Sign a short-lived JWT (RS256) with the App's private key.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const jwtHeader = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+    const jwtPayload = Buffer.from(
+      JSON.stringify({ iat: nowSec - 60, exp: nowSec + 540, iss: appId }),
+    ).toString("base64url");
+    const signingInput = `${jwtHeader}.${jwtPayload}`;
+    const signature = createSign("RSA-SHA256")
+      .update(signingInput)
+      .sign({ key: privateKey, padding: cryptoConstants.RSA_PKCS1_PADDING }, "base64url");
+    const jwt = `${signingInput}.${signature}`;
+    // Exchange the JWT for an installation token.
+    const endpoint = parseRemoteHttpEndpoint(
+      `https://api.github.com/app/installations/${installationId}/access_tokens`,
+      (message, code) => badRequest(message, { code }),
+    );
+    const response = await guardedRemoteHttpFetch(
+      endpoint,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${jwt}`,
+          accept: "application/vnd.github+json",
+          "x-github-api-version": "2022-11-28",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
+      },
+      tokenBrokerHttpFetchOptions(endpoint),
+    );
+    const payload = (await response.json().catch(() => ({}))) as unknown;
+    const record = asRecord(payload);
+    if (!response.ok) {
+      const code =
+        typeof record.code === "string"
+          ? record.code
+          : typeof record.message === "string"
+            ? record.message
+            : "upstream_error";
+      throw new HttpError(
+        response.status === 401 || response.status === 403 ? 409 : 502,
+        "GitHub App installation token mint failed",
+        {
+          code:
+            code === "Bad credentials" ? "credential_revoked" : "upstream_error",
+          upstreamCode: code,
+          upstreamStatus: response.status,
+        },
+      );
+    }
+    const token = typeof record.token === "string" ? record.token : null;
+    if (!token)
+      throw new HttpError(502, "GitHub App installation token mint did not return a token", {
+        code: "upstream_token_missing",
+      });
+    const expiresAt =
+      typeof record.expires_at === "string" && Number.isFinite(Date.parse(record.expires_at))
+        ? new Date(record.expires_at)
+        : new Date(now().getTime() + Math.min(input.ttlSeconds, 540) * 1000);
+    return {
+      token,
+      tokenType: "Bearer" as const,
+      expiresAt,
+      scope: ["github:installation"] as string[],
+    };
+  }
+
+  return {
+    mintExchangeConnectionToken,
+    mintGitHubAppInstallationToken,
+  };
 }
