@@ -1796,7 +1796,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
     const credentialSecretRefs = Array.isArray(body.credentialSecretRefs) ? body.credentialSecretRefs : [];
     const providerTenant = body.providerTenant && typeof body.providerTenant === "object"
-      ? body.providerTenant as { name?: string; externalId?: string }
+      ? body.providerTenant as NonNullable<typeof connectionGrants.$inferInsert.providerTenant>
       : undefined;
     const grant = await svc.addConnectionInstallation(connection.id, {
       providerTenant,
