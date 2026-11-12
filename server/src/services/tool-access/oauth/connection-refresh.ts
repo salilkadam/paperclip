@@ -13,6 +13,7 @@ import { withoutOAuthRefreshLease, type OAuthRefreshLeases } from "./refresh-lea
 import { oauthExpiresAtMs, oauthSecretRef } from "./client-settings.js";
 import { connectionSetupUrl, connectionReconnectUrl } from "../identifiers.js";
 import { singleFlight } from "../single-flight.js";
+import { isGitHubAppConnection } from "../token-broker/configuration.js";
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value))
     return value as Record<string, unknown>;
@@ -366,6 +367,10 @@ const oauthRefreshFlights = new Map<string, Promise<unknown>>();
       heartbeatRunId?: string | null;
     },
   ): Promise<typeof toolConnections.$inferSelect> {
+    // GitHub App connections authenticate with a private key + JWT, not OAuth.
+    // Skip the OAuth refresh entirely — it would fail (no refresh token) and
+    // mark the connection "error", blocking the gateway's github_app path.
+    if (isGitHubAppConnection(connection)) return connection;
     const oauth = oauthConfig(connection);
     if (
       typeof oauth.tokenUrl !== "string" ||
