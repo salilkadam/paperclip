@@ -169,6 +169,118 @@ post_partial_evidence() {
   post_to_slack "RUN TERMINATED BEFORE COMPLETION ($DSH_PROFILE, SIGTERM): ${DSH_PARTIAL:-no session events captured}"
 }
 
+# Which node is this pod on, and can its own logs be read back? Sets RUN_NODE
+# and RUN_LOG_READABLE ("yes"/"no"/"") for the next record_run; call it
+# immediately before every record_run so each record carries the answer of its
+# own moment (a node can black out mid-run).
+#
+# Why this exists: from 2026-11-09 one schedulable node answers the
+# apiserver->kubelet proxy with 502 for log/exec reads while serving pods
+# normally, and every log path the harness normally uses -- including reading
+# THIS pod's own logs, which the monitor prompt tells the sweep to do -- dies
+# silently on it. The run-log ConfigMap is then the only surviving evidence,
+# and without these fields a missing log reads as "no evidence gathered"
+# instead of "evidence unreadable on node X".
+#
+# Deliberately NOT kubectl: `kubectl logs <own pod>` is exactly the broken
+# path, and the SA may not even read pods outside bionicorg. A direct read of
+# the pod object via the in-cluster API is namespaced RBAC the harness
+# already holds (it writes the run-log CM the same way), and the object read
+# answers even when the node's log proxy is black -- the pod spec/status ride
+# on etcd, not on the kubelet. "no" therefore means: pod object rejected with
+# a real error, or the node answers this log request with a real non-auth HTTP
+# status (500/502...); a dial-level failure (hang, refused, TLS) and 401/403/
+# 404 are NOT "no" -- they prove nothing about this node, so the record stays
+# unprobed (null) instead of accusing on silence.
+probe_log_readability() {
+  RUN_NODE="" RUN_LOG_READABLE=""
+  local_out="$(POD_NAME="${HOSTNAME:-}" node -e '
+    const fs = require("fs");
+    const https = require("https");
+    const SA = "/var/run/secrets/kubernetes.io/serviceaccount/";
+    let ns, tok, ca;
+    try {
+      ns = fs.readFileSync(SA + "namespace", "utf8").trim();
+      tok = fs.readFileSync(SA + "token", "utf8").trim();
+      ca = fs.readFileSync(SA + "ca.crt");
+    } catch (e) { process.exit(0); } // no SA mounted: no probe, not a verdict
+    const name = encodeURIComponent(process.env.POD_NAME || "");
+    if (!ns || !tok || !name) process.exit(0);
+    const api = (path, wantBody, done) => {
+      const r = https.request({
+        host: "kubernetes.default.svc", path, ca,
+        headers: { authorization: "Bearer " + tok },
+      }, res => {
+        let d = "";
+        res.on("data", c => { d += c; });
+        res.on("end", () => done(res.statusCode, d));
+      });
+      r.setTimeout(6000, () => r.destroy(new Error("dial")));
+      r.on("error", () => done(0, "")); // dial-level failure
+      r.end();
+    };
+    const nodePath = "/api/v1/namespaces/" + ns + "/pods/" + name;
+    // Bounded worst case: the pod read, then one container probe. A node that
+    // black-holes silently (dial hangs) must not stall the heartbeat past the
+    // termination-grace budget; an unjudged result beats a late record.
+    setTimeout(() => process.exit(0), 13000).unref();
+    api(nodePath, true, (code, body) => {
+      if (code === 401 || code === 403) process.exit(0); // hop answered, unjudged
+      let nodeName = "", containers = [];
+      if (code === 200) {
+        try {
+          const p = JSON.parse(body);
+          nodeName = (p.spec && p.spec.nodeName) || "";
+          containers = ((p.spec && p.spec.containers) || []).map(c => c.name);
+        } catch (e) {}
+      }
+      // The pod object itself is the fallback verdict source: node name and
+      // containers come from etcd and answer even while the log proxy of the
+      // node is black. Without them there is nothing to attribute the fault
+      // to. (Apostrophe rule for everything in this node -e body: the whole
+      // script is embedded in single quotes, so one apostrophe anywhere ends
+      // the shell string mid-flight. dash -n on the rendered chart catches
+      // it; keep these comments apostrophe-free.)
+      if (!nodeName) {
+        if (code >= 400 && code !== 401 && code !== 403) {
+          process.stdout.write("node=|read=no");
+          process.exit(0);
+        }
+        process.exit(0); // unreachable object, unjudged
+      }
+      if (!containers.length) containers = [""]; // unnamed pod: default log read
+      const prefix = "node=" + nodeName + "|";
+      // Verdict rules, deliberately asymmetric:
+      //  - a definitive log answer (2xx = readable, any other HTTP status =
+      //    the node refused/proxied-fail the read) is reported WITH the node
+      //    name so the record can attribute a black hole.
+      //  - a dial-level failure (code 0: hang, connection refused, TLS error)
+      //    is NOT evidence about the node, so it stays unjudged rather than
+      //    accusing it. Same for 401/403/404 on the log read: the hop
+      //    answered but that status proves nothing about readability.
+      //  - when no log read reaches a definitive answer, still name the node
+      //    (read= pending, dropped by the sed below) so the record carries the
+      //    attribution even while the readability verdict is null.
+      let judged = false;
+      const decide = c => {
+        if (judged) return;
+        if (c >= 200 && c < 300) { judged = true; process.stdout.write(prefix + "read=yes"); process.exit(0); }
+        if (c === 0 || c === 401 || c === 403 || c === 404) return; // unjudged: no answer, or a status that proves nothing
+        judged = true;
+        process.stdout.write(prefix + "read=no"); // real 5xx / proxied failure from the node
+        process.exit(0);
+      };
+      for (const c of containers) api(nodePath + "/log?container=" + encodeURIComponent(c) + "&tailLines=1", false, decide);
+      // No container reached a definitive verdict (all hung or 401/403/404):
+      // name the node with a pending marker so the record still attributes it;
+      // read= stays null because the sed below only extracts yes/no.
+      process.on("exit", () => { if (!judged) process.stdout.write(prefix + "read=pending"); });
+    });
+  ' 2>/dev/null || true)"
+  RUN_NODE="$(printf '%s' "$local_out" | sed -n 's/^node=\([^|]*\)|.*$/\1/p')"
+  RUN_LOG_READABLE="$(printf '%s' "$local_out" | sed -n 's/.*read=\(ye[sd]\|n[oq]\)[^a-z]*$/\1/p')"
+}
+
 # Durable run record. The Job controller deletes the pod on a deadline kill and
 # again at the backoff limit, so ttlSecondsAfterFinished preserves nothing and
 # post-incident forensics over cron logs dies with the pod. Append one compact
@@ -192,8 +304,20 @@ record_run() {
   # deemed safe for the Slack report (this text is that same report's content).
   # $3 (optional): "running" for in-flight beats -- same run, rewritten in
   # place, rc still unknown; anything else means the run's final record.
+  #
+  # RUN_NODE / RUN_LOG_READABLE carry the probe_log_readability verdict.
+  # Keep the `${VAR:-}` default-expansion form. These scripts run under
+  # `set -u`, so a bare "$VAR" on this line aborts EVERY record with
+  # "parameter not set" before node ever runs -- the same class of bug as the
+  # definition-order note above. And do NOT prefix plain "$VAR" expecting no
+  # leak: dash aborts that form too. Verified against dash (the image shell):
+  # `${VAR:-}` reads "" when unset, keeps a per-call `VAR=x record_run ...`
+  # value when set, and leaks nothing back into the caller. An absent probe
+  # reaches node as "" and is recorded as null = "never probed", which stays
+  # distinguishable from "probed, unreadable".
   RUN_LOG="$DSH_LOG" RUN_STARTED_AT="$DSH_STARTED_AT" RUN_RC="$DSH_RC" \
-    RUN_COMPONENT="$DSH_PROFILE" RUN_TERMINATED="$1" RUN_EXCERPT="$2" RUN_MODE="${3:-final}" RUN_CM="sre-harness-run-log" node -e '
+    RUN_COMPONENT="$DSH_PROFILE" RUN_TERMINATED="$1" RUN_EXCERPT="$2" RUN_MODE="${3:-final}" RUN_CM="sre-harness-run-log" \
+    RUN_NODE="${RUN_NODE:-}" RUN_LOG_READABLE="${RUN_LOG_READABLE:-}" node -e '
     const fs = require("fs");
     const https = require("https");
     const SA = "/var/run/secrets/kubernetes.io/serviceaccount/";
@@ -219,7 +343,20 @@ record_run() {
       terminated: process.env.RUN_TERMINATED === "1",
       events: events,
       toolCalls: tools,
-      excerpt: String(process.env.RUN_EXCERPT || "").replace(/\s+/g, " ").slice(0, 500),
+      node: process.env.RUN_NODE || null,
+      // Probe outcome, not a guess: "yes"/"no" only when probe_log_readability
+      // reached a definitive log answer at record time; null when no probe ran
+      // or the probe stayed unjudged (hang, auth-only reply). null and "no"
+      // must stay distinct -- a record from a session that never probes (older
+      // image, manual run) says nothing about logs, while "no" is evidence the
+      // log path of that node was black.
+      logsReadable: /^(yes|no)$/.test(process.env.RUN_LOG_READABLE || "") ? process.env.RUN_LOG_READABLE : null,
+      // Verdict evidence lives here. 500 chars cuts a report off before its
+      // PAPERCLIP HEALTH / root-cause lines (observed 2026-11-12: the 17:30
+      // run-log record held the preamble of the sweep, not its verdict), and
+      // the run-log CM is the only durable record a kubelet-black-holed node
+      // leaves -- truncating it destroys the one copy of the finding.
+      excerpt: String(process.env.RUN_EXCERPT || "").replace(/\s+/g, " ").slice(0, 3000),
     };
     const api = (method, path, body, ctype, done) => {
       const r = https.request({
@@ -346,12 +483,13 @@ record_run() {
 
 # TERM arrives on a deadline kill or an eviction; INT on a manual stop. Report
 # and leave with 143, which says the run was cut short, not that it failed.
-trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" "$DSH_HB" 2>/dev/null; post_partial_evidence; record_run 1 "$DSH_PARTIAL"; exit 143' TERM INT
+trap 'DSH_RC=143; kill "$DSH_PID" "$DSH_TAIL" "$DSH_HB" 2>/dev/null; post_partial_evidence; probe_log_readability; record_run 1 "$DSH_PARTIAL"; exit 143' TERM INT
 
 # The first record is written BEFORE the session starts: from that second on,
 # the run-log says this run exists, the next monitor sweep can see a live
 # remediate/approvals entry, and a broken record path (RBAC, API) surfaces
 # while there is still a whole session left to act on it.
+probe_log_readability
 record_run 0 "session started" running
 DSH_DONE=/tmp/dsh-session-done
 
@@ -385,6 +523,7 @@ DSH_TAIL=$!
       exit 0
     fi
     session_summary
+    probe_log_readability
     record_run 0 "${DSH_PARTIAL:-heartbeat}" running
   done
 ) &
@@ -431,5 +570,6 @@ DSH_FINAL="$(DSH_RC="$DSH_RC" node -e '
 
 # Normal end of session: record before the caller spends the remaining grace on
 # its Slack post. rc distinguishes a clean pass from a handled failure.
+probe_log_readability
 record_run 0 "$DSH_FINAL"
 {{- end -}}

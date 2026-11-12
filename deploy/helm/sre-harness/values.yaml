@@ -270,7 +270,17 @@ monitor:
        `kubectl -n bionicorg get cm sre-harness-run-log -o jsonpath='{.data.runs}'`:
        a deadline kill deletes the pod, so `kubectl logs job/...` answers
        nothing there.
-    6. reliora.ai (namespace reliora-website, read-only):
+    6. Node log path (harness visibility, never a Paperclip signal). When a
+       `kubectl logs` attempt on any bionicorg pod - including the monitor's
+       own - answers `proxy error ... dialing <node>:10250 ... 502`, or when
+       the run-log records above carry `"logsReadable": "no"` with a `"node"`,
+       one node's apiserver->kubelet log path is black. The kubelet is
+       usually alive (it serves pods and answers :10250 directly); the proxy
+       hop is what fails. Name the node on the HARNESS line and never let
+       this move PAPERCLIP HEALTH: unreadable logs are missing evidence, not
+       a broken product. And never claim recovery from `"logsReadable":
+       null` - null means never probed (older image), not a healthy node.
+    7. reliora.ai (namespace reliora-website, read-only):
        `curl -fsS -m 10 -o /dev/null https://reliora.ai/healthz` and
        `curl -fsS -m 10 -o /dev/null https://reliora.ai/_site-pricing.html`
        - either failing is FAIL. Then
@@ -290,7 +300,7 @@ monitor:
     HARNESS: WARN
     DISPATCH: yes
     DISPATCH: no
-    PAPERCLIP HEALTH scores the Paperclip platform only (checks 1-4 and 6).
+    PAPERCLIP HEALTH scores the Paperclip platform only (checks 1-4 and 7).
     HARNESS: WARN is for the monitor machinery itself - a Failed monitor,
     approvals or remediate job, a run that died on its own deadline. Keeping
     those apart is what stops a broken remediation from being read as a
