@@ -1,8 +1,9 @@
-import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
-import { open as openFile } from "node:fs/promises";
+import { mkdtemp, open as openFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 import postgres from "postgres";
@@ -334,7 +335,7 @@ let cachedExternalCompressor: { key: string; compressor: ExternalCompressor | nu
  * lands on the loop. Returns null when none can be probed and the caller
  * falls back to the in-process pipeline.
  */
-function resolveExternalCompressor(): ExternalCompressor | null {
+async function resolveExternalCompressor(): Promise<ExternalCompressor | null> {
   const gzipBin = process.env.PAPERCLIP_GZIP_PATH || "gzip";
   const key = `${process.platform}|${gzipBin}`;
   if (cachedExternalCompressor?.key === key) return cachedExternalCompressor.compressor;
@@ -345,15 +346,37 @@ function resolveExternalCompressor(): ExternalCompressor | null {
         { command: "nice", args: ["-n", "19", gzipBin] },
         { command: gzipBin, args: [] },
       ];
+  // The probe must run the candidate with gzip's OWN argv. Probing
+  // `nice -n 19 <gzip> --version` instead asks nice a question: nice
+  // answers it before exec'ing anything, so the candidate passes on hosts
+  // where the real compression run would fail. Instead the compressor is
+  // told to deflate a throwaway archive, so a missing or broken candidate
+  // fails exactly where the backup would.
+  const probeDir = await mkdtemp(resolve(tmpdir(), "paperclip-gzip-probe-"));
+  const probeArchive = resolve(probeDir, "probe.gz");
   let compressor: ExternalCompressor | null = null;
-  for (const candidate of candidates) {
-    try {
-      if (spawnSync(candidate.command, [...candidate.args, "--version"], { stdio: "ignore" }).status === 0) {
-        compressor = candidate;
-        break;
+  try {
+    writeFileSync(probeArchive, "");
+    for (const candidate of candidates) {
+      try {
+        const probe = spawnSync(candidate.command, [...candidate.args, "-c", "-", probeArchive], {
+          input: "",
+          stdio: ["pipe", "ignore", "ignore"],
+        });
+        if (probe.status === 0) {
+          compressor = candidate;
+          break;
+        }
+      } catch {
+        // Probe failure just means this candidate is unavailable.
       }
+    }
+  } finally {
+    try {
+      unlinkSync(probeArchive);
+      rmSync(probeDir, { recursive: true, force: true });
     } catch {
-      // Probe failure just means this candidate is unavailable.
+      // A probe scratch-dir leak must never fail a backup.
     }
   }
   cachedExternalCompressor = { key, compressor };
@@ -379,7 +402,7 @@ async function runPgDumpBackup(opts: {
     PGCONNECT_TIMEOUT: String(opts.connectTimeout),
   };
 
-  const compressor = resolveExternalCompressor();
+  const compressor = await resolveExternalCompressor();
   if (compressor) {
     const gzipBin = process.env.PAPERCLIP_GZIP_PATH || "gzip";
     const dump = spawn(pgDumpBin, pgDumpArgs, { stdio: ["ignore", "pipe", "pipe"], env });

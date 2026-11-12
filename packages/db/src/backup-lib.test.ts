@@ -217,6 +217,33 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     });
   }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
 
+  it("rejects a compressor that answers --version but cannot compress, falling back in-process", async () => {
+    // The availability probe runs the candidate with gzip's OWN argv. A
+    // probe that asks `nice ... --version` is asking nice a question: it
+    // answers before exec'ing anything, so a candidate that dies on the
+    // real run (exit 127, observed on the 2026-11-12 hourly backup) is
+    // "available". This fixture gzip answers --version and refuses to
+    // compress; the probe must see through it and use the in-process
+    // pipeline instead of failing the whole backup.
+    const connectionString = await createTempDatabase();
+    const backupDir = createTempDir("pg-dump-lying-gzip-");
+    const payload = "-- lying gzip fixture\nSELECT 7;\n";
+    const payloadFile = path.join(backupDir, "payload.sql");
+    fs.writeFileSync(payloadFile, payload);
+    const dumpPath = writePgDumpFixture(backupDir, `cat '${payloadFile}'`);
+    const lyingGzip = path.join(backupDir, "gzip-fixture");
+    fs.writeFileSync(lyingGzip, "#!/bin/sh\n[ \"$1\" = \"--version\" ] && exit 0\nexit 127\n", { mode: 0o700 });
+
+    await withBackupCliEnv({ PAPERCLIP_PG_DUMP_PATH: dumpPath, PAPERCLIP_GZIP_PATH: lyingGzip }, async () => {
+      const backup = await runDatabaseBackup({
+        connectionString, backupDir,
+        retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+        backupEngine: "pg_dump",
+      });
+      expect(gunzipSync(fs.readFileSync(backup.backupFile)).toString()).toBe(payload);
+    });
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
   it("propagates pg_dump failures and removes partial archives when compressing externally", async () => {
     const connectionString = await createTempDatabase();
     const backupDir = createTempDir("pg-dump-failure-");
