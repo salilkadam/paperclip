@@ -15,6 +15,8 @@ import { browserUseService } from "./browser-use.js";
 import { isBrowserUseConnection } from "./browser-use-client.js";
 import { COGNEE_STDIO_TEMPLATE, cogneeCloudUrl, callCogneeCloud } from "./cognee-connection.js";
 import { HttpError } from "../errors.js";
+import { isGitHubAppConnection } from "./tool-access/token-broker/configuration.js";
+import { createConnectionTokenExchange } from "./tool-access/token-broker/exchange.js";
 import { claimSlackRateLimitRetry } from "./connectors/slack-retry.js";
 import { resolveSlackTaskAuthority } from "./connectors/slack-authority.js";
 import { SLACK_TOOLS } from "@paperclipai/shared";
@@ -4483,6 +4485,46 @@ export function createToolGatewayService(
         });
       }
     }
+    // GitHub App connections mint an *installation* token (JWT signed with the
+    // App's private key → /app/installations/:id/access_tokens). The grant has
+    // no oauth.access_token — the installation token IS the credential. Mint it
+    // here and use it as the Authorization header so the agent's gh CLI can
+    // authenticate against GitHub.
+    if (isGitHubAppConnection(connection)) {
+      const installationIds = grant.providerTenant?.github?.installationIds ?? [];
+      const installationId = Number(installationIds[0]);
+      if (!Number.isFinite(installationId) || installationId <= 0) {
+        throw new ToolGatewayHttpError(
+          409,
+          "GitHub App connection has no installation id; install the App on the target org",
+          "github_app_installation_missing",
+          { connectionId: connection.id, grantId: grant.id },
+        );
+      }
+      const appConnection = {
+        ...connection,
+        transportConfig: {
+          ...(connection.transportConfig ?? {}),
+          githubAppInstallationId: installationId,
+        },
+      };
+      const { mintGitHubAppInstallationToken } = createConnectionTokenExchange(
+        () => new Date(),
+        secretService(db),
+      );
+      const minted = await mintGitHubAppInstallationToken(
+        {
+          connection: appConnection,
+          agentId: session.agentId ?? "unknown",
+          runId: session.runId ?? "unknown",
+          issueId: session.issueId ?? null,
+          ttlSeconds: 900,
+        },
+        secretService(db),
+      );
+      return { Authorization: `Bearer ${minted.token}` };
+    }
+
     const headers: Record<string, string> = {};
     for (const ref of connection.credentialRefs ?? []) {
       if (ref.placement !== "header") continue;
