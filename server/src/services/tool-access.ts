@@ -131,6 +131,8 @@ import {
   splitRemoteUrlCredential,
 } from "./remote-url-credentials.js";
 import { secretService } from "./secrets.js";
+import { isGitHubAppConnection } from "./tool-access/token-broker/configuration.js";
+import { createConnectionTokenExchange } from "./tool-access/token-broker/exchange.js";
 import { connectionCredentialConfigPath as credentialRefConfigPath, validateConnectionGrantSecretOwnership, writeConnectionCredential } from "./connection-credentials.js";
 
 import type { ConfigureRailwaySsh, RailwaySshSetup } from "@paperclipai/shared";
@@ -4307,6 +4309,37 @@ export function toolAccessService(
       if (legacyShared && !grantId) return resolveCredentialHeaders(connection, actor);
       let grant = grantId ? allowed.find(candidate => candidate.id === grantId) : allowed.length === 1 ? allowed[0] : undefined;
       if (!grant) throw forbidden("Choose an active GitHub authorization you can use.");
+      // GitHub App connections authenticate with a private key + JWT, not OAuth.
+      // Mint an installation token instead of looking for oauth.access_token.
+      if (isGitHubAppConnection(connection)) {
+        const installationIds = grant.providerTenant?.github?.installationIds ?? [];
+        const installationId = Number(installationIds[0]);
+        if (!Number.isFinite(installationId) || installationId <= 0) {
+          throw unprocessable("GitHub App connection has no installation id; install the App on the target org");
+        }
+        const appConnection = {
+          ...connection,
+          transportConfig: {
+            ...(connection.transportConfig ?? {}),
+            githubAppInstallationId: installationId,
+          },
+        };
+        const { mintGitHubAppInstallationToken } = createConnectionTokenExchange(
+          () => new Date(),
+          secretService(db),
+        );
+        const minted = await mintGitHubAppInstallationToken(
+          {
+            connection: appConnection,
+            agentId: actor.actorId ?? "unknown",
+            runId: "github-read",
+            issueId: null,
+            ttlSeconds: 900,
+          },
+          secretService(db),
+        );
+        return { Authorization: `Bearer ${minted.token}` };
+      }
       if (asRecord(asRecord(connection.config).oauth).connectorProfile === "github.code") {
         grant = await refreshOAuthGrantCredentials({ companyId, connectionId, grantId: grant.id, actor, forceRefresh });
       }
