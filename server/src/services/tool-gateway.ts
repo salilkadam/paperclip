@@ -1458,6 +1458,12 @@ export function createToolGatewayService(
       or(
         inArray(toolConnections.healthStatus, ["ok", "healthy", "degraded"]),
         eq(toolConnections.credentialPolicy, "per_user"),
+        // GitHub App connections carry credentials.privateKey in their
+        // credentialSecretRefs. Their health can be stuck at "error" from a
+        // stale OAuth refresh failure (OAuth no longer applies — they use a
+        // private key + JWT). Keep them discoverable so the gateway's
+        // github_app path can mint the installation token and reset the health.
+        sql`${toolConnections.credentialSecretRefs}::jsonb @> '[{"configPath":"credentials.privateKey"}]'::jsonb`,
       ),
       eq(toolApplications.companyId, companyId),
       inArray(toolApplications.type, ["mcp_http", "mcp_stdio", "rest_api"]),
