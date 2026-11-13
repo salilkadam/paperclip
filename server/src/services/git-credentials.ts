@@ -564,9 +564,10 @@ export async function resolveManagedGitHubCredential(
           githubAppInstallationId: installationId,
         },
       };
+      const secrets = secretService(db);
       const { mintGitHubAppInstallationToken } = createConnectionTokenExchange(
         () => new Date(),
-        secretService(db),
+        secrets,
       );
       const minted = await mintGitHubAppInstallationToken(
         {
@@ -576,7 +577,7 @@ export async function resolveManagedGitHubCredential(
           issueId: context.issueId ?? null,
           ttlSeconds: 900,
         },
-        secretService(db),
+        secrets,
       );
       return {
         configured: true,
