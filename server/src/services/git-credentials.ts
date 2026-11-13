@@ -12,6 +12,8 @@ import {
 import { and, eq, inArray, or } from "drizzle-orm";
 import { isGitHubDotCom } from "./github-fetch.js";
 import { secretService } from "./secrets.js";
+import { isGitHubAppConnection } from "./tool-access/token-broker/configuration.js";
+import { createConnectionTokenExchange } from "./tool-access/token-broker/exchange.js";
 import { toolAccessService } from "./tool-access.js";
 
 /**
@@ -544,6 +546,54 @@ export async function resolveManagedGitHubCredential(
         issueId: context.issueId,
         heartbeatRunId: context.heartbeatRunId,
       });
+    }
+    // GitHub App connections authenticate with a private key + JWT, not OAuth.
+    // The grant has no oauth.access_token — mint an installation token instead.
+    const connection = await db.select().from(toolConnections).where(eq(toolConnections.id, grant.connectionId)).limit(1);
+    const conn = connection[0];
+    if (conn && isGitHubAppConnection(conn)) {
+      const installationIds = grant.providerTenant?.github?.installationIds ?? [];
+      const installationId = Number(installationIds[0]);
+      if (!Number.isFinite(installationId) || installationId <= 0) {
+        return { configured: true, identitySource: selection.identitySource, error: "GitHub App connection has no installation id; install the App on the target org" };
+      }
+      const appConnection = {
+        ...conn,
+        transportConfig: {
+          ...(conn.transportConfig ?? {}),
+          githubAppInstallationId: installationId,
+        },
+      };
+      const { mintGitHubAppInstallationToken } = createConnectionTokenExchange(
+        () => new Date(),
+        secretService(db),
+      );
+      const minted = await mintGitHubAppInstallationToken(
+        {
+          connection: appConnection,
+          agentId: context.agentId ?? "unknown",
+          runId: context.heartbeatRunId ?? "unknown",
+          issueId: context.issueId ?? null,
+          ttlSeconds: 900,
+        },
+        secretService(db),
+      );
+      return {
+        configured: true,
+        identitySource: selection.identitySource,
+        credential: {
+          token: minted.token,
+          source: "managed_connection" as const,
+          secretName: null,
+          githubIdentity: {
+            userId: grant.providerTenant?.github?.userId ?? "unknown",
+            login: grant.providerTenant?.github?.login ?? "unknown",
+          },
+          identitySource: selection.identitySource,
+          connectionId: conn.id,
+          grantId: grant.id,
+        },
+      };
     }
     const accessRef = grant.credentialSecretRefs.find((ref) => ref.configPath === "oauth.access_token");
     const github = grant.providerTenant?.github;
