@@ -247,8 +247,21 @@ monitor:
     3. `kubectl -n bionicorg logs deploy/bionic-org --since=40m` - search for
        error/fatal/exception lines; report counts and the notable distinct
        messages, ignoring known-benign routine noise.
-    4. `kubectl -n bionicorg get events --sort-by=.lastTimestamp` - Warning
-       events from the last 40 minutes.
+    4. `kubectl -n bionicorg get events --sort-by=.firstTimestamp` - Warning
+       events from the last 40 minutes. Aggregation rule: kubectl collapses
+       repeats into ONE event object, so `.lastTimestamp` only says when the
+       newest repeat happened, `.firstTimestamp` when the condition started
+       and `.count` how often it repeated. Sorting on `.lastTimestamp` pulls
+       a long-standing condition into the "last 40 minutes" window - a pod
+       that started flapping at 09:00 still headlines a 16:00 sweep with
+       count=6 - so a Warning counts as a live problem only when its
+       `.firstTimestamp` falls inside the window. A rolling
+       `.lastTimestamp` behind an older `.firstTimestamp` means the condition
+       is chronic and unchanged, not new: give it one bullet with its real
+       age and count, and let it stand alone it must not make the verdict
+       WARN or FAIL, nor request an engineer. For a probe Warning, also check
+       whether the target was actually degraded: a pod that stayed Ready
+       with unchanged restarts is degraded-at-worst, not down.
     5. `kubectl -n bionicorg get jobs -o wide` - any Failed jobs (the
        sre-harness-monitor job failing is itself reportable). Supersession
        rule: these jobs use backoffLimit=0 on purpose - the next cron tick
