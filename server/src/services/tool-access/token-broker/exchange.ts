@@ -339,6 +339,24 @@ export function createConnectionTokenExchange(now: () => Date, secrets: ReturnTy
       issueId: input.issueId,
       configPath: "credentials.privateKey",
     });
+    // Ensure the secret bindings exist before resolving. GitHub App connections
+    // created via the non-standard setup path may have credentialSecretRefs
+    // without corresponding company_secret_bindings rows.
+    for (const ref of [privateKeyRef, appIdRef]) {
+      try {
+        await secretClient.createBinding({
+          companyId: input.connection.companyId,
+          secretId: ref.secretId,
+          targetType: "tool_connection",
+          targetId: input.connection.id,
+          configPath: ref.configPath,
+          versionSelector: ref.versionSelector ?? "latest",
+        });
+      } catch (err) {
+        // "already exists" is fine — the binding is already there.
+        if (err instanceof Error && !err.message.includes("already exists")) throw err;
+      }
+    }
     const [privateKey, appIdRaw] = await Promise.all([
       secretClient.resolveSecretValue(
         input.connection.companyId,
