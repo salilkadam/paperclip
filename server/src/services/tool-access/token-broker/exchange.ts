@@ -341,21 +341,22 @@ export function createConnectionTokenExchange(now: () => Date, secrets: ReturnTy
     });
     // Ensure the secret bindings exist before resolving. GitHub App connections
     // created via the non-standard setup path may have credentialSecretRefs
-    // without corresponding company_secret_bindings rows.
-    for (const ref of [privateKeyRef, appIdRef]) {
-      try {
-        await secretClient.createBinding({
-          companyId: input.connection.companyId,
+    // without corresponding company_secret_bindings rows. Sync the refs for
+    // this connection to create any missing bindings.
+    try {
+      await secretClient.syncSecretRefsForTarget(
+        input.connection.companyId,
+        { targetType: "tool_connection", targetId: input.connection.id },
+        (input.connection.credentialSecretRefs ?? []).map((ref) => ({
           secretId: ref.secretId,
-          targetType: "tool_connection",
-          targetId: input.connection.id,
           configPath: ref.configPath,
           versionSelector: ref.versionSelector ?? "latest",
-        });
-      } catch (err) {
-        // "already exists" is fine — the binding is already there.
-        if (err instanceof Error && !err.message.includes("already exists")) throw err;
-      }
+        })),
+      );
+    } catch (err) {
+      // If the sync fails, log it but continue — the resolveSecretValue call
+      // will throw a more specific error if the bindings are still missing.
+      console.error("Failed to sync secret refs for GitHub App connection:", err);
     }
     const [privateKey, appIdRaw] = await Promise.all([
       secretClient.resolveSecretValue(
