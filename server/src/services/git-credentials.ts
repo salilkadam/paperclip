@@ -653,8 +653,9 @@ export async function resolveManagedGitHubCredential(
     const result = await acquire(selection);
     if (result.credential) return result;
     failure = result;
-  } catch {
-    failure = { configured: true, identitySource: selection.identitySource, error: "GitHub credentials are temporarily unavailable" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    failure = { configured: true, identitySource: selection.identitySource, error: `GitHub credentials are temporarily unavailable: ${msg}` };
   }
   // Retry credential acquisition, never the GitHub operation. An alternate
   // authorization must still belong to this exact principal and account.
