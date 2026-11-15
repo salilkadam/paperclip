@@ -147,8 +147,10 @@ Every post you create contains the full blog link, so this search always finds i
 
 ## C. The two LinkedIn posts for each scheduled or published blog
 
-Only for blogs whose Ghost status is **scheduled** or **published** right now (`gh_get_post`; never assume),
-and that do not carry the Ghost tag `#linkedin`. For each:
+For EVERY blog whose Ghost status is **scheduled** or **published** right now (`gh_get_post`; never assume),
+published or due within the last 7 days or later, check BOTH accounts with the search rule above, whether or not
+the blog carries `#linkedin`: the tag is only a marker, never proof that both posts exist (a blog tagged by an
+older process had a company post and no personal post). Create only what is missing. For each:
 1. Company post day: the day after the blog's `published_at` as Ghost reports it (Monday for a Sunday blog,
    Wednesday for a Tuesday blog), 09:00 America/Los_Angeles in UTC (16:00Z while US daylight time applies,
    17:00Z from the first Sunday of November: Mon 2 Nov 09:00 = 17:00Z). Personal post: that time + 30 minutes.
@@ -178,8 +180,9 @@ and that do not carry the Ghost tag `#linkedin`. For each:
    `gh_get_post`. If it is not published, or not scheduled to publish at least 12 hours before the post, pull
    the post back with `update-post-tool` `status: "draft"` and say so. A post must never link a blog that is not
    live. Section C schedules it again once the blog is scheduled.
-2. For each account, group the posts that are not published by blog slug. More than one for a slug is a
-   duplicate: keep the scheduled one (or the oldest, if none is scheduled), pull the others to `draft`, and
+2. For each account SEPARATELY, group that account's posts that are not published by blog slug. More than one
+   post on the SAME account for the same slug is a duplicate. One Reliora Inc post plus one Salil Kadam post for a
+   blog is the correct pair, never a duplicate: keep the scheduled one (or the oldest, if none is scheduled), pull the others to `draft`, and
    list them in the task under "Duplicates to delete" (account, first line, time). Request `delete-post-tool`
    for each duplicate draft at most ONCE: if a delete for that post already waits for approval on any open
    task, do not request it again.
