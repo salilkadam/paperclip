@@ -225,7 +225,7 @@ record_run() {
       // PAPERCLIP HEALTH line that was the entire point of the run, so the
       // one thing the log could not show was why it dispatched. Operators
       // are pointed at this ConfigMap by the monitor prompt itself when a
-      // run dies, so a sweep's report has to stay readable end to end.
+      // run dies, so the report of a sweep has to stay readable end to end.
       excerpt: String(process.env.RUN_EXCERPT || "").replace(/\s+/g, " ").slice(0, 3000),
     };
     const api = (method, path, body, ctype, done) => {
