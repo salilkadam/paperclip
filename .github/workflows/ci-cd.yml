@@ -134,9 +134,9 @@ jobs:
   # bionic-org, so a merged harness change is live without a manual helm run
   # (it had drifted 16 days behind main before 2026-11-15). Its own job: a
   # harness failure never blocks or rolls back the app, but it shows red.
-  # Its cluster-scoped node-read ClusterRole/Binding are reachable by name only
-  # (deploy/rbac/gha-deploy-bionicorg.yaml); a chart change to their rules needs
-  # a human apply, because the deploy SA cannot escalate.
+  # Its cluster-scoped node-read ClusterRole/Binding are readable by name only
+  # (deploy/rbac/gha-deploy-bionicorg.yaml); a chart change to them fails this
+  # job and needs a human helm upgrade.
   deploy-sre-harness:
     name: Deploy sre-harness (auto-revert on failure)
     runs-on: k3s-salilkadam
@@ -184,7 +184,7 @@ jobs:
           [[ "$(helm get values sre-harness -n bionicorg -o json)" == "null" ]] \
             || { echo "::error::sre-harness has user-supplied values; add them to this job before deploying"; exit 1; }
           helm upgrade sre-harness ./deploy/helm/sre-harness \
-            --namespace bionicorg --atomic --timeout 10m
+            --namespace bionicorg --atomic --timeout 10m --history-max 20
           kubectl -n bionicorg rollout status deployment/sre-harness --timeout=120s
           echo "::notice::deployed sre-harness chart from ${GITHUB_SHA::7}"
 
