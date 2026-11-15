@@ -7,9 +7,12 @@
 # schedule without board approval, so pending approvals never make a post miss
 # its slot; the owner removes a post by hand if the board dislikes it.
 #
-# What stays gated for these companies too: TryPost publish-now, delete, approve,
-# recurrence, repurpose and queue tools; Ghost unpublish and delete; TryPost
-# keys and webhooks stay blocked. Every other company keeps the full gate.
+# What stays gated for these companies too: TryPost publish-now (any status
+# other than "draft"/"scheduled", or none), delete, approve, recurrence,
+# repurpose and queue tools; Ghost gh_unpublish_post and gh_delete_post (as for
+# every company, gh_update_post can still set a post back to draft without a
+# card). TryPost keys and webhooks stay blocked. Every other company keeps the
+# full gate.
 DIRECT_PUBLISH_COMPANY_IDS=(
   62d63984-df6c-49be-981c-1273f68a451c   # Reliora Inc
 )

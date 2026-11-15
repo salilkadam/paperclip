@@ -20,9 +20,12 @@
 # (or disabled) is updated in place. Zero TryPost connections found is fatal.
 #
 # Direct-publish companies (lib/direct-publish.sh; Reliora since 2026-11-15)
-# get policy 2 narrowed to publish-now only (`status` exactly "publishing"):
-# their agents create, edit and SCHEDULE posts without a card. Policies 1 and 3
-# are the same for every company.
+# get policy 2 as an allow-list: a create/update whose `status` is exactly
+# "draft" or "scheduled" runs without a card; any other status string (publish
+# now, a typo, other casing) needs approval, and so does an omitted status
+# (policy 2b, created for those companies only). Policies 1 and 3 are the same
+# for every company. Not a time gate: "scheduled" with a past scheduled_at would
+# post at once; the calendar routine never schedules a time that has passed.
 # Policy names are unique per company, so one TryPost connection per company
 # is supported; a second one stops the run with the server's 409.
 #
@@ -30,8 +33,8 @@
 # agents, using an all-zero social_account_id so nothing could post even if the
 # gate failed:
 #   - status "publishing"  -> must be ask_first (the action request is declined);
-#   - status omitted       -> must be ask_first (declined); allowed for a
-#                             direct-publish company;
+#   - status omitted       -> must be ask_first (declined);
+#   - status "Scheduled "  -> must be ask_first (an allow-list, not a block-list);
 #   - status "scheduled"   -> must be ask_first; allowed for a direct-publish
 #                             company (TryPost rejects the fake account);
 #   - status "draft"       -> must be allowed (TryPost rejects the fake account).
@@ -89,10 +92,15 @@ desired_policies() {
       conditions: null },
     (if $direct == 1 then
     { name: "org-instructions: ask first for TryPost go-live (non-draft create/update)",
-      description: "Direct publish (owner, 2026-11-15): agents create, edit and schedule posts without a card. Only publish-now (status \"publishing\") needs board approval; the approved call then runs exactly once.",
+      description: "Direct publish (owner, 2026-11-15): agents create, edit and schedule posts without a card when status is exactly \"draft\" or \"scheduled\". Any other status (publish now included) needs board approval; the approved call then runs exactly once.",
       policyType: "require_approval", priority: 40, enabled: true,
       selectors: { toolNames: ["create-post-tool","create-posts-tool","update-post-tool"], connectionId: $conn },
-      conditions: { arguments: { fieldEquals: { status: "publishing" } } } }
+      conditions: { arguments: { fieldMatches: { status: "^(?!(draft|scheduled)$)[\\s\\S]*$" } } } },
+    { name: "org-instructions: ask first for TryPost go-live (status omitted)",
+      description: "Direct publish (owner, 2026-11-15): a create/update that omits status needs board approval, so an edit cannot change the go-live state of a post implicitly.",
+      policyType: "require_approval", priority: 40, enabled: true,
+      selectors: { toolNames: ["create-post-tool","create-posts-tool","update-post-tool"], connectionId: $conn },
+      conditions: { arguments: { fieldAbsent: ["status"] } } }
     else
     { name: "org-instructions: ask first for TryPost go-live (non-draft create/update)",
       description: "Agents may create and edit posts only as drafts (status: \"draft\" must be sent explicitly). Any create/update that schedules, queues or publishes (or omits status) needs board approval; the approved call then runs exactly once.",
@@ -172,8 +180,9 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
     done
     if [[ "$DRY" -eq 0 ]]; then
       probe "$cid" "$conn" "$agent" "publish now" "{\"social_account_id\":\"$ZERO\",\"status\":\"publishing\",\"content\":\"governance probe\"}" ask_first
+      probe "$cid" "$conn" "$agent" "status omitted" "{\"social_account_id\":\"$ZERO\",\"content\":\"governance probe\"}" ask_first
+      probe "$cid" "$conn" "$agent" "odd status" "{\"social_account_id\":\"$ZERO\",\"status\":\"Scheduled \",\"content\":\"governance probe\"}" ask_first
       gated=ask_first; [[ $direct -eq 1 ]] && gated=allowed
-      probe "$cid" "$conn" "$agent" "status omitted" "{\"social_account_id\":\"$ZERO\",\"content\":\"governance probe\"}" "$gated"
       probe "$cid" "$conn" "$agent" "scheduled" "{\"social_account_id\":\"$ZERO\",\"status\":\"scheduled\",\"scheduled_at\":\"2099-01-01T00:00:00Z\",\"content\":\"governance probe\"}" "$gated"
       probe "$cid" "$conn" "$agent" "explicit draft" "{\"social_account_id\":\"$ZERO\",\"status\":\"draft\",\"content\":\"governance probe\"}" allowed
     fi

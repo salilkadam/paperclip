@@ -153,6 +153,9 @@ and that do not carry the Ghost tag `#linkedin`. For each:
    Wednesday for a Tuesday blog), 09:00 America/Los_Angeles in UTC (16:00Z while US daylight time applies,
    17:00Z from the first Sunday of November: Mon 2 Nov 09:00 = 17:00Z). Personal post: that time + 30 minutes.
    A blog published more than 7 days ago gets no new LinkedIn posts: tag it `#linkedin` and say so.
+   Never schedule a time that has already passed (a past `scheduled_at` posts at once). If the company time
+   has passed, use the next Monday or Wednesday 09:00 that no other company post holds, and the personal post
+   30 minutes after it.
 2. Company post (account "Reliora Inc"). Search first (the rule above). If none exists: `create-post-tool`
    with `status: "draft"`: a hook line, a 2 to 4 sentence summary, the takeaway, the link
    `https://reliora.ai/blog/<slug>` (never the Ghost host), 3 to 5 hashtags. Attach the blog's hero
