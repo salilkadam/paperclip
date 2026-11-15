@@ -208,12 +208,14 @@ log "  connections: $GITHUB_CONN $gh_conn, $COMPOSIO_CONN $cp_conn (active)"
 #   1. the write tools outside the PR workflow: always blocked;
 #   2. the PR-workflow tools on any owner but Reliora-Inc;
 #   3. the PR-workflow tools on any repo but reliora-website;
-#   4. file writes to branch "main"; 5. file writes that name no branch (they
-#      would land on the default branch, main).
+#   4./5./6. branch allow-list for branch and file writes: the branch must be a
+#      string starting with "content/" (so never main, refs/heads/main, "" or a
+#      missing/null branch that would land on the default branch, main). main
+#      has no server-side protection on this GitHub plan, so this is the gate.
 # Every write/destructive tool in the catalog must be in GH_PR_TOOLS or
 # GH_BLOCKED_TOOLS; a new one stops the run until a person classifies it.
 GH_PR_TOOLS='["create_branch","create_or_update_file","push_files","create_pull_request","update_pull_request","add_issue_comment"]'
-GH_FILE_TOOLS='["create_or_update_file","push_files"]'
+GH_FILE_TOOLS='["create_branch","create_or_update_file","push_files"]'
 GH_BLOCKED_TOOLS='["delete_file","actions_run_trigger","merge_pull_request","pull_request_review_write","update_issue_comment","request_copilot_review","sub_issue_write","update_pull_request_branch","add_comment_to_pending_review","issue_write","create_repository","fork_repository","add_reply_to_pull_request_comment"]'
 desired_gh="$(jq -n --arg conn "$gh_conn" --arg a "$marketer" --arg n "$GH_BLOCK_POLICY" \
   --argjson pr "$GH_PR_TOOLS" --argjson files "$GH_FILE_TOOLS" --argjson blocked "$GH_BLOCKED_TOOLS" '
@@ -222,8 +224,9 @@ desired_gh="$(jq -n --arg conn "$gh_conn" --arg a "$marketer" --arg n "$GH_BLOCK
   [ pol($n; "The content marketer never merges, deletes, triggers workflows, edits issues or reviews, or creates/forks repositories."; $blocked; null),
     pol("org-instructions: content marketer PRs only to Reliora-Inc"; "Pull-request tools are limited to the Reliora-Inc owner."; $pr; {arguments: {fieldNotEquals: {owner: "Reliora-Inc"}}}),
     pol("org-instructions: content marketer PRs only to reliora-website"; "Pull-request tools are limited to the reliora-website repository."; $pr; {arguments: {fieldNotEquals: {repo: "reliora-website"}}}),
-    pol("org-instructions: content marketer never writes to main"; "A merge to main deploys reliora.ai; the marketer writes to a branch and opens a PR."; $files; {arguments: {fieldEquals: {branch: "main"}}}),
-    pol("org-instructions: content marketer names a branch"; "A file write without a branch lands on the default branch (main)."; $files; {arguments: {fieldAbsent: ["branch"]}}) ]')"
+    pol("org-instructions: content marketer branches start with content/"; "Branch names must start with content/ (e.g. content/new-blog-page). main deploys reliora.ai and is never written directly."; $files; {arguments: {fieldMatches: {branch: "^(?!content/)"}}}),
+    pol("org-instructions: content marketer names a branch"; "A branch write without a branch lands on the default branch (main)."; $files; {arguments: {fieldAbsent: ["branch"]}}),
+    pol("org-instructions: content marketer branch is never null"; "A null branch can fall back to the default branch (main)."; $files; {arguments: {fieldIn: {branch: [null]}}}) ]')"
 existing="$(api GET "/companies/$cid/tools/policies" | jq '(.policies // .)')"
 while read -r want; do
   name="$(jq -r .name <<<"$want")"
@@ -240,6 +243,12 @@ while read -r want; do
     log "  policy ok: $name"
   fi
 done < <(jq -c '.[]' <<<"$desired_gh")
+# failed_upstream: the last allowed probe reached GitHub and GitHub refused it
+failed_upstream() {
+  jq -e '(.error != null and (.result == null or .result.content == null))
+         or (.result.data.isError == true)
+         or ((.result.content // "") | tostring | test("\"success\"\\s*:\\s*false"))' <<<"$PROBE_RESP" >/dev/null
+}
 # probe TOOL PARAMS EXPECTED [REASON]: a real gateway test call as the marketer
 probe() {
   local resp decision ar
@@ -260,17 +269,22 @@ probe() {
 }
 if (( ! DRY )); then
   # a repository that does not exist, so nothing could be written even if the block failed
-  # nothing below can change a repository: each target does not exist, is refused, or fails upstream
-  probe create_branch '{"owner":"zz-governance-probe","repo":"none","branch":"probe"}' off deny_policy_block
-  probe create_branch '{"owner":"Reliora-Inc","repo":"zz-governance-probe","branch":"probe"}' off deny_policy_block
-  probe merge_pull_request '{"owner":"Reliora-Inc","repo":"reliora-website","pullNumber":0}' off deny_policy_block
-  probe create_or_update_file '{"owner":"Reliora-Inc","repo":"reliora-website","branch":"main","path":"zz-probe","message":"probe","content":"probe"}' off deny_policy_block
-  probe create_or_update_file '{"owner":"Reliora-Inc","repo":"reliora-website","path":"zz-probe","message":"probe","content":"probe"}' off deny_policy_block
-  probe delete_file '{"owner":"Reliora-Inc","repo":"reliora-website","branch":"zz-governance-probe","path":"zz-probe","message":"probe"}' off deny_policy_block
-  # allowed, and must fail upstream: the head branch does not exist, so GitHub refuses the PR
-  probe create_pull_request '{"owner":"Reliora-Inc","repo":"reliora-website","head":"zz-governance-probe-no-such-branch","base":"main","title":"governance probe"}' allowed
-  jq -e '.error != null and (.result == null or .result.content == null) or (.result.data.isError == true)' <<<"$PROBE_RESP" >/dev/null \
-    || die "create_pull_request probe ran upstream and did NOT fail: a real PR may exist: $(head -c 400 <<<"$PROBE_RESP")"
+  # No probe below can change a repository even if its gate were broken: every
+  # target owner, repo or branch does not exist. Each blocked probe trips one
+  # policy only (fieldNotEquals/fieldMatches on the others pass).
+  B="content/zz-governance-probe-no-such-branch"
+  probe create_branch "{\"owner\":\"zz-governance-probe\",\"repo\":\"reliora-website\",\"branch\":\"$B\"}" off deny_policy_block   # policy 2 (owner)
+  probe create_branch "{\"owner\":\"Reliora-Inc\",\"repo\":\"zz-governance-probe\",\"branch\":\"$B\"}" off deny_policy_block     # policy 3 (repo)
+  probe merge_pull_request '{"owner":"zz-governance-probe","repo":"none","pullNumber":0}' off deny_policy_block                            # policy 1
+  probe create_or_update_file '{"owner":"Reliora-Inc","repo":"reliora-website","branch":"zz-governance-probe-no-such-branch","path":"zz-probe","message":"probe","content":"cHJvYmU="}' off deny_policy_block   # policy 4 (prefix)
+  probe push_files '{"owner":"Reliora-Inc","repo":"reliora-website","branch":"refs/heads/zz-governance-probe-no-such-branch","message":"probe","files":[]}' off deny_policy_block                       # policy 4 (refs/ form)
+  # allowed, and must fail upstream (the branch does not exist), so nothing is written
+  probe create_or_update_file "{\"owner\":\"Reliora-Inc\",\"repo\":\"reliora-website\",\"branch\":\"$B\",\"path\":\"zz-probe\",\"message\":\"probe\",\"content\":\"cHJvYmU=\"}" allowed
+  failed_upstream || die "create_or_update_file probe ran upstream and did NOT fail: a real commit may exist on $B: $(head -c 400 <<<"$PROBE_RESP")"
+  probe create_pull_request "{\"owner\":\"Reliora-Inc\",\"repo\":\"reliora-website\",\"head\":\"$B\",\"base\":\"main\",\"title\":\"governance probe\"}" allowed
+  failed_upstream || die "create_pull_request probe ran upstream and did NOT fail: a real PR may exist: $(head -c 400 <<<"$PROBE_RESP")"
+  # the null/absent-branch policies are not probed live (a broken gate could
+  # fall back to main); their read-back above is the proof
   probe get_me '{}' allowed
   # the block keys on the catalog's risk: a mutating GitHub tool classified "read" would slip past it
   access="$(api GET "/tool-connections/$gh_conn/test-agents/$marketer/access")"
@@ -285,7 +299,7 @@ if (( ! DRY )); then
   [[ -z "$unclassified" ]] || die "GitHub write tools not classified as PR workflow or blocked: $unclassified (add them to GH_PR_TOOLS or GH_BLOCKED_TOOLS)"
   open_blocked="$(jq -r --argjson blocked "$GH_BLOCKED_TOOLS" '[.access.tools[] | select(.toolName as $t | $blocked | index($t)) | select(.decision != "off") | .toolName] | join(", ")' <<<"$access")"
   [[ -z "$open_blocked" ]] || die "GitHub tools that must be blocked are still open to the marketer: $open_blocked"
-  log "  GitHub: marketer writes only PRs to Reliora-Inc/reliora-website (never main, never merge); every other write tool off"
+  log "  GitHub: marketer writes only content/* branches and PRs on Reliora-Inc/reliora-website (never main, never merge); every other write tool off"
   # Composio must not be a second GitHub write path
   gh_via_composio="$(api GET "/tool-connections/$cp_conn/composio/apps" | jq -r '[(.apps // [])[] | select((.toolkit | test("^github"; "i")) and .status != "not_connected") | .toolkit] | join(", ")')"
   [[ -z "$gh_via_composio" ]] || die "Composio has a GitHub toolkit connected ($gh_via_composio): the marketer could write to GitHub through it"
