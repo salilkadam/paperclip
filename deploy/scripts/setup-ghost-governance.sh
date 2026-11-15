@@ -15,6 +15,13 @@
 # A policy that exists with a different type, priority, selectors or conditions
 # (or disabled) is updated in place. Zero Ghost connections found is fatal.
 #
+# Direct-publish companies (lib/direct-publish.sh; Reliora since 2026-11-15):
+# the policy is kept but DISABLED, so their agents create, schedule and publish
+# blog posts without a card (setup-ghost-connections.sh likewise leaves
+# gh_publish_post out of their ask-first set). The probes then expect
+# "published" and "status omitted" to be allowed, and every allowed probe must
+# still fail upstream against the non-existent probe site.
+#
 # Then it PROVES the gate with real gateway test calls as one of the company's
 # agents, against a site that does not exist ("zz-governance-probe"), so nothing
 # could be created even if the gate failed:
@@ -50,6 +57,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+# shellcheck source=lib/direct-publish.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/direct-publish.sh"
 log() { echo "[ghost-governance] $*"; }
 for b in curl jq; do command -v "$b" >/dev/null || die "$b is required"; done
 [[ -r "${PAPERCLIP_BOARD_KEY_FILE:-}" ]] || die "PAPERCLIP_BOARD_KEY_FILE must point to a readable file"
@@ -68,11 +77,12 @@ api() {
   cat "$WORK/resp"
 }
 
+# desired_policy CONNECTION_ID DIRECT(0|1)
 desired_policy() {
-  jq -n --arg conn "$1" '
+  jq -n --arg conn "$1" --argjson direct "${2:-0}" '
     { name: "org-instructions: ask first for Ghost posts created live (non-draft create)",
       description: "Agents create blog posts only as drafts (status: \"draft\" must be sent explicitly). A create that publishes or schedules (or omits status) needs board approval; the approved call then runs exactly once. Publishing a draft goes through gh_publish_post, which is always ask-first.",
-      policyType: "require_approval", priority: 40, enabled: true,
+      policyType: "require_approval", priority: 40, enabled: ($direct != 1),
       selectors: { toolNames: ["gh_create_post"], connectionId: $conn },
       conditions: { arguments: { fieldNotEquals: { status: "draft" } } } }'
 }
@@ -117,13 +127,15 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
 
   for conn in $(jq -r '.[].id' <<<"$conns"); do
     log "$cname: Ghost connection $conn"
-    want="$(desired_policy "$conn")"
+    direct=0; is_direct_publish "$cid" && direct=1
+    log "  direct publish: $([[ $direct -eq 1 ]] && echo yes || echo no)"
+    want="$(desired_policy "$conn" "$direct")"
     name="$(jq -r .name <<<"$want")"
     have="$(jq -c --arg n "$name" --arg conn "$conn" '[.[] | select(.name==$n and .selectors.connectionId==$conn)][0] // empty' <<<"$existing")"
     if [[ -z "$have" ]]; then
       log "  create: $name"
       [[ "$DRY" -eq 1 ]] || { printf '%s' "$want" > "$WORK/p.json"; api POST "/companies/$cid/tools/policies" "$WORK/p.json" >/dev/null; }
-    elif ! jq -e --argjson w "$want" '(.policyType==$w.policyType) and (.enabled==true) and (.priority==$w.priority)
+    elif ! jq -e --argjson w "$want" '(.policyType==$w.policyType) and (.enabled==$w.enabled) and (.priority==$w.priority)
              and ((.selectors | .toolNames |= sort)==($w.selectors | .toolNames |= sort))
              and (.conditions==$w.conditions)' <<<"$have" >/dev/null; then
       log "  update (drifted): $name"
@@ -132,8 +144,9 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
       log "  ok: $name"
     fi
     if [[ "$DRY" -eq 0 ]]; then
-      probe "$cid" "$conn" "$agent" "published" "{\"tenant_id\":\"$PROBE_SITE\",\"title\":\"governance probe\",\"status\":\"published\"}" ask_first
-      probe "$cid" "$conn" "$agent" "status omitted" "{\"tenant_id\":\"$PROBE_SITE\",\"title\":\"governance probe\"}" ask_first
+      gated=ask_first; [[ $direct -eq 1 ]] && gated=allowed
+      probe "$cid" "$conn" "$agent" "published" "{\"tenant_id\":\"$PROBE_SITE\",\"title\":\"governance probe\",\"status\":\"published\"}" "$gated"
+      probe "$cid" "$conn" "$agent" "status omitted" "{\"tenant_id\":\"$PROBE_SITE\",\"title\":\"governance probe\"}" "$gated"
       probe "$cid" "$conn" "$agent" "explicit draft" "{\"tenant_id\":\"$PROBE_SITE\",\"title\":\"governance probe\",\"status\":\"draft\"}" allowed
     fi
     total=$((total + 1))

@@ -5,8 +5,8 @@
 #
 #   Blog on reliora.ai           Sunday and Tuesday 08:00 PT, one blog per day
 #   Reliora Inc LinkedIn page    the next day, Monday / Wednesday 09:00 PT
-#   Salil Kadam personal repost  the same Monday / Wednesday 12:00 PT, a short
-#                                blurb with the live company post's link
+#   Salil Kadam personal post    the same Monday / Wednesday 09:30 PT (company
+#                                post + 30 min), first person, linking the blog
 #
 #   1. "Reliora content calendar" — ONE routine, ONE lane: it runs daily at
 #      07:00 PT and whenever Ghost reports a new post (webhook "Post created",
@@ -22,15 +22,20 @@
 #      The webhook URL and secret are written to WEBHOOK_URL_FILE (0600) when the
 #      trigger is created, never printed; add them in Ghost admin: Settings >
 #      Integrations > custom integration > Add webhook, event "Post created".
-#   2. "Reliora content calendar: repost" Mon/Wed 09:30 and 11:30 PT: once a
-#      company post is live, the personal repost is prepared.
+#   2. archives "Reliora content calendar: repost" (retired 2026-11-15): the
+#      personal post is scheduled by the calendar together with the company post,
+#      both linking the blog, so it no longer waits for the company post to go live.
+#      Two routines creating personal posts with different links let duplicates
+#      past each one's search (two personal posts for the same blog, Nov 2026).
 #   3. archives the retired "Reliora content calendar: new draft" routine if one
 #      still exists, and pauses Reliora's older "Daily blog -> LinkedIn" routine.
 #   4. reads everything back and fails if any value differs.
 #
-# Every go-live (scheduling a blog, a company post, a repost) stays a board
-# approval card (Ghost + TryPost ask-first policies); the board approves with
-# "Approve all" on the task, and a note goes to #reliora-board.
+# No board approval (owner, 2026-11-15): Reliora is a direct-publish company
+# (lib/direct-publish.sh), so scheduling a blog or a LinkedIn post runs directly;
+# run setup-trypost-governance.sh, setup-ghost-governance.sh and
+# setup-ghost-connections.sh after changing that list. Delete, unpublish and
+# publish-now stay ask-first.
 #
 # Requires: curl jq; PAPERCLIP_BOARD_KEY_FILE — a 0600 file holding a board API
 # key (`paperclipai token board create --ttl-days 1`). Never on a command line.
@@ -47,7 +52,6 @@ OLD_ROUTINE="Daily blog -> LinkedIn"
 CAL_TITLE="Reliora content calendar"
 CAL_CRON="0 7 * * *"
 REP_TITLE="Reliora content calendar: repost"
-REP_CRON="30 9,11 * * 1,3"
 NEW_TITLE="Reliora content calendar: new draft"
 WEBHOOK_URL_FILE="${WEBHOOK_URL_FILE:-$HOME/.reliora-ghost-webhook}"
 DRY=0
@@ -80,26 +84,34 @@ write() { if (( DRY )); then log "  DRY-RUN would $1 $2"; echo '{}'; else api "$
 
 read -r -d '' CAL_DESC <<'EOF' || true
 The owner's standing content practice for reliora.ai. Use the **trypost** skill (tool gateway) and the
-Ghost blog tools (`gh_*`): pass `tenant_id: "reliora"` in EVERY `gh_*` call (a call without it fails, and an
-approval card without it cannot name the blog). Times are America/Los_Angeles.
-This routine runs daily at 07:00 and whenever Ghost reports a new post. Only one run is active at a time:
-a new post that arrives while this task waits for the board does not start another run; you pick it up
-after the board's decision (section E).
+Ghost blog tools (`gh_*`): pass `tenant_id: "reliora"` in EVERY `gh_*` call. Times are America/Los_Angeles.
+This routine runs daily at 07:00 and whenever Ghost reports a new post. Only one run is active at a time.
+
+**No board approval (owner decision, 2026-11-15).** Scheduling a blog (`gh_publish_post`) and creating,
+editing or scheduling a LinkedIn post (`create-post-tool`, `update-post-tool` with `status: "scheduled"`) run
+directly. The trypost skill's "draft, then ask the board" step does not apply to Reliora. If the board dislikes a
+post, the owner removes it by hand. Still gated, and not needed for this routine: publish-now, delete, unpublish.
 
 | What | When |
 |---|---|
 | Blog publishes on reliora.ai | **Sunday and Tuesday, 08:00**, one blog per day |
 | Reliora Inc LinkedIn page post (account "Reliora Inc", linkedin-page) | the **next day**: Monday (Sunday's blog), Wednesday (Tuesday's blog), **09:00** |
-| Salil Kadam personal repost | handled by the routine "Reliora content calendar: repost" |
+| Salil Kadam personal post (account "Salil Kadam", linkedin) | the same day, **09:30** (company post + 30 minutes) |
 
-Every go-live (scheduling a blog, scheduling a LinkedIn post) returns `approval_required` and adds a card
-to this task: that is expected. Request each once, never retry. The board approves with **Approve all**.
+Both LinkedIn posts link the blog at `https://reliora.ai/blog/<slug>`, so the blog is always live first, then
+the company post, then the personal post.
+
+**One of each per blog, ever.** A blog gets exactly one Reliora Inc page post and exactly one Salil Kadam post.
+Before you create any LinkedIn post, search that account for the blog slug with `list-posts-tool`
+(`channels` = [that account's id], `search` = the slug) once for EACH status: draft, scheduled,
+pending_approval, published, failed. Any hit means the post exists: use it (section C), never create another.
+Every post you create contains the full blog link, so this search always finds it.
 
 ## A. New drafts: bring them to the house style
 
-1. `gh_list_posts` with `status: "draft"`, all pages. Skip drafts tagged `#calendar` (their schedule is
-   already requested and waiting for the board). Skip drafts that are not ready (empty body, title with
-   TODO, WIP or TEST, or marked do-not-publish) and say so in the task.
+1. `gh_list_posts` with `status: "draft"`, all pages. Skip drafts tagged `#calendar` (already scheduled once).
+   Skip drafts that are not ready (empty body, title with TODO, WIP or TEST, or marked do-not-publish) and say
+   so in the task.
 2. Read two published posts as the style reference: `gh_get_post` on slugs
    `we-are-looking-for-our-first-design-partners` and `expiring-certificates-outage`.
 3. Check each draft against the house style, and fix it with `gh_update_post` (`html`, drafts only):
@@ -117,6 +129,8 @@ to this task: that is expected. Request each once, never retry. The board approv
      Never a public `linkedin` tag.
    - Keep the author's meaning, facts and voice. Change structure and formatting only. Never invent
      claims, numbers, customers or quotes. Record what you changed, per post, in the task.
+4. A draft that repeats a scheduled or published blog (the same failure and root cause) is not scheduled: say
+   so in the task, tag it `#duplicate`, and leave it for a person.
 
 ## B. Schedule each ready draft into the blog calendar
 
@@ -124,90 +138,62 @@ to this task: that is expected. Request each once, never retry. The board approv
    Write the list of taken dates (YYYY-MM-DD, Pacific) in the task before choosing.
 2. Give each ready draft, oldest first, the next **Sunday or Tuesday** after today at 08:00
    America/Los_Angeles that is NOT in that list. One blog per day.
-   Days already promised to drafts tagged `#calendar` count as taken (see the task that requested them).
-   Check the date you chose against the list once more: if it is in the list, take the next free one.
-3. Request it: `gh_publish_post` with `tenant_id: "reliora"`, `post_id` and `published_at` (ISO 8601 with the
+3. Schedule it: `gh_publish_post` with `tenant_id: "reliora"`, `post_id` and `published_at` (ISO 8601 with the
    offset for THAT date: `-08:00` from the first Sunday of November until the second Sunday of March (that
    Sunday's 08:00 is already `-07:00`), `-07:00` the rest of the year; e.g. `2026-11-03T08:00:00-08:00`,
-   `2027-03-14T08:00:00-07:00`).
-   The approved call schedules it; it appears on reliora.ai at that time.
-4. Tag the draft `#calendar` right away (`gh_update_post`, tags = existing + `#calendar`, with the `#`), so no
-   other run requests it again. If the board rejects the schedule, remove `#calendar` so it can be retried.
+   `2027-03-14T08:00:00-07:00`). It runs directly.
+4. Check it with `gh_get_post` (status `scheduled`, the date you chose), then tag the post `#calendar`
+   (`gh_update_post`, tags = existing + `#calendar`, with the `#`).
 
-## C. Company LinkedIn post for each scheduled blog
+## C. The two LinkedIn posts for each scheduled or published blog
 
-Only for blogs whose Ghost status is **scheduled** or **published** right now. Check each with `gh_get_post`;
-never assume. A draft does not qualify, even when its schedule card is pending on this task: its company post
-is requested on the run after the board approves the schedule. For each qualifying blog that does **not**
-carry the Ghost tag `#linkedin`:
-1. Guard: `list-posts-tool` with `search` = the blog slug and `channels` = [Reliora Inc page id]. A hit means
-   it already has its post: tag it `#linkedin` (step 4) and move on.
-2. Draft the post (`create-post-tool`, account "Reliora Inc", `status: "draft"`): a hook line, a 2 to 4 sentence
-   summary, the takeaway, the link `https://reliora.ai/blog/<slug>` (never the Ghost host), 3 to 5 hashtags.
-   Attach the blog's hero as the post's image (**blog-visuals** section 3:
-   `attach-media-from-url-tool`, `urls: [{"url": "https://reliora.ai/blog-media/<path>", "alt": "..."}]`), so
-   each company post previews with its own picture. Check it with `preview-post-tool`.
-3. Request it: `update-post-tool` with `status: "scheduled"` and `scheduled_at` = 09:00 America/Los_Angeles in UTC
-   (16:00Z while US daylight time applies, 17:00Z from the first Sunday of November: Mon 2 Nov 09:00 = 17:00Z)
-   on the day after the blog's `published_at` **as Ghost reports it** (Monday for a Sunday blog, Wednesday for a
-   Tuesday blog). Never earlier than that day.
-4. Tag the blog `#linkedin`: `gh_update_post` with tags = its existing tags + `#linkedin`. The tag is exactly
-   `#linkedin` with the `#` (internal). Never send `linkedin` without the `#`: it shows publicly on reliora.ai.
+Only for blogs whose Ghost status is **scheduled** or **published** right now (`gh_get_post`; never assume),
+and that do not carry the Ghost tag `#linkedin`. For each:
+1. Company post day: the day after the blog's `published_at` as Ghost reports it (Monday for a Sunday blog,
+   Wednesday for a Tuesday blog), 09:00 America/Los_Angeles in UTC (16:00Z while US daylight time applies,
+   17:00Z from the first Sunday of November: Mon 2 Nov 09:00 = 17:00Z). Personal post: that time + 30 minutes.
+   A blog published more than 7 days ago gets no new LinkedIn posts: tag it `#linkedin` and say so.
+   Never schedule a time that has already passed (a past `scheduled_at` posts at once). If the company time
+   has passed, use the next Monday or Wednesday 09:00 that no other company post holds, and the personal post
+   30 minutes after it.
+2. Company post (account "Reliora Inc"). Search first (the rule above). If none exists: `create-post-tool`
+   with `status: "draft"`: a hook line, a 2 to 4 sentence summary, the takeaway, the link
+   `https://reliora.ai/blog/<slug>` (never the Ghost host), 3 to 5 hashtags. Attach the blog's hero
+   (**blog-visuals** section 3: `attach-media-from-url-tool`, `urls: [{"url": "https://reliora.ai/blog-media/<path>", "alt": "..."}]`)
+   and check it with `preview-post-tool`. Then schedule it: `update-post-tool` with `status: "scheduled"` and
+   `scheduled_at` from step 1. If the search found a draft for this blog, schedule that draft instead; if it found a
+   scheduled one at another time, move it to the right time with `update-post-tool`.
+3. Personal post (account "Salil Kadam"). Search first. If none exists: `create-post-tool` with
+   `status: "draft"`: 2 or 3 short sentences in first person, Salil's own take (different words from the company
+   post), at most 2 hashtags, and `https://reliora.ai/blog/<slug>` on its own last line. Check it with
+   `preview-post-tool`, then schedule it at the company time + 30 minutes. A found draft or a post at another time
+   is scheduled or moved the same way as in step 2.
+4. Check both with `get-post-tool` (status `scheduled`, the right times), then tag the blog `#linkedin`:
+   `gh_update_post` with tags = its existing tags + `#linkedin` (exactly `#linkedin`, with the `#`; without the
+   `#` it shows publicly on reliora.ai).
 
-## D. Safety check
+## D. Safety and duplicate check
 
-For every Reliora Inc page post that is scheduled (any date) and links `reliora.ai/blog/<slug>`: check the blog with
-`gh_get_post`. If it is not published, or not scheduled to publish at least 12 hours before the post, pull the post
-back with `update-post-tool` `status: "draft"` and say so. A post must never link a blog that is not live.
-
-## Writing for the board (every task comment and every #reliora-board note)
-
-The board reads these quickly and decides from them. Write them by the **board-plain-language** skill (the
-question first, what yes and no each do) and the **simplified-english** word list: short sentences, plain words,
-one item per line.
-- Name each blog by its **title** and public link `https://reliora.ai/blog/<slug>`, and say what happens to it
-  and when, e.g. `Schedule blog "Pods running, site hanging" (reliora.ai/blog/pods-running-site-hanging-…) for Tue 3 Nov, 08:00 PT`.
-- Name each LinkedIn post by **account**, **time** and its **first line** in quotes.
-- Never put a raw id (Ghost post id, TryPost post id, card or request id) in front of the board. If an id is
-  needed for your own records, put it at the end, in a "For the record" line.
-- Say the number of approvals waiting, and where: "3 approvals waiting on this task: Approve all".
-- If something was withdrawn, expired or done another way, say so in one plain line; do not list ids.
+1. For every scheduled Reliora Inc or Salil Kadam post that links `reliora.ai/blog/<slug>`: check the blog with
+   `gh_get_post`. If it is not published, or not scheduled to publish at least 12 hours before the post, pull
+   the post back with `update-post-tool` `status: "draft"` and say so. A post must never link a blog that is not
+   live. Section C schedules it again once the blog is scheduled.
+2. For each account, group the posts that are not published by blog slug. More than one for a slug is a
+   duplicate: keep the scheduled one (or the oldest, if none is scheduled), pull the others to `draft`, and
+   list them in the task under "Duplicates to delete" (account, first line, time). Request `delete-post-tool`
+   for each duplicate draft at most ONCE: if a delete for that post already waits for approval on any open
+   task, do not request it again.
 
 ## E. Report
 
-If you requested anything, post one note to the board per the **board-approval-notify** skill (#reliora-board):
-the task link, each blog with its publish day and each company post with its time, and "Approve all on this task".
-Then set the task to `in_review` and end the run. Nothing new: comment "No new drafts" and mark the task done.
-After the board's decision, check the result (`gh_get_post` status `scheduled`, `get-post-tool` status
-`scheduled`) and record it. Then, before closing, run sections A to D again in this task: drafts that landed
-while it waited, and company posts for blogs that are now scheduled. If that requests anything, report it (this
-section) and wait again; otherwise mark the task done.
+Comment in plain words (the **board-plain-language** skill): each blog with its publish day and link, and each
+LinkedIn post with its account, time and first line in quotes. Never put a raw id in the main text (a last
+"For the record:" line only). No board note is needed for scheduling. Mark the task done. Only when something
+failed (a tool error, a blog that cannot be scheduled) post one note to #reliora-board per the
+**board-approval-notify** skill and set the task `in_review`.
+Nothing new: comment "No new drafts" and mark the task done.
 EOF
 
-read -r -d '' REP_DESC <<'EOF' || true
-The personal repost step of the Reliora content calendar. Use the **trypost** skill (tool gateway).
-Times are America/Los_Angeles.
-
-1. `list-posts-tool` with `channels` = [Reliora Inc page id] and `status: "published"`. Take the posts
-   published in the last 3 days whose text links `https://reliora.ai/blog/` and that have a `platform_url`.
-2. For each, check for an existing personal post: `list-posts-tool` with `channels` = [Salil Kadam profile id]
-   and `search` = the blog slug, then with `search` = the company post's `platform_url`. Any hit (any status):
-   it already has one, skip it.
-3. Otherwise draft the repost (`create-post-tool`, account "Salil Kadam" linkedin profile, `status: "draft"`):
-   a short, catchy blurb of 2 or 3 sentences in first person (different from the company text, no more than
-   2 hashtags), then the company post's `platform_url` on its own last line so LinkedIn shows it as a card.
-   Check it with `preview-post-tool`.
-4. Request it once: `update-post-tool` with `status: "scheduled"` and `scheduled_at` = 12:00 America/Los_Angeles
-   today (in UTC) if that is at least 20 minutes away, otherwise 30 minutes from now. It returns
-   `approval_required`; that is expected.
-5. If you requested anything, post one note per the **board-approval-notify** skill (#reliora-board) with the
-   task link, written by the **board-plain-language** skill: which blog the repost is about (its
-   title), the first line of your blurb in quotes, and the time ("Personal repost ready: Approve on this task").
-   Never put a raw post or card id in the main text (only on a last "For the record:" line). Set the task to `in_review` and end the run.
-   Nothing to do: comment "No new company post to repost" and mark the task done.
-6. After the board's decision: check with `get-post-tool` (status `scheduled`), record it, mark the task done.
-   Rejected: put the post back to `draft`, record the reason, mark the task done.
-EOF
 
 companies="$(api GET /companies)"
 cid="$(jq -r --arg n "$COMPANY" '[.[] | select(.name == $n and .status == "active")] | if length == 1 then .[0].id else "" end' <<<"$companies")"
@@ -257,7 +243,15 @@ ensure_routine() {
 
 ensure_routine "$CAL_TITLE" "$CAL_DESC" "$CAL_CRON" "daily 07:00 PT" "coalesce_if_active"
 cal_id="$LAST_RID"
-ensure_routine "$REP_TITLE" "$REP_DESC" "$REP_CRON" "Mon/Wed 09:30 and 11:30 PT" "skip_if_active"
+
+# the repost routine is retired into the calendar (see the header)
+routines="$(api GET "/companies/$cid/routines")"
+rep_id="$(jq -r --arg t "$REP_TITLE" '[.[] | select(.title == $t and .status != "archived")] | .[0].id // ""' <<<"$routines")"
+if [[ -n "$rep_id" ]]; then
+  jq -n '{status: "archived"}' > "$WORK/x.json"; write PATCH "/routines/$rep_id" "$WORK/x.json" >/dev/null
+  (( DRY )) || [[ "$(api GET "/routines/$rep_id" | jq -r .status)" == archived ]] || die "could not archive '$REP_TITLE' ($rep_id)"
+  log "  '$REP_TITLE' ($rep_id): archived (retired into '$CAL_TITLE')"
+fi
 
 # the Ghost webhook: on the calendar routine itself, so it shares the one lane
 if [[ "$cal_id" != DRY-RUN ]]; then
