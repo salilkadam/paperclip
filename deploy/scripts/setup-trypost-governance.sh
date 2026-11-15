@@ -18,6 +18,11 @@
 #   3. block: API-key and webhook tools (operator work).
 # A policy that exists with a different type, priority, selectors or conditions
 # (or disabled) is updated in place. Zero TryPost connections found is fatal.
+#
+# Direct-publish companies (lib/direct-publish.sh; Reliora since 2026-11-15)
+# get policy 2 narrowed to publish-now only (`status` exactly "publishing"):
+# their agents create, edit and SCHEDULE posts without a card. Policies 1 and 3
+# are the same for every company.
 # Policy names are unique per company, so one TryPost connection per company
 # is supported; a second one stops the run with the server's 409.
 #
@@ -25,7 +30,10 @@
 # agents, using an all-zero social_account_id so nothing could post even if the
 # gate failed:
 #   - status "publishing"  -> must be ask_first (the action request is declined);
-#   - status omitted       -> must be ask_first (declined);
+#   - status omitted       -> must be ask_first (declined); allowed for a
+#                             direct-publish company;
+#   - status "scheduled"   -> must be ask_first; allowed for a direct-publish
+#                             company (TryPost rejects the fake account);
 #   - status "draft"       -> must be allowed (TryPost rejects the fake account).
 # Any other outcome is fatal.
 #
@@ -49,6 +57,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+# shellcheck source=lib/direct-publish.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/direct-publish.sh"
 log() { echo "[trypost-governance] $*"; }
 for b in curl jq; do command -v "$b" >/dev/null || die "$b is required"; done
 [[ -r "${PAPERCLIP_BOARD_KEY_FILE:-}" ]] || die "PAPERCLIP_BOARD_KEY_FILE must point to a readable file"
@@ -67,9 +77,9 @@ api() {
   cat "$WORK/resp"
 }
 
-# desired_policies CONNECTION_ID -> JSON array of the three policies.
+# desired_policies CONNECTION_ID DIRECT(0|1) -> JSON array of the three policies.
 desired_policies() {
-  jq -n --arg conn "$1" '[
+  jq -n --arg conn "$1" --argjson direct "${2:-0}" '[
     { name: "org-instructions: ask first for TryPost publishing",
       description: "The board publishes; agents draft.",
       policyType: "require_approval", priority: 40, enabled: true,
@@ -77,11 +87,19 @@ desired_policies() {
                                "create-repurpose-tool","activate-repurpose-tool","resume-repurpose-tool","update-repurpose-tool",
                                "update-posting-schedule-tool","generate-posting-schedule-tool","copy-posting-schedule-tool","reorder-queue-tool"], connectionId: $conn },
       conditions: null },
+    (if $direct == 1 then
+    { name: "org-instructions: ask first for TryPost go-live (non-draft create/update)",
+      description: "Direct publish (owner, 2026-11-15): agents create, edit and schedule posts without a card. Only publish-now (status \"publishing\") needs board approval; the approved call then runs exactly once.",
+      policyType: "require_approval", priority: 40, enabled: true,
+      selectors: { toolNames: ["create-post-tool","create-posts-tool","update-post-tool"], connectionId: $conn },
+      conditions: { arguments: { fieldEquals: { status: "publishing" } } } }
+    else
     { name: "org-instructions: ask first for TryPost go-live (non-draft create/update)",
       description: "Agents may create and edit posts only as drafts (status: \"draft\" must be sent explicitly). Any create/update that schedules, queues or publishes (or omits status) needs board approval; the approved call then runs exactly once.",
       policyType: "require_approval", priority: 40, enabled: true,
       selectors: { toolNames: ["create-post-tool","create-posts-tool","update-post-tool"], connectionId: $conn },
-      conditions: { arguments: { fieldNotEquals: { status: "draft" } } } },
+      conditions: { arguments: { fieldNotEquals: { status: "draft" } } } }
+    end),
     { name: "org-instructions: block TryPost keys and webhooks",
       description: "Credential and integration changes are operator work.",
       policyType: "block", priority: 40, enabled: true,
@@ -102,6 +120,12 @@ probe() {
     api POST "/tool-gateway/action-requests/$ar/decline" "$WORK/decline.json" >/dev/null
   fi
   [[ "$decision" == "$want" ]] || die "probe '$label' on connection $conn: expected $want, got $decision: $(head -c 300 <<<"$resp")"
+  # an allowed probe must have failed upstream (TryPost rejects the all-zero
+  # account); a result means a real post may exist
+  if [[ "$want" == allowed ]]; then
+    jq -e '.error != null and (.result == null or .result.content == null)' <<<"$resp" >/dev/null \
+      || die "probe '$label' on connection $conn ran upstream and did NOT fail: a real post may exist; delete it: $(head -c 400 <<<"$resp")"
+  fi
   log "  probe ok: $label -> $decision"
 }
 
@@ -129,7 +153,9 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
 
   for conn in $(jq -r '.[].id' <<<"$conns"); do
     log "$cname: TryPost connection $conn"
-    desired_policies "$conn" | jq -c '.[]' | while read -r want; do
+    direct=0; is_direct_publish "$cid" && direct=1
+    log "  direct publish: $([[ $direct -eq 1 ]] && echo yes || echo no)"
+    desired_policies "$conn" "$direct" | jq -c '.[]' | while read -r want; do
       name="$(jq -r .name <<<"$want")"
       have="$(jq -c --arg n "$name" --arg conn "$conn" '[.[] | select(.name==$n and .selectors.connectionId==$conn)][0] // empty' <<<"$existing")"
       if [[ -z "$have" ]]; then
@@ -146,7 +172,9 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
     done
     if [[ "$DRY" -eq 0 ]]; then
       probe "$cid" "$conn" "$agent" "publish now" "{\"social_account_id\":\"$ZERO\",\"status\":\"publishing\",\"content\":\"governance probe\"}" ask_first
-      probe "$cid" "$conn" "$agent" "status omitted" "{\"social_account_id\":\"$ZERO\",\"content\":\"governance probe\"}" ask_first
+      gated=ask_first; [[ $direct -eq 1 ]] && gated=allowed
+      probe "$cid" "$conn" "$agent" "status omitted" "{\"social_account_id\":\"$ZERO\",\"content\":\"governance probe\"}" "$gated"
+      probe "$cid" "$conn" "$agent" "scheduled" "{\"social_account_id\":\"$ZERO\",\"status\":\"scheduled\",\"scheduled_at\":\"2099-01-01T00:00:00Z\",\"content\":\"governance probe\"}" "$gated"
       probe "$cid" "$conn" "$agent" "explicit draft" "{\"social_account_id\":\"$ZERO\",\"status\":\"draft\",\"content\":\"governance probe\"}" allowed
     fi
     total=$((total + 1))

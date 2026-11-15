@@ -45,6 +45,9 @@ API="${PAPERCLIP_API_BASE:-https://org.baisoln.com}"
 MCP_URL="${GHOST_MCP_URL:-https://mcp.baisoln.com/ghost/mcp}"
 CONN_NAME="Ghost blog"
 ASK_FIRST=(gh_publish_post gh_unpublish_post gh_delete_post)
+# direct-publish companies (lib/direct-publish.sh) publish without a card:
+# gh_publish_post moves to their enabled set; unpublish and delete stay ask-first
+ASK_FIRST_DIRECT=(gh_unpublish_post gh_delete_post)
 # The exact tool set this script may approve. A tool the server adds later is
 # NOT auto-approved: the run stops and names it, so a human reviews it first.
 KNOWN_TOOLS=(gh_list_sites gh_site_info gh_list_posts gh_get_post gh_create_post gh_update_post
@@ -69,6 +72,8 @@ log() { echo "[ghost-connections] $*"; }
 for b in curl jq kubectl; do command -v "$b" >/dev/null || die "$b is required"; done
 # shellcheck source=lib/vault-ops.sh
 source "$(cd "$(dirname "$0")" && pwd)/lib/vault-ops.sh"
+# shellcheck source=lib/direct-publish.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/direct-publish.sh"
 [[ -r "${PAPERCLIP_BOARD_KEY_FILE:-}" ]] || die "PAPERCLIP_BOARD_KEY_FILE must point to a readable file"
 [[ "$(stat -c %a "$PAPERCLIP_BOARD_KEY_FILE")" == 600 ]] || die "$PAPERCLIP_BOARD_KEY_FILE must be mode 0600"
 
@@ -183,15 +188,16 @@ for entry in "${SITES[@]}"; do
   [[ -z "$unknown" ]] || die "$cname: catalog has tools this script does not know: $unknown — review them in Paperclip (Apps) or add them to KNOWN_TOOLS"
   missing="$(jq -r --argjson k "$known_json" '[$k[] as $t | select([.[].toolName] | index($t) | not) | $t] | join(", ")' <<<"$catalog")"
   [[ -z "$missing" ]] || die "$cname: catalog lacks expected tools: $missing"
-  ask_json="$(printf '%s\n' "${ASK_FIRST[@]}" | jq -R . | jq -s .)"
+  if is_direct_publish "$cid"; then ask=("${ASK_FIRST_DIRECT[@]}"); else ask=("${ASK_FIRST[@]}"); fi
+  ask_json="$(printf '%s\n' "${ask[@]}" | jq -R . | jq -s .)"
   jq -n --argjson c "$catalog" --argjson ask "$ask_json" '{
       access: "all_agents",
       enabledCatalogEntryIds: [$c[] | select((.toolName as $t | $ask | index($t)) | not) | .id],
       askFirstCatalogEntryIds: [$c[] | select(.toolName as $t | $ask | index($t)) | .id],
       reviewedCatalogEntryIds: [$c[] | select(.status=="quarantined") | .id]}' > "$WORK/finish.json"
-  [[ "$(jq '.askFirstCatalogEntryIds|length' "$WORK/finish.json")" -eq ${#ASK_FIRST[@]} ]] || die "ask-first tools missing from catalog"
+  [[ "$(jq '.askFirstCatalogEntryIds|length' "$WORK/finish.json")" -eq ${#ask[@]} ]] || die "ask-first tools missing from catalog"
   api POST "/companies/$cid/tools/apps/$conn_id/finish" "$WORK/finish.json" >/dev/null
-  log "  access: all agents; ask first: ${ASK_FIRST[*]}"
+  log "  access: all agents; ask first: ${ask[*]}"
 
   # Proof through the real path, as one of the company's agents.
   # The test call needs an agent assignable to work (Paperclip's

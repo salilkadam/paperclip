@@ -12,8 +12,9 @@
 #      Hacker News through its public API, matches the problems against the notes, and writes at most one
 #      Ghost draft. Skill: community-pain-blog. The draft's "post created"
 #      webhook wakes "Reliora content calendar" (setup-reliora-content-calendar.sh),
-#      which formats, schedules and asks the board. Creating a post that is not a
-#      draft is ask-first at the gateway (setup-ghost-governance.sh).
+#      which formats and schedules it (Reliora publishes without board approval since
+#      2026-11-15, deploy/scripts/lib/direct-publish.sh). The scan itself only
+#      writes drafts, and skips a problem an existing post already covers.
 #
 # It also:
 #   - checks that the company's "GitHub" and "Composio" connections are active;
@@ -100,7 +101,7 @@ while read -r repo kind _; do
   [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "$REPOS_FILE: '$repo' is not <owner>/<repo>"
   case "$kind" in
     source-available) repo_lines+="  - \`$repo\` — **source-available**: its facts may be public."$'\n' ;;
-    proprietary) repo_lines+="  - \`$repo\` — **proprietary**: everything from it is \`internal\`, never blog material."$'\n' ;;
+    proprietary) repo_lines+="  - \`$repo\` — **proprietary**: its code and design are \`internal\`, never blog material. Its capabilities may be shown as what the solution does: if it solves a problem, a blog may describe how the problem gets solved, without its code or design."$'\n' ;;
     *) die "$REPOS_FILE: '$repo' needs 'source-available' or 'proprietary', got '$kind'" ;;
   esac
 done < "$REPOS_FILE"
@@ -126,11 +127,31 @@ Daily community scan for reliora.ai. Use the **community-pain-blog** skill. Time
 - Sources: through the Composio connection, Reddit `kubernetes`, `sre`, `devops` and Stack Exchange
   `serverfault`, `stackoverflow` and `devops` (tag `kubernetes`); Hacker News queries `kubernetes`, `outage`,
   `postmortem`, `postgres`, `on-call` through its public Algolia API from your own runtime.
-- Queue limit: 6 (see the skill for what counts). At or above it, bank the topic instead of drafting.
+- Queue cap: 20 (see the skill for what counts). The queue may grow freely below the cap so the site never
+  runs out of posts; the cap is only a backstop. At or above 20, bank the topic instead of drafting. There is
+  no lower hard limit: do not block drafting at low counts.
+- For every drafted or banked topic, record in the ledger: the exact source URL, the original post title, the
+  author's public username/handle and the post date.
+- Public contact disclosure flag (CLO ruling REL-3212, board-approved 2026-10-30; see
+  `$AGENT_HOME/life/resources/source-outreach/clo-contact-rule.md`): for each topic, set
+  `public-contact-disclosed=yes|no|unknown` in the ledger. Set `yes` only when the author published a contact
+  route (email, personal-site link) **themselves** on their own profile or post; record that disclosure's
+  source URL. Note the fact and the URL only — never copy the contact detail itself into the ledger, and never
+  write anything into a CRM: a human (owner or COO) creates any CRM record from a flagged line. Pseudonym rule:
+  the account shows no professional identity => `no`, no flag. Guessing/generating emails, email-finder or
+  people-search tools, and bulk profile scraping stay banned. Keep new flags under ~10 per month; above that,
+  flag it for the board before continuing.
+- Source back-post link: note in the ledger that the "Reliora source back-post" routine drafts the reply to
+  the source thread when the blog goes live.
 
-At most one new **draft** (`status: "draft"`, sent explicitly). Never publish or schedule: the "Reliora content
-calendar" routine does that with the board's approval when Ghost reports the draft. Finish with the shortlist
-and the draft's title (or why none), in plain words, and mark the task done.
+- No repeats (owner, 2026-11-15): before drafting, list the blog's posts with `gh_list_posts` (`tenant_id:
+  "reliora"`) for each of `status: "draft"`, `"scheduled"` and `"published"`, all pages. If any of them already
+  covers the same problem (the same failure and root cause, whatever its title), do not draft it: record it in
+  the ledger as `covered-by: <slug>` and take the next candidate.
+
+At most one new **draft** (`status: "draft"`, sent explicitly). Do not publish or schedule it yourself: the
+"Reliora content calendar" routine schedules it when Ghost reports the draft (no board approval since
+2026-11-15). Finish with the shortlist and the draft's title (or why none), in plain words, and mark the task done.
 EOF
 
 read -r -d '' BACK_DESC <<'DESC' || true
@@ -139,10 +160,19 @@ Daily source back-post for reliora.ai. Use the **source-back-post** skill. Times
 - Ghost tenant `reliora`; public blog https://reliora.ai/blog/ . Ledger and reply log in
   `$AGENT_HOME/life/resources/blog-topics/` (`ledger.md`, `replies.md`). If they are missing there, copy them
   once from `/paperclip/instances/default/skills/62d63984-df6c-49be-981c-1273f68a451c/community-pain-blog/blog-topics/`.
-- Owner's decisions (2026-10-28/29): every community reply is **posted by Salil from his own account** (for
+- Priority: as soon as a blog goes live on reliora.ai, its OWN source thread is the first reply candidate that
+  run, before any other thread. Check live-since-yesterday slugs against the ledger so the loop back to the
+  source closes on day one.
+- Owner's decisions (2026-10-28/29/30): every community reply is **posted by Salil from his own account** (for
   Reliora and Bionic alike); you only draft it. Threads:
   the blog's own source, and recent threads a live blog genuinely answers (relevance gate). Limits: 1 reply per
   thread, 1 per subreddit/site per 7 days, 2 per blog. The first two replies go to the CMO before the board.
+  Queue depth never blocks a run (cap 20 is only a backstop; see the scan routine).
+- Contact-detail rule (CLO ruling REL-3212, board-approved 2026-10-30; full rule in
+  `$AGENT_HOME/life/resources/source-outreach/clo-contact-rule.md`): a reply draft may note, for the human,
+  that the source author publicly disclosed a contact route on their own profile/post, with the disclosure
+  source URL. Never copy the contact detail itself into a draft, and never write to a CRM; a human creates any
+  CRM record from a flagged ledger line. Guessing emails, email-finder tools and profile scraping stay banned.
 - You cannot post to Reddit, Hacker News or Stack Exchange: the gateway blocks it. Never ask for that access.
 
 At most one reply per run. Finish with the thread, the ready-to-post reply (or why nothing passed), in plain
