@@ -95,7 +95,7 @@ desired_policies() {
       description: "Direct publish (owner, 2026-11-15): agents create, edit and schedule posts without a card when status is exactly \"draft\" or \"scheduled\". Any other status (publish now included) needs board approval; the approved call then runs exactly once.",
       policyType: "require_approval", priority: 40, enabled: true,
       selectors: { toolNames: ["create-post-tool","create-posts-tool","update-post-tool"], connectionId: $conn },
-      conditions: { arguments: { fieldMatches: { status: "^(?!(draft|scheduled)$)[\\s\\S]*$" } } } },
+      conditions: { arguments: { fieldNotEquals: { status: "draft" }, fieldMatches: { status: "^(?!scheduled$)" } } } },
     { name: "org-instructions: ask first for TryPost go-live (status omitted)",
       description: "Direct publish (owner, 2026-11-15): a create/update that omits status needs board approval, so an edit cannot change the go-live state of a post implicitly.",
       policyType: "require_approval", priority: 40, enabled: true,
