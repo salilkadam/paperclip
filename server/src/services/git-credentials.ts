@@ -12,6 +12,8 @@ import {
 import { and, eq, inArray, or } from "drizzle-orm";
 import { isGitHubDotCom } from "./github-fetch.js";
 import { secretService } from "./secrets.js";
+import { isGitHubAppConnection } from "./tool-access/token-broker/configuration.js";
+import { createConnectionTokenExchange } from "./tool-access/token-broker/exchange.js";
 import { toolAccessService } from "./tool-access.js";
 
 /**
@@ -336,6 +338,46 @@ export async function resolveManagedGitHubIdentitySelection(
   // make unrelated agents fail before their adapter starts and would also
   // suppress their otherwise-eligible legacy credential fallback.
   if (eligibleConnectionIds.size === 0) return { configured: false };
+
+  // GitHub App connections authenticate as an *installation* token, not a user
+  // OAuth token. The token broker mints that token from the App's private key +
+  // app id (vault secrets) and the installation id on the grant's
+  // providerTenant.github. A user/agent grant with a personal github.userId is
+  // the wrong identity for these — it 404s on the org's repos. So when the only
+  // eligible GitHub connection is a GitHub App, select its organization grant
+  // (which carries the installation id) and let the broker mint the
+  // installation token. This is the fix for the routing bug where an agent with
+  // only a GitHub App connection resolved to a personal OAuth identity that
+  // could not see the org's repos.
+  const eligibleConnections = githubConnections.filter((connection) =>
+    eligibleConnectionIds.has(connection.id),
+  );
+  const isGitHubAppConnection = (connection: (typeof githubConnections)[number]) => {
+    const refs = connection.credentialSecretRefs ?? [];
+    return (
+      refs.some((ref) => ref.configPath === "credentials.privateKey") &&
+      refs.some((ref) => ref.configPath === "credentials.appId")
+    );
+  };
+  const githubAppConnections = eligibleConnections.filter(isGitHubAppConnection);
+  if (githubAppConnections.length > 0 && githubAppConnections.length === eligibleConnections.length) {
+    const appConnection = githubAppConnections.find((c) => c.enabled && c.status === "active") ?? githubAppConnections[0];
+    const appGrants = await db.select().from(connectionGrants).where(and(
+      eq(connectionGrants.companyId, companyId),
+      eq(connectionGrants.connectionId, appConnection.id),
+      eq(connectionGrants.kind, "organization"),
+    ));
+    const appGrant = appGrants.find((g) => g.status === "active" && (g.providerTenant?.github?.installationIds?.length ?? 0) > 0);
+    if (appGrant) {
+      return { configured: true, identitySource: "dedicated", grant: appGrant };
+    }
+    return {
+      configured: true,
+      identitySource: "dedicated",
+      error: "The GitHub App connection has no active installation; install the App on the target org",
+    };
+  }
+
   const grants = await db.select().from(connectionGrants).where(and(
     eq(connectionGrants.companyId, companyId),
     inArray(connectionGrants.connectionId, [...eligibleConnectionIds]),
@@ -505,6 +547,55 @@ export async function resolveManagedGitHubCredential(
         heartbeatRunId: context.heartbeatRunId,
       });
     }
+    // GitHub App connections authenticate with a private key + JWT, not OAuth.
+    // The grant has no oauth.access_token — mint an installation token instead.
+    const connection = await db.select().from(toolConnections).where(eq(toolConnections.id, grant.connectionId)).limit(1);
+    const conn = connection[0];
+    if (conn && isGitHubAppConnection(conn)) {
+      const installationIds = grant.providerTenant?.github?.installationIds ?? [];
+      const installationId = Number(installationIds[0]);
+      if (!Number.isFinite(installationId) || installationId <= 0) {
+        return { configured: true, identitySource: selection.identitySource, error: "GitHub App connection has no installation id; install the App on the target org" };
+      }
+      const appConnection = {
+        ...conn,
+        transportConfig: {
+          ...(conn.transportConfig ?? {}),
+          githubAppInstallationId: installationId,
+        },
+      };
+      const secrets = secretService(db);
+      const { mintGitHubAppInstallationToken } = createConnectionTokenExchange(
+        () => new Date(),
+        secrets,
+      );
+      const minted = await mintGitHubAppInstallationToken(
+        {
+          connection: appConnection,
+          agentId: context.agentId ?? "unknown",
+          runId: context.heartbeatRunId ?? "unknown",
+          issueId: context.issueId ?? null,
+          ttlSeconds: 900,
+        },
+        secrets,
+      );
+      return {
+        configured: true,
+        identitySource: selection.identitySource,
+        credential: {
+          token: minted.token,
+          source: "managed_connection" as const,
+          secretName: null,
+          githubIdentity: {
+            userId: grant.providerTenant?.github?.userId ?? "unknown",
+            login: grant.providerTenant?.github?.login ?? "unknown",
+          },
+          identitySource: selection.identitySource,
+          connectionId: conn.id,
+          grantId: grant.id,
+        },
+      };
+    }
     const accessRef = grant.credentialSecretRefs.find((ref) => ref.configPath === "oauth.access_token");
     const github = grant.providerTenant?.github;
     if (!accessRef || !github) return { configured: true, identitySource: selection.identitySource, error: "The managed GitHub identity is incomplete" };
@@ -562,8 +653,9 @@ export async function resolveManagedGitHubCredential(
     const result = await acquire(selection);
     if (result.credential) return result;
     failure = result;
-  } catch {
-    failure = { configured: true, identitySource: selection.identitySource, error: "GitHub credentials are temporarily unavailable" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    failure = { configured: true, identitySource: selection.identitySource, error: `GitHub credentials are temporarily unavailable: ${msg}` };
   }
   // Retry credential acquisition, never the GitHub operation. An alternate
   // authorization must still belong to this exact principal and account.

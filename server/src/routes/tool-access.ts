@@ -62,6 +62,7 @@ import { validate } from "../middleware/validate.js";
 import { getActorInfo, assertBoard, assertCompanyAccess, assertInstanceAdmin, getAccessibleResource, hasCompanyAccess } from "./authz.js";
 import { badRequest, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { accessService, logActivity, toolAccessPolicyService, toolAccessService, vercelConnectIntegrationStatus } from "../services/index.js";
+import { secretService } from "../services/secrets.js";
 import { ToolGatewayHttpError, type ToolGatewayService } from "../services/tool-gateway.js";
 import { RailwayError } from "../services/railway.js";
 import type { VercelConnectClient } from "../services/vercel-connect.js";
@@ -1796,7 +1797,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
     const credentialSecretRefs = Array.isArray(body.credentialSecretRefs) ? body.credentialSecretRefs : [];
     const providerTenant = body.providerTenant && typeof body.providerTenant === "object"
-      ? body.providerTenant as { name?: string; externalId?: string }
+      ? body.providerTenant as NonNullable<typeof connectionGrants.$inferInsert.providerTenant>
       : undefined;
     const grant = await svc.addConnectionInstallation(connection.id, {
       providerTenant,
@@ -1813,6 +1814,28 @@ function connectorEnrollmentPrincipal(req: Request): string {
       details: { connectionId: connection.id, kind: grant.kind },
     });
     res.status(201).json(grant);
+  });
+
+  // One-off endpoint to create missing secret bindings for a tool connection.
+  // Used to fix GitHub App connections created via a non-standard setup path
+  // that have credentialSecretRefs but no corresponding company_secret_bindings rows.
+  router.post("/tool-connections/:connectionId/sync-secret-bindings", async (req, res) => {
+    assertBoard(req);
+    const connection = await getAccessibleResource(req, res, svc.getConnection(req.params.connectionId as string), "Tool connection not found");
+    if (!connection) return;
+    await assertToolConnectionConfigureAccess(req, connection);
+    const secrets = secretService(db);
+    const refs = (connection.credentialSecretRefs ?? []).map((ref) => ({
+      secretId: ref.secretId,
+      configPath: ref.configPath,
+      versionSelector: ref.versionSelector ?? "latest",
+    }));
+    await secrets.syncSecretRefsForTarget(
+      connection.companyId,
+      { targetType: "tool_connection", targetId: connection.id },
+      refs,
+    );
+    res.json({ synced: refs.length, connectionId: connection.id });
   });
 
   router.delete("/tool-connections/:connectionId/grants/:grantId", async (req, res) => {

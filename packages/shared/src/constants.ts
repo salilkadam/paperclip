@@ -1140,7 +1140,7 @@ export const TOOL_MCP_GATEWAY_TOKEN_ACTIONS = [
 ] as const;
 export type ToolMcpGatewayTokenAction = (typeof TOOL_MCP_GATEWAY_TOKEN_ACTIONS)[number];
 
-export const CONNECTION_TOKEN_ISSUANCE_PATHS = ["exchange", "oauth_access", "static"] as const;
+export const CONNECTION_TOKEN_ISSUANCE_PATHS = ["exchange", "oauth_access", "static", "github_app"] as const;
 export type ConnectionTokenIssuancePath = (typeof CONNECTION_TOKEN_ISSUANCE_PATHS)[number];
 
 export const CONNECTION_TOKEN_ISSUANCE_OUTCOMES = [

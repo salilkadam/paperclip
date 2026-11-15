@@ -13,6 +13,7 @@ import { withoutOAuthRefreshLease, type OAuthRefreshLeases } from "./refresh-lea
 import { oauthExpiresAtMs, oauthSecretRef } from "./client-settings.js";
 import { connectionSetupUrl, connectionReconnectUrl } from "../identifiers.js";
 import { singleFlight } from "../single-flight.js";
+import { isGitHubAppConnection } from "../token-broker/configuration.js";
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value))
     return value as Record<string, unknown>;
@@ -366,6 +367,33 @@ const oauthRefreshFlights = new Map<string, Promise<unknown>>();
       heartbeatRunId?: string | null;
     },
   ): Promise<typeof toolConnections.$inferSelect> {
+    // GitHub App connections authenticate with a private key + JWT, not OAuth.
+    // Skip the OAuth refresh entirely — it would fail (no refresh token) and
+    // mark the connection "error", blocking the gateway's github_app path.
+    // If the connection is already marked "error" from a previous OAuth refresh
+    // failure, reset the health to "ok" so the gateway includes it in the tool
+    // catalog (the error is stale — OAuth no longer applies).
+    if (isGitHubAppConnection(connection)) {
+      if (connection.healthStatus === "error" || connection.healthStatus === "failed") {
+        const [updated] = await db
+          .update(toolConnections)
+          .set({
+            healthStatus: "ok",
+            healthMessage: null,
+            lastError: null,
+            updatedAt: now(),
+          })
+          .where(
+            and(
+              eq(toolConnections.id, connection.id),
+              eq(toolConnections.companyId, connection.companyId),
+            ),
+          )
+          .returning();
+        return updated ?? connection;
+      }
+      return connection;
+    }
     const oauth = oauthConfig(connection);
     if (
       typeof oauth.tokenUrl !== "string" ||
