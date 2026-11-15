@@ -553,11 +553,13 @@ describeEmbeddedPostgres("tool gateway service", () => {
       await expect(gateway.executeTool({ sessionToken: session.token, tool: "mcp-remote-fixture:update_note", parameters: { noteId } })).rejects.toMatchObject({ reasonCode: "approval_required" });
     const [stale, live] = await db.select().from(toolActionRequests).orderBy(toolActionRequests.createdAt);
     const approval = (label: string, payload: Record<string, unknown> = {}) => ({ companyId: company.id, type: "request_board_approval", requestedByAgentId: agent.id, payload: { title: label, ...payload } });
-    const [staleApproval, liveApproval, pastDeadline, futureDeadline, noDeadline, badDeadline] = await db.insert(approvals).values([
+    const [staleApproval, liveApproval, pastDeadline, futureDeadline, noDeadline, badDeadline, outOfRange, otherType] = await db.insert(approvals).values([
       approval("stale"), approval("live"),
       approval("past", { expiresAt: new Date(Date.now() - 60_000).toISOString() }),
       approval("future", { expiresAt: new Date(Date.now() + 3_600_000).toISOString() }),
       approval("none"), approval("bad", { expiresAt: "next Tuesday" }),
+      approval("out of range", { expiresAt: "2026-13-99T00:00:00Z" }),
+      { ...approval("other type", { expiresAt: new Date(Date.now() - 60_000).toISOString() }), type: "hire_agent" },
     ]).returning();
     await db.update(toolActionRequests).set({ approvalId: staleApproval.id, expiresAt: new Date(Date.now() - 1000) }).where(eq(toolActionRequests.id, stale.id));
     await db.update(toolActionRequests).set({ approvalId: liveApproval.id }).where(eq(toolActionRequests.id, live.id));
@@ -567,7 +569,11 @@ describeEmbeddedPostgres("tool gateway service", () => {
     expect(byId.get(staleApproval.id)).toMatchObject({ status: "cancelled", decisionNote: expect.stringContaining("approval window closed") });
     expect(byId.get(staleApproval.id)!.decidedAt).not.toBeNull();
     expect(byId.get(pastDeadline.id)).toMatchObject({ status: "cancelled", decisionNote: expect.stringContaining("only valid until") });
-    for (const kept of [liveApproval, futureDeadline, noDeadline, badDeadline]) expect(byId.get(kept.id)!.status).toBe("pending");
+    for (const kept of [liveApproval, futureDeadline, noDeadline, badDeadline, outOfRange, otherType]) expect(byId.get(kept.id)!.status).toBe("pending");
+    const logged = await db.select().from(activityLog).where(and(eq(activityLog.action, "approval.cancelled"), eq(activityLog.companyId, company.id)));
+    expect(logged.map(row => row.entityId).sort()).toEqual([staleApproval.id, pastDeadline.id].sort());
+    // an approval still gating a live request is kept even when another request it gates closed
+    await db.insert(toolActionRequests).values({ ...live, id: randomUUID(), status: "expired", approvalId: liveApproval.id });
     // idempotent: a second sweep changes nothing
     expect(await gateway.sweepActionReviews()).toMatchObject({ approvalsCancelled: 0 });
     // a decided approval is never reopened or overwritten

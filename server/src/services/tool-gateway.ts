@@ -2345,53 +2345,72 @@ export function createToolGatewayService(
   }
 
   // A formal board approval linked to a tool action request is only a gate on
-  // that request: once the request has expired or otherwise closed, approving
-  // it can no longer run anything (approveActionRequest answers 409). Leaving it
-  // "pending" only makes the board look at a decision that no longer exists, so
-  // it is cancelled with a note saying why. Same for any pending approval whose
-  // payload carries an `expiresAt` that has passed (a time-bound request).
+  // that request: once every request it gates has closed, approving it can no
+  // longer run anything (approveActionRequest answers 409). Leaving it "pending"
+  // only makes the board look at a decision that no longer exists, so it is
+  // cancelled with a note saying why. Same for an agent's board request
+  // (type "request_board_approval") whose payload.expiresAt (ISO 8601) has
+  // passed: that key is the documented way for an agent to make a time-bound
+  // request lapse. Dates are parsed here, never cast in SQL, so a malformed
+  // value is skipped instead of failing the sweep.
   async function cancelStaleBoardApprovals(now: Date): Promise<number> {
+    const liveRequestStatuses = ["pending", "approved", "executing"] as const;
     const closedRequestApprovals = await db
-      .select({ id: approvals.id, requestStatus: toolActionRequests.status })
+      .selectDistinct({ id: approvals.id, requestStatus: toolActionRequests.status })
       .from(approvals)
       .innerJoin(toolActionRequests, eq(toolActionRequests.approvalId, approvals.id))
       .where(
         and(
           eq(approvals.status, "pending"),
           inArray(toolActionRequests.status, ["expired", "cancelled", "rejected", "failed", "executed"]),
+          sql`not exists (select 1 from ${toolActionRequests} live
+                where live.approval_id = ${approvals.id}
+                  and live.status in (${sql.join(liveRequestStatuses.map((value) => sql`${value}`), sql`, `)}))`,
         ),
       )
       .limit(500);
-    const timeBoundApprovals = await db
-      .select({ id: approvals.id, expiresAt: sql<string>`${approvals.payload}->>'expiresAt'` })
+    const timeBoundCandidates = await db
+      .select({ id: approvals.id, expiresAt: sql<string | null>`${approvals.payload}->>'expiresAt'` })
       .from(approvals)
       .where(
         and(
           eq(approvals.status, "pending"),
+          eq(approvals.type, "request_board_approval"),
           sql`(${approvals.payload}->>'expiresAt') is not null`,
-          sql`(${approvals.payload}->>'expiresAt') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'`,
-          sql`(${approvals.payload}->>'expiresAt')::timestamptz <= ${now.toISOString()}::timestamptz`,
         ),
       )
       .limit(500);
     const notes = new Map<string, string>();
     for (const row of closedRequestApprovals)
-      notes.set(row.id, row.requestStatus === "expired"
-        ? "Expired: the request's approval window closed before a decision, so approving it would no longer run anything. Removed from the board's queue automatically; the agent asks again if it is still needed."
-        : `Closed: the request it gated is ${row.requestStatus}, so there is nothing left to decide. Removed from the board's queue automatically.`);
-    for (const row of timeBoundApprovals)
       if (!notes.has(row.id))
-        notes.set(row.id, `Expired: this request was only valid until ${row.expiresAt}. Removed from the board's queue automatically.`);
+        notes.set(row.id, row.requestStatus === "expired"
+          ? "Expired: the request's approval window closed before a decision, so approving it would no longer run anything. Removed from the board's queue automatically; the agent asks again if it is still needed."
+          : `Closed: the request it gated is ${row.requestStatus}, so there is nothing left to decide. Removed from the board's queue automatically.`);
+    for (const row of timeBoundCandidates) {
+      const raw = row.expiresAt ?? "";
+      const at = /^\d{4}-\d{2}-\d{2}T/.test(raw) ? Date.parse(raw) : Number.NaN;
+      if (!Number.isFinite(at) || at > now.getTime() || notes.has(row.id)) continue;
+      notes.set(row.id, `Expired: this request was only valid until ${new Date(at).toISOString()}. Removed from the board's queue automatically.`);
+    }
     let cancelled = 0;
     for (const [id, decisionNote] of notes) {
       const [changed] = await db
         .update(approvals)
         .set({ status: "cancelled", decisionNote, decidedAt: now, updatedAt: now })
         .where(and(eq(approvals.id, id), eq(approvals.status, "pending")))
-        .returning({ id: approvals.id, companyId: approvals.companyId });
+        .returning({ id: approvals.id, companyId: approvals.companyId, type: approvals.type });
       if (!changed) continue;
       cancelled += 1;
-      logger.info({ approvalId: changed.id, companyId: changed.companyId, decisionNote }, "Cancelled a stale board approval");
+      logger.info({ approvalId: changed.id, companyId: changed.companyId }, "Cancelled a stale board approval");
+      await logActivity(db, {
+        companyId: changed.companyId,
+        actorType: "system",
+        actorId: "system",
+        action: "approval.cancelled",
+        entityType: "approval",
+        entityId: changed.id,
+        details: { source: "tool_gateway.sweep_action_reviews", reason: "stale", type: changed.type, decisionNote },
+      }).catch((err) => logger.warn({ err, approvalId: changed.id }, "Could not record the stale approval cancellation"));
     }
     return cancelled;
   }
