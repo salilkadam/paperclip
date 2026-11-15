@@ -176,6 +176,11 @@ jobs:
           current-context: default
           KUBEEOF
 
+      - name: Gate - every rendered harness script must parse
+        run: |
+          sudo apt-get install -y -qq dash >/dev/null 2>&1 || true
+          deploy/scripts/check-sre-harness-render.sh
+
       - name: Helm upgrade sre-harness (atomic = auto-rollback)
         run: |
           # Chart defaults only: the live release carries no user-supplied values
