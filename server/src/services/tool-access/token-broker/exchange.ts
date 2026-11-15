@@ -332,13 +332,6 @@ export function createConnectionTokenExchange(now: () => Date, secrets: ReturnTy
         code: "github_app_credentials_missing",
       });
     }
-    const accessContext = accessContextForBroker({
-      connection: input.connection,
-      agentId: input.agentId,
-      runId: input.runId,
-      issueId: input.issueId,
-      configPath: "credentials.privateKey",
-    });
     // Ensure the secret bindings exist before resolving. GitHub App connections
     // created via the non-standard setup path may have credentialSecretRefs
     // without corresponding company_secret_bindings rows. Sync the refs for
@@ -358,18 +351,35 @@ export function createConnectionTokenExchange(now: () => Date, secrets: ReturnTy
       // will throw a more specific error if the bindings are still missing.
       console.error("Failed to sync secret refs for GitHub App connection:", err);
     }
+    // Each secret must be resolved with its own accessContext carrying its own
+    // configPath, so the binding check matches the binding that was created
+    // for that specific configPath.
+    const privateKeyContext = accessContextForBroker({
+      connection: input.connection,
+      agentId: input.agentId,
+      runId: input.runId,
+      issueId: input.issueId,
+      configPath: "credentials.privateKey",
+    });
+    const appIdContext = accessContextForBroker({
+      connection: input.connection,
+      agentId: input.agentId,
+      runId: input.runId,
+      issueId: input.issueId,
+      configPath: "credentials.appId",
+    });
     const [privateKey, appIdRaw] = await Promise.all([
       secretClient.resolveSecretValue(
         input.connection.companyId,
         privateKeyRef.secretId,
         privateKeyRef.versionSelector ?? "latest",
-        { accessContext, bindingContext: accessContext },
+        { accessContext: privateKeyContext, bindingContext: privateKeyContext },
       ),
       secretClient.resolveSecretValue(
         input.connection.companyId,
         appIdRef.secretId,
         appIdRef.versionSelector ?? "latest",
-        { accessContext, bindingContext: accessContext },
+        { accessContext: appIdContext, bindingContext: appIdContext },
       ),
     ]);
     const appId = Number(appIdRaw);
