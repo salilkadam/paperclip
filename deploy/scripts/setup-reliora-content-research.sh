@@ -52,7 +52,9 @@ RES_CRON="0 5 * * 1"
 SCAN_TITLE="Reliora community scan"
 SCAN_CRON="0 6 * * *"
 SEED_TITLE="Srenix capability notes: seed"
-GITHUB_CONN="GitHub"
+# the GitHub connection the marketer researches through (renamed 2026-11-15 when
+# product-research access was re-granted; override with GITHUB_CONN)
+GITHUB_CONN="${GITHUB_CONN:-GitHub reliora}"
 COMPOSIO_CONN="Composio"
 GH_BLOCK_POLICY="org-instructions: content marketer reads GitHub only"
 REPOS_FILE="${REPOS_FILE:-$HOME/.reliora-research-repos}"
@@ -209,6 +211,7 @@ have="$(jq -c --arg n "$GH_BLOCK_POLICY" '[.[] | select(.name == $n)][0] // empt
 if [[ -z "$have" ]]; then
   printf '%s' "$want" > "$WORK/p.json"; write POST "/companies/$cid/tools/policies" "$WORK/p.json" >/dev/null; log "  policy created: $GH_BLOCK_POLICY"
 elif ! jq -e --argjson w "$want" '(.policyType == $w.policyType) and (.enabled == true) and (.priority == $w.priority)
+         and (.selectors.connectionId == $w.selectors.connectionId) and (.selectors.agentId == $w.selectors.agentId)
          and ((.selectors | .riskLevels |= sort) == ($w.selectors | .riskLevels |= sort)) and (.conditions == $w.conditions)' <<<"$have" >/dev/null; then
   printf '%s' "$want" > "$WORK/p.json"; write PATCH "/companies/$cid/tools/policies/$(jq -r .id <<<"$have")" "$WORK/p.json" >/dev/null
   log "  policy updated (drifted): $GH_BLOCK_POLICY"
