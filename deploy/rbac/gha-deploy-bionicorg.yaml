@@ -61,6 +61,15 @@ rules:
   - apiGroups: ["external-secrets.io"]
     resources: ["clustersecretstores"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # The sre-harness chart (deployed by ci-cd.yml after bionic-org) renders one
+  # read-only node ClusterRole and its binding. Named objects only, no create or
+  # delete. Kubernetes' escalation checks still apply: this SA holds no node
+  # permissions and no "escalate"/"bind" verb, so it can re-apply them unchanged
+  # but cannot widen them. A rules change there needs a human apply.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    resourceNames: ["sre-harness-node-read"]
+    verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
