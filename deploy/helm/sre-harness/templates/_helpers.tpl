@@ -219,7 +219,14 @@ record_run() {
       terminated: process.env.RUN_TERMINATED === "1",
       events: events,
       toolCalls: tools,
-      excerpt: String(process.env.RUN_EXCERPT || "").replace(/\s+/g, " ").slice(0, 500),
+      // The verdict line has to survive into the durable record. A
+      // 2026-11-09 monitor sweep that returned WARN left a run-log entry
+      // ending at "Fresh W..." - the flat 500-char cap cut off the
+      // PAPERCLIP HEALTH line that was the entire point of the run, so the
+      // one thing the log could not show was why it dispatched. Operators
+      // are pointed at this ConfigMap by the monitor prompt itself when a
+      // run dies, so a sweep's report has to stay readable end to end.
+      excerpt: String(process.env.RUN_EXCERPT || "").replace(/\s+/g, " ").slice(0, 3000),
     };
     const api = (method, path, body, ctype, done) => {
       const r = https.request({
