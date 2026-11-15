@@ -44,16 +44,21 @@
 # key of an instance admin (`paperclipai token board create --name trypost-gov
 # --ttl-days 1`). The key never appears on a command line.
 #
-# Usage: deploy/scripts/setup-trypost-governance.sh [--company-id <id>] [--dry-run]
+# Usage: deploy/scripts/setup-trypost-governance.sh [--company-id <id>] [--probe-agent <agent-id>] [--dry-run]
 set -euo pipefail
 
 API="${PAPERCLIP_API_BASE:-https://org.baisoln.com}"
 ZERO="00000000-0000-0000-0000-000000000000"
-ONLY_COMPANY=""; DRY=0
+ONLY_COMPANY=""; DRY=0; PROBE_AGENT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --company-id) ONLY_COMPANY="${2:?--company-id needs a value}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    # the agent the probes run as; default: the company's first idle/active
+    # agent. Pass the agent that really uses these tools: a C-level agent is
+    # refused tactical tools by policy ("C-level agents delegate"), which
+    # makes the probes fail for a reason unrelated to the gate.
+    --probe-agent) PROBE_AGENT="${2:?--probe-agent needs an agent id}"; shift 2 ;;
     -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -156,6 +161,7 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
   n="$(jq length <<<"$conns")"
   if [[ "$n" -eq 0 ]]; then log "$cname: no active TryPost connection, skipped"; continue; fi
   agent="$(api GET "/companies/$cid/agents" | jq -r '[.[] | select(.status=="idle" or .status=="active" or .status=="running")][0].id // empty')"
+  [[ -z "$PROBE_AGENT" ]] || agent="$(api GET "/companies/$cid/agents" | jq -r --arg a "$PROBE_AGENT" '[.[] | select(.id==$a)][0].id // empty')"
   [[ -n "$agent" ]] || die "$cname has a TryPost connection but no agent to prove the gate with"
   existing="$(api GET "/companies/$cid/tools/policies" | jq '(.policies // .)')"
 
