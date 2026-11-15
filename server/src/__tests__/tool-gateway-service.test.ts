@@ -538,10 +538,42 @@ describeEmbeddedPostgres("tool gateway service", () => {
       interactionId: null, status: "approved" as const,
     })));
     const recover = vi.spyOn(gateway, "approveActionRequest").mockRejectedValue(new Error("Unavailable approval dependency"));
-    expect(await gateway.sweepActionReviews()).toEqual({ scanned: 101 });
+    expect(await gateway.sweepActionReviews()).toEqual({ scanned: 101, approvalsCancelled: 0 });
     expect(recover).toHaveBeenCalledTimes(100);
     const [settled] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, request.interactionId!));
     expect(settled.status).toBe("expired");
+  });
+
+  it("cancels board approvals whose gated request closed or whose time passed, and leaves live ones pending", async () => {
+    const { company, agent, run } = await createRunFixture(db);
+    await db.insert(toolPolicies).values({ companyId: company.id, name: "Ask first", policyType: "require_approval", selectors: { toolName: "mcp-remote-fixture:update_note" } });
+    const gateway = createTestToolGatewayService(db);
+    const session = await gateway.createSession(runSessionInput(company, agent, run));
+    for (const noteId of ["stale", "live"])
+      await expect(gateway.executeTool({ sessionToken: session.token, tool: "mcp-remote-fixture:update_note", parameters: { noteId } })).rejects.toMatchObject({ reasonCode: "approval_required" });
+    const [stale, live] = await db.select().from(toolActionRequests).orderBy(toolActionRequests.createdAt);
+    const approval = (label: string, payload: Record<string, unknown> = {}) => ({ companyId: company.id, type: "request_board_approval", requestedByAgentId: agent.id, payload: { title: label, ...payload } });
+    const [staleApproval, liveApproval, pastDeadline, futureDeadline, noDeadline, badDeadline] = await db.insert(approvals).values([
+      approval("stale"), approval("live"),
+      approval("past", { expiresAt: new Date(Date.now() - 60_000).toISOString() }),
+      approval("future", { expiresAt: new Date(Date.now() + 3_600_000).toISOString() }),
+      approval("none"), approval("bad", { expiresAt: "next Tuesday" }),
+    ]).returning();
+    await db.update(toolActionRequests).set({ approvalId: staleApproval.id, expiresAt: new Date(Date.now() - 1000) }).where(eq(toolActionRequests.id, stale.id));
+    await db.update(toolActionRequests).set({ approvalId: liveApproval.id }).where(eq(toolActionRequests.id, live.id));
+
+    expect(await gateway.sweepActionReviews()).toMatchObject({ approvalsCancelled: 2 });
+    const byId = new Map((await db.select().from(approvals)).map(row => [row.id, row]));
+    expect(byId.get(staleApproval.id)).toMatchObject({ status: "cancelled", decisionNote: expect.stringContaining("approval window closed") });
+    expect(byId.get(staleApproval.id)!.decidedAt).not.toBeNull();
+    expect(byId.get(pastDeadline.id)).toMatchObject({ status: "cancelled", decisionNote: expect.stringContaining("only valid until") });
+    for (const kept of [liveApproval, futureDeadline, noDeadline, badDeadline]) expect(byId.get(kept.id)!.status).toBe("pending");
+    // idempotent: a second sweep changes nothing
+    expect(await gateway.sweepActionReviews()).toMatchObject({ approvalsCancelled: 0 });
+    // a decided approval is never reopened or overwritten
+    await db.update(approvals).set({ status: "approved" }).where(eq(approvals.id, futureDeadline.id));
+    await db.update(approvals).set({ payload: { title: "future", expiresAt: new Date(Date.now() - 1000).toISOString() } }).where(eq(approvals.id, futureDeadline.id));
+    expect(await gateway.sweepActionReviews()).toMatchObject({ approvalsCancelled: 0 });
   });
 
   it("settles expired reviews and interrupted execution without replaying an uncertain external action", async () => {

@@ -2344,6 +2344,58 @@ export function createToolGatewayService(
     });
   }
 
+  // A formal board approval linked to a tool action request is only a gate on
+  // that request: once the request has expired or otherwise closed, approving
+  // it can no longer run anything (approveActionRequest answers 409). Leaving it
+  // "pending" only makes the board look at a decision that no longer exists, so
+  // it is cancelled with a note saying why. Same for any pending approval whose
+  // payload carries an `expiresAt` that has passed (a time-bound request).
+  async function cancelStaleBoardApprovals(now: Date): Promise<number> {
+    const closedRequestApprovals = await db
+      .select({ id: approvals.id, requestStatus: toolActionRequests.status })
+      .from(approvals)
+      .innerJoin(toolActionRequests, eq(toolActionRequests.approvalId, approvals.id))
+      .where(
+        and(
+          eq(approvals.status, "pending"),
+          inArray(toolActionRequests.status, ["expired", "cancelled", "rejected", "failed", "executed"]),
+        ),
+      )
+      .limit(500);
+    const timeBoundApprovals = await db
+      .select({ id: approvals.id, expiresAt: sql<string>`${approvals.payload}->>'expiresAt'` })
+      .from(approvals)
+      .where(
+        and(
+          eq(approvals.status, "pending"),
+          sql`(${approvals.payload}->>'expiresAt') is not null`,
+          sql`(${approvals.payload}->>'expiresAt') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'`,
+          sql`(${approvals.payload}->>'expiresAt')::timestamptz <= ${now.toISOString()}::timestamptz`,
+        ),
+      )
+      .limit(500);
+    const notes = new Map<string, string>();
+    for (const row of closedRequestApprovals)
+      notes.set(row.id, row.requestStatus === "expired"
+        ? "Expired: the request's approval window closed before a decision, so approving it would no longer run anything. Removed from the board's queue automatically; the agent asks again if it is still needed."
+        : `Closed: the request it gated is ${row.requestStatus}, so there is nothing left to decide. Removed from the board's queue automatically.`);
+    for (const row of timeBoundApprovals)
+      if (!notes.has(row.id))
+        notes.set(row.id, `Expired: this request was only valid until ${row.expiresAt}. Removed from the board's queue automatically.`);
+    let cancelled = 0;
+    for (const [id, decisionNote] of notes) {
+      const [changed] = await db
+        .update(approvals)
+        .set({ status: "cancelled", decisionNote, decidedAt: now, updatedAt: now })
+        .where(and(eq(approvals.id, id), eq(approvals.status, "pending")))
+        .returning({ id: approvals.id, companyId: approvals.companyId });
+      if (!changed) continue;
+      cancelled += 1;
+      logger.info({ approvalId: changed.id, companyId: changed.companyId, decisionNote }, "Cancelled a stale board approval");
+    }
+    return cancelled;
+  }
+
   async function reflectToolActionInteractionLifecycle(input: {
     actionRequestId: string;
     status:
@@ -10149,7 +10201,8 @@ export function createToolGatewayService(
         if (rows.length < 100) break;
         cursor = rows[rows.length - 1].id;
       }
-      return { scanned };
+      const approvalsCancelled = await cancelStaleBoardApprovals(new Date());
+      return { scanned, approvalsCancelled };
     },
 
     async approveActionRequest(input: {
