@@ -23,7 +23,7 @@ import {
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import { agentRunWritesRevoked } from "../agent-run-cancellation.js";
 import { loadAgentRunAuthentication } from "./agent-run-authentication.js";
-import { isUuidLike, normalizeAgentApiKeyScope, type DeploymentMode } from "@paperclipai/shared";
+import { isUuidLike, normalizeAgentApiKeyScope, UnrecognisedAgentKeyScopeError, type DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { captureRunIdentity } from "../services/run-identity.js";
@@ -530,12 +530,23 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       return;
     }
 
+    let keyScope;
+    try {
+      keyScope = normalizeAgentApiKeyScope(key.scopeConfig);
+    } catch (err) {
+      if (!(err instanceof UnrecognisedAgentKeyScopeError)) throw err;
+      // Fail closed: never let an unparseable scope degrade to a standard (full-authority) key.
+      logger.warn({ keyId: key.id, agentId: key.agentId, companyId: key.companyId },
+        "agent key rejected: stored scope is not recognised by this build");
+      next(forbidden(err.message, { code: err.code }));
+      return;
+    }
     req.actor = {
       type: "agent",
       agentId: key.agentId,
       companyId: key.companyId,
       keyId: key.id,
-      keyScope: normalizeAgentApiKeyScope(key.scopeConfig),
+      keyScope,
       onBehalfOfUserId: responsibleUserId,
       onBehalfOfMemberships: await loadResponsibleUserMemberships(db, {
         companyId: key.companyId,

@@ -1877,6 +1877,8 @@ export {
   updateAgentInstructionsPathSchema,
   agentApiKeyScopeSchema,
   normalizeAgentApiKeyScope,
+  displayAgentApiKeyScope,
+  UnrecognisedAgentKeyScopeError,
   standardAgentKeyScopeSchema,
   taskBridgeAgentKeyScopeSchema,
   skillTestAgentKeyScopeSchema,

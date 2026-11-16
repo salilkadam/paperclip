@@ -3,7 +3,7 @@ import { type BudgetServiceHooks } from "./budgets.js";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, agentConfigRevisions, agentApiKeys, heartbeatRuns } from "@paperclipai/db";
-import { isUuidLike, normalizeAgentApiKeyScope, normalizeAgentUrlKey, type AgentApiKeyScope } from "@paperclipai/shared";
+import { displayAgentApiKeyScope, isUuidLike, normalizeAgentApiKeyScope, normalizeAgentUrlKey, type AgentApiKeyScope } from "@paperclipai/shared";
 
 import { conflict, notFound, unprocessable } from "../errors.js";
 
@@ -167,7 +167,7 @@ export function agentService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .then((rows) => rows.map((row) => ({
           id: row.id,
           name: row.name,
-          scope: normalizeAgentApiKeyScope(row.scopeConfig),
+          scope: displayAgentApiKeyScope(row.scopeConfig),
           responsibleUserId: row.responsibleUserId,
           createdAt: row.createdAt,
           revokedAt: row.revokedAt,
@@ -192,7 +192,7 @@ export function agentService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
           return row
             ? {
               ...row,
-              scope: normalizeAgentApiKeyScope(row.scopeConfig),
+              scope: displayAgentApiKeyScope(row.scopeConfig),
             }
             : null;
         }),

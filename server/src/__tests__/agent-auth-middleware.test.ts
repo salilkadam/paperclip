@@ -32,7 +32,8 @@ function createSelectChain(rowsForTable: (table: unknown) => unknown[]) {
 
 function createDbState(input: {
   agent: { id: string; companyId: string; status?: string; lifecycleHolds?: string[] };
-  agentKey?: { id: string; agentId: string; companyId: string; keyHash: string; responsibleUserId?: string | null };
+  agentKey?: { id: string; agentId: string; companyId: string; keyHash: string; responsibleUserId?: string | null;
+    scopeConfig?: unknown };
   run?: { id: string; companyId: string; agentId: string; responsibleUserId?: string | null;
     status?: string; contextSnapshot?: Record<string, unknown>; resultJson?: Record<string, unknown> };
 }) {
@@ -51,7 +52,7 @@ function createDbState(input: {
         keyHash: input.agentKey.keyHash,
         responsibleUserId: input.agentKey.responsibleUserId ?? null,
         revokedAt: null,
-        scopeConfig: null,
+        scopeConfig: input.agentKey.scopeConfig ?? null,
       }
     : null;
   const runRow = input.run
@@ -558,6 +559,36 @@ describe("agent auth middleware", () => {
       onBehalfOfUserId: "user-key",
       source: "agent_key",
     });
+  });
+
+  it("keeps a parseable task_bridge scope on the agent-key actor", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const projectId = randomUUID();
+    const token = "pcp_test_agent_key_bridge";
+    const { db } = createDbState({
+      agent: { id: agentId, companyId },
+      agentKey: { id: randomUUID(), agentId, companyId, keyHash: hashToken(token), responsibleUserId: "user-key",
+        scopeConfig: { kind: "task_bridge", projectId } },
+    });
+    const res = await request(createApp(db)).get("/actor").set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.keyScope).toEqual({ kind: "task_bridge", projectId });
+  });
+
+  it("refuses an agent key whose stored scope this build cannot parse (never degrades to standard)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const token = "pcp_test_agent_key_future_scope";
+    const { db } = createDbState({
+      agent: { id: agentId, companyId },
+      agentKey: { id: randomUUID(), agentId, companyId, keyHash: hashToken(token), responsibleUserId: "user-key",
+        // A field a newer build adds (e.g. reportToUserId), read after a rollback.
+        scopeConfig: { kind: "task_bridge", projectId: randomUUID(), reportToUserId: "user-owner" } },
+    });
+    const res = await request(createApp(db)).get("/actor").set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(403);
+    expect(JSON.stringify(res.body)).toContain("KEY_SCOPE_UNRECOGNISED");
   });
 
   it("rejects agent keys that lack a responsible user binding and audits the denial", async () => {
