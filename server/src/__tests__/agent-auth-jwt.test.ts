@@ -85,6 +85,35 @@ describe("agent local JWT", () => {
     expect(claims?.key_scope).toEqual({ kind: "skill_test", issueId });
   });
 
+  it("rejects a token whose signed key_scope this build cannot parse (never degrades to standard)", () => {
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const future = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1", "user-1",
+      { kind: "task_bridge", projectId, reportToUserId: "user-owner" } as any);
+    expect(verifyLocalAgentJwt(future!)).toBeNull();
+    const unknownKind = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1", "user-1",
+      { kind: "nope" } as any);
+    expect(verifyLocalAgentJwt(unknownKind!)).toBeNull();
+    const ok = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1", "user-1", { kind: "task_bridge", projectId });
+    expect(verifyLocalAgentJwt(ok!)?.key_scope).toEqual({ kind: "task_bridge", projectId });
+  });
+
+  it("rejects a token carrying key_scope: null (malformed, not standard)", () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    delete process.env[disableLegacyFallbackEnv];
+    const now = Math.floor(Date.now() / 1000);
+    const claims = { sub: "agent-n", company_id: "company-n", adapter_type: "claude_local", run_id: "run-n",
+      key_scope: null, iat: now, exp: now + 3600, iss: "paperclip", aud: "paperclip-api" };
+    const headerB64 = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" }), "utf8").toString("base64url");
+    const claimsB64 = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+    const sig = createHmac("sha256", process.env[secretEnv]!).update(`${headerB64}.${claimsB64}`).digest("base64url");
+    expect(verifyLocalAgentJwt(`${headerB64}.${claimsB64}.${sig}`)).toBeNull();
+    // Control: the same token without key_scope verifies, so the null is what is refused.
+    const { key_scope: _drop, ...plain } = claims;
+    const plainB64 = Buffer.from(JSON.stringify(plain), "utf8").toString("base64url");
+    const sig2 = createHmac("sha256", process.env[secretEnv]!).update(`${headerB64}.${plainB64}`).digest("base64url");
+    expect(verifyLocalAgentJwt(`${headerB64}.${plainB64}.${sig2}`)).not.toBeNull();
+  });
+
   it("returns null when secret is missing", () => {
     process.env[secretEnv] = "";
     const token = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
