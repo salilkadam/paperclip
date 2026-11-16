@@ -8,6 +8,7 @@ import {
   type Db,
 } from "@paperclipai/db";
 import { forbidden } from "../errors.js";
+import { normalizeAgentApiKeyScope } from "@paperclipai/shared";
 import {
   authorizationService,
   authorizationDeniedDetails,
@@ -57,7 +58,14 @@ export async function resolveInstructionActor(
         code: "INSTRUCTION_IDENTITY_INVALID",
       });
     responsibleUserId = key.responsibleUserId;
-    keyScope = key.scopeConfig ?? undefined;
+    try {
+      keyScope = normalizeAgentApiKeyScope(key.scopeConfig);
+    } catch {
+      // Fail closed, same as the key middleware: an unparseable stored scope never authorizes.
+      throw forbidden("Instruction API key scope is not recognised by this server build", {
+        code: "KEY_SCOPE_UNRECOGNISED",
+      });
+    }
   }
   if (actor.runId) {
     const [run] = await db

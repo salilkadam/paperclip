@@ -225,9 +225,38 @@ export type AgentApiKeyScope = z.infer<typeof agentApiKeyScopeSchema>;
 export type TaskBridgeAgentKeyScope = z.infer<typeof taskBridgeAgentKeyScopeSchema>;
 export type SkillTestAgentKeyScope = z.infer<typeof skillTestAgentKeyScopeSchema>;
 
+/** A stored or signed key scope this build cannot parse (e.g. written by a newer build). */
+export class UnrecognisedAgentKeyScopeError extends Error {
+  readonly code = "KEY_SCOPE_UNRECOGNISED";
+  constructor() {
+    super("Agent key scope is not recognised by this server build");
+    this.name = "UnrecognisedAgentKeyScopeError";
+  }
+}
+
+/**
+ * Resolve an agent key's scope for AUTHORIZATION. Standard keys store no scope (null).
+ * Any other value must parse; one that does not (for example a task_bridge scope with a
+ * field added by a newer build, read after a rollback) throws instead of degrading to
+ * "standard", which would silently give a project-bounded key the agent's full authority.
+ */
 export function normalizeAgentApiKeyScope(value: unknown): AgentApiKeyScope {
+  if (value === null || value === undefined) return { kind: "standard" };
   const parsed = agentApiKeyScopeSchema.safeParse(value);
-  return parsed.success ? parsed.data : { kind: "standard" };
+  if (parsed.success) return parsed.data;
+  throw new UnrecognisedAgentKeyScopeError();
+}
+
+/**
+ * Scope for DISPLAY only (key listings), where a throw would hide the key from the board
+ * that needs to revoke it. Never use for authorization.
+ */
+export function displayAgentApiKeyScope(value: unknown): AgentApiKeyScope | { kind: "unrecognised" } {
+  try {
+    return normalizeAgentApiKeyScope(value);
+  } catch {
+    return { kind: "unrecognised" };
+  }
 }
 
 export const createAgentKeySchema = z.object({

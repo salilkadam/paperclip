@@ -219,9 +219,17 @@ export function verifyLocalAgentJwt(token: string, options: { strictRunAuthority
   const authorizingUserClaim = Object.hasOwn(claims, "authorizing_user_id")
     ? typeof claims.authorizing_user_id === "string" && claims.authorizing_user_id.trim() ? claims.authorizing_user_id.trim() : null : undefined;
   if (authorizingUserClaim === null) return null;
-  const keyScopeClaim = Object.hasOwn(claims, "key_scope")
-    ? normalizeAgentApiKeyScope(claims.key_scope)
-    : undefined;
+  let keyScopeClaim: ReturnType<typeof normalizeAgentApiKeyScope> | undefined;
+  if (Object.hasOwn(claims, "key_scope")) {
+    // A present key_scope must be a scope object: minting omits it for standard tokens, so
+    // null or a non-object here is malformed, never "standard".
+    if (!claims.key_scope || typeof claims.key_scope !== "object") return null;
+    try {
+      keyScopeClaim = normalizeAgentApiKeyScope(claims.key_scope);
+    } catch {
+      return null; // fail closed: a signed scope this build cannot parse invalidates the token
+    }
+  }
   const iat = typeof claims.iat === "number" ? claims.iat : null;
   const exp = typeof claims.exp === "number" ? claims.exp : null;
   if (!sub || !adapterType || !runId || !iat || !exp) return null;
