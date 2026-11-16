@@ -34,7 +34,7 @@ describe("agent key scope normalization (fail closed)", () => {
     expect(normalizeAgentApiKeyScope({ kind: "task_bridge", projectId })).toEqual({ kind: "task_bridge", projectId });
   });
   it("throws instead of degrading an unparseable scope to standard", () => {
-    const future = { kind: "task_bridge", projectId: "11111111-1111-4111-8111-111111111111", reportToUserId: "u" };
+    const future = { kind: "task_bridge", projectId: "11111111-1111-4111-8111-111111111111", futureField: "u" };
     expect(() => normalizeAgentApiKeyScope(future)).toThrow(UnrecognisedAgentKeyScopeError);
     expect(() => normalizeAgentApiKeyScope({ kind: "something_new" })).toThrow(UnrecognisedAgentKeyScopeError);
     expect(() => normalizeAgentApiKeyScope("garbage")).toThrow(UnrecognisedAgentKeyScopeError);

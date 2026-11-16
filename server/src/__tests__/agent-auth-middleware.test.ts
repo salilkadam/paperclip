@@ -583,8 +583,8 @@ describe("agent auth middleware", () => {
     const { db } = createDbState({
       agent: { id: agentId, companyId },
       agentKey: { id: randomUUID(), agentId, companyId, keyHash: hashToken(token), responsibleUserId: "user-key",
-        // A field a newer build adds (e.g. reportToUserId), read after a rollback.
-        scopeConfig: { kind: "task_bridge", projectId: randomUUID(), reportToUserId: "user-owner" } },
+        // A field a newer build adds, read after a rollback.
+        scopeConfig: { kind: "task_bridge", projectId: randomUUID(), futureField: "x" } },
     });
     const res = await request(createApp(db)).get("/actor").set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(403);
