@@ -1,18 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
-import { expect, it } from "vitest";
+import express from "express";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   activityLog,
   agentApiKeys,
   agents,
+  authUsers,
   companyMemberships,
+  heartbeatRuns,
   issues,
   projects,
 } from "@paperclipai/db";
-import { INBOX_MINE_ISSUE_STATUS_FILTER, taskBridgeAgentKeyScopeSchema, type TaskBridgeAgentKeyScope } from "@paperclipai/shared";
+import {
+  INBOX_MINE_ISSUE_STATUS_FILTER,
+  normalizeAgentApiKeyScope,
+  taskBridgeAgentKeyScopeSchema,
+  type TaskBridgeAgentKeyScope,
+} from "@paperclipai/shared";
+import { actorMiddleware } from "../middleware/auth.js";
+import { errorHandler } from "../middleware/index.js";
+import { agentRoutes } from "../routes/agents.js";
 import { issueRoutes } from "../routes/issues.js";
-import { agentService } from "../services/agents.js";
+import { agentService, TASK_BRIDGE_REPORT_TO_MINTING_ENV } from "../services/agents.js";
 import { authorizationService } from "../services/authorization.js";
 import {
   describeEmbeddedPostgres,
@@ -32,12 +43,35 @@ describeEmbeddedPostgres("task_bridge reportToUserId", () => {
     resetEach: async (db) => {
       await db.delete(activityLog);
       await db.delete(issues);
+      await db.delete(heartbeatRuns);
       await db.delete(agentApiKeys);
       await db.delete(agents);
       await db.delete(projects);
       await resetCompanyIssueFixtures(db);
+      await db.delete(authUsers);
     },
   });
+
+  // Minting reportToUserId is off by default (rollback safety); this suite
+  // exercises the enabled path and turns it off explicitly where it tests the gate.
+  const previousMintFlag = process.env[TASK_BRIDGE_REPORT_TO_MINTING_ENV];
+  beforeAll(() => {
+    process.env[TASK_BRIDGE_REPORT_TO_MINTING_ENV] = "true";
+  });
+  afterAll(() => {
+    if (previousMintFlag === undefined) delete process.env[TASK_BRIDGE_REPORT_TO_MINTING_ENV];
+    else process.env[TASK_BRIDGE_REPORT_TO_MINTING_ENV] = previousMintFlag;
+  });
+
+  /** The real bearer-token path: actorMiddleware resolves the key from its plaintext token. */
+  function bearerApp() {
+    const app = express();
+    app.use(express.json());
+    app.use(actorMiddleware(ctx.db, { deploymentMode: "authenticated" }));
+    app.use("/api", issueRoutes(ctx.db, {} as never));
+    app.use(errorHandler);
+    return app;
+  }
 
   async function seed() {
     const db = ctx.db;
@@ -52,6 +86,10 @@ describeEmbeddedPostgres("task_bridge reportToUserId", () => {
       membershipRole: "member",
       updatedAt: new Date(),
     });
+    // Real auth resolves the key's responsible user against auth users.
+    await db.insert(authUsers).values([owner.userId, otherMemberId].map((id) => ({
+      id, name: id, email: `${id}@example.test`, emailVerified: true, createdAt: new Date(), updatedAt: new Date(),
+    })));
     const [agent] = await db
       .insert(agents)
       .values({ companyId, name: `Bridge ${randomUUID()}`, role: "engineer", adapterType: "process" })
@@ -308,5 +346,172 @@ describeEmbeddedPostgres("task_bridge reportToUserId", () => {
       resource: { type: "project", companyId: s.companyId, projectId: s.projectA.id },
     });
     expect(decision).toMatchObject({ allowed: false, reason: "deny_scope" });
+  });
+  it("refuses to mint reportToUserId while the minting flag is off", async () => {
+    const s = await seed();
+    process.env[TASK_BRIDGE_REPORT_TO_MINTING_ENV] = "false";
+    try {
+      await expect(
+        agentService(ctx.db).createApiKey(s.agent.id, "bridge", {
+          kind: "task_bridge",
+          projectId: s.projectA.id,
+          reportToUserId: s.owner.userId,
+        }),
+      ).rejects.toMatchObject({ status: 422 });
+      // A key without the field is unaffected by the flag.
+      const plain = await agentService(ctx.db).createApiKey(s.agent.id, "bridge", { kind: "task_bridge", projectId: s.projectA.id });
+      expect(plain.scope).toMatchObject({ kind: "task_bridge", projectId: s.projectA.id });
+    } finally {
+      process.env[TASK_BRIDGE_REPORT_TO_MINTING_ENV] = "true";
+    }
+    expect(await ctx.db.select().from(agentApiKeys).where(eq(agentApiKeys.agentId, s.agent.id))).toHaveLength(1);
+  });
+
+  it("authenticates the plaintext token through the real auth middleware and keeps the stored scope intact", async () => {
+    const s = await seed();
+    const { key } = await mintBridge(s, { projectId: s.projectA.id, reportToUserId: s.owner.userId });
+    const [row] = await ctx.db.select().from(agentApiKeys).where(eq(agentApiKeys.id, key.id));
+    const reparsed = normalizeAgentApiKeyScope(row!.scopeConfig);
+    expect(reparsed).toMatchObject({ kind: "task_bridge", projectId: s.projectA.id, reportToUserId: s.owner.userId });
+
+    const res = await request(bearerApp())
+      .post(`/api/companies/${s.companyId}/issues`)
+      .set("Authorization", `Bearer ${key.token}`)
+      .send({ title: "Bridge via bearer", projectId: s.projectA.id, assigneeUserId: s.owner.userId, status: "todo" });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toMatchObject({
+      assigneeUserId: s.owner.userId,
+      originKind: "task_bridge",
+      originId: key.id,
+      createdByAgentId: s.agent.id,
+      createdByUserId: null,
+    });
+    // Still bounded through the real path: another member and another project are refused.
+    const other = await request(bearerApp())
+      .post(`/api/companies/${s.companyId}/issues`)
+      .set("Authorization", `Bearer ${key.token}`)
+      .send({ title: "Bridge via bearer to other", projectId: s.projectA.id, assigneeUserId: s.otherMemberId, status: "todo" });
+    expect(other.status, JSON.stringify(other.body)).toBe(403);
+    const foreignProject = await request(bearerApp())
+      .post(`/api/companies/${s.companyId}/issues`)
+      .set("Authorization", `Bearer ${key.token}`)
+      .send({ title: "Bridge via bearer into B", projectId: s.projectB.id, status: "todo" });
+    expect(foreignProject.status, JSON.stringify(foreignProject.body)).toBe(404);
+    expect(await issuesTitled(s.companyId, "Bridge via bearer to other")).toHaveLength(0);
+    expect(await issuesTitled(s.companyId, "Bridge via bearer into B")).toHaveLength(0);
+  });
+
+  it("refuses a key whose stored scope does not parse instead of treating it as a standard key", async () => {
+    const s = await seed();
+    const { key } = await mintBridge(s, { projectId: s.projectA.id, reportToUserId: s.owner.userId });
+    // Simulates a scope written by a newer build: an extra field the strict schema rejects.
+    await ctx.db
+      .update(agentApiKeys)
+      .set({ scopeConfig: { kind: "task_bridge", projectId: s.projectA.id, futureField: "x" } as never })
+      .where(eq(agentApiKeys.id, key.id));
+
+    const res = await request(bearerApp())
+      .post(`/api/companies/${s.companyId}/issues`)
+      .set("Authorization", `Bearer ${key.token}`)
+      .send({ title: "Bridge with unparseable scope", projectId: s.projectB.id, status: "todo" });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(JSON.stringify(res.body)).toContain("KEY_SCOPE_UNRECOGNISED");
+    expect(await issuesTitled(s.companyId, "Bridge with unparseable scope")).toHaveLength(0);
+    const list = await request(bearerApp())
+      .get(`/api/companies/${s.companyId}/issues`)
+      .set("Authorization", `Bearer ${key.token}`);
+    expect(list.status, JSON.stringify(list.body)).toBe(403);
+    const audits = await ctx.db
+      .select()
+      .from(activityLog)
+      .where(and(eq(activityLog.entityId, key.id), eq(activityLog.action, "auth.agent_key_invalid_scope")));
+    expect(audits.length).toBeGreaterThanOrEqual(1);
+
+    // The board can still see it flagged and revoke it.
+    const boardApp = routeApp(ctx.db, s.owner.actor, agentRoutes);
+    const keys = await request(boardApp).get(`/api/agents/${s.agent.id}/keys`);
+    expect(keys.status, JSON.stringify(keys.body)).toBe(200);
+    const listed = keys.body.find((k: { id: string }) => k.id === key.id);
+    expect(listed.scope).toEqual({ kind: "unrecognised" });
+    const revoke = await request(boardApp).delete(`/api/agents/${s.agent.id}/keys/${key.id}`);
+    expect(revoke.status, JSON.stringify(revoke.body)).toBe(200);
+
+    // A legacy standard key (null scope) still authenticates.
+    const standard = await agentService(ctx.db).createApiKey(s.agent.id, "standard", { kind: "standard" }, {
+      responsibleUserId: s.owner.userId,
+    });
+    const [standardRow] = await ctx.db.select().from(agentApiKeys).where(eq(agentApiKeys.id, standard.id));
+    expect(standardRow!.scopeConfig).toBeNull();
+    const standardList = await request(bearerApp())
+      .get(`/api/companies/${s.companyId}/issues`)
+      .set("Authorization", `Bearer ${standard.token}`);
+    expect(standardList.status, JSON.stringify(standardList.body)).toBe(200);
+  });
+
+  it("PATCH (real bearer + run): refuses reassigning a foreign issue to the report-to user, allows its own, refuses moving project", async () => {
+    const s = await seed();
+    const { key } = await mintBridge(s, { projectId: s.projectA.id, reportToUserId: s.owner.userId });
+    const [run] = await ctx.db
+      .insert(heartbeatRuns)
+      .values({ companyId: s.companyId, agentId: s.agent.id, status: "running" })
+      .returning();
+    const app = bearerApp();
+    const as = (req: request.Test) => req.set("Authorization", `Bearer ${key.token}`).set("X-Paperclip-Run-Id", run!.id);
+
+    const [foreign] = await ctx.db
+      .insert(issues)
+      .values({ companyId: s.companyId, title: "Foreign in A", status: "todo", projectId: s.projectA.id, assigneeAgentId: s.agent.id })
+      .returning();
+    const foreignPatch = await as(request(app).patch(`/api/issues/${foreign!.id}`)).send({ assigneeUserId: s.owner.userId, assigneeAgentId: null });
+    expect(foreignPatch.status, JSON.stringify(foreignPatch.body)).toBe(403);
+    expect(foreignPatch.body.code).not.toBe("cross_issue_influence_run_context_required");
+    const [foreignAfter] = await ctx.db.select().from(issues).where(eq(issues.id, foreign!.id));
+    expect(foreignAfter!.assigneeUserId).toBeNull();
+
+    const own = await as(request(app).post(`/api/companies/${s.companyId}/issues`))
+      .send({ title: "Bridge own for patch", projectId: s.projectA.id, status: "todo" });
+    expect(own.status, JSON.stringify(own.body)).toBe(201);
+    const ownPatch = await as(request(app).patch(`/api/issues/${own.body.id}`)).send({ assigneeUserId: s.owner.userId });
+    expect(ownPatch.status, JSON.stringify(ownPatch.body)).toBe(200);
+    expect(ownPatch.body.assigneeUserId).toBe(s.owner.userId);
+
+    const move = await as(request(app).patch(`/api/issues/${own.body.id}`)).send({ projectId: s.projectB.id });
+    expect(move.status, JSON.stringify(move.body)).toBe(404);
+    const [ownAfter] = await ctx.db.select().from(issues).where(eq(issues.id, own.body.id));
+    expect(ownAfter!.projectId).toBe(s.projectA.id);
+  });
+
+  it("refuses minting through the HTTP route for a non-board actor", async () => {
+    const s = await seed();
+    const { actor } = await mintBridge(s, { projectId: s.projectA.id });
+    const agentApp = routeApp(ctx.db, actor as unknown as BoardActor, agentRoutes);
+    const res = await request(agentApp)
+      .post(`/api/agents/${s.agent.id}/keys`)
+      .send({ name: "self-minted", scope: { kind: "task_bridge", projectId: s.projectA.id, reportToUserId: s.owner.userId } });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    const minted = await ctx.db.select().from(agentApiKeys).where(eq(agentApiKeys.name, "self-minted"));
+    expect(minted).toHaveLength(0);
+    // The board can mint the same scope through the route.
+    const boardApp = routeApp(ctx.db, s.owner.actor, agentRoutes);
+    const ok = await request(boardApp)
+      .post(`/api/agents/${s.agent.id}/keys`)
+      .send({ name: "board-minted", scope: { kind: "task_bridge", projectId: s.projectA.id, reportToUserId: s.owner.userId } });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+  });
+
+  it("refuses assignment once the report-to user is suspended after mint", async () => {
+    const s = await seed();
+    const { app } = await mintBridge(s, { projectId: s.projectA.id, reportToUserId: s.otherMemberId });
+    await ctx.db
+      .update(companyMemberships)
+      .set({ status: "suspended" })
+      .where(eq(companyMemberships.principalId, s.otherMemberId));
+    const res = await request(app)
+      .post(`/api/companies/${s.companyId}/issues`)
+      .send({ title: "Bridge to suspended", projectId: s.projectA.id, assigneeUserId: s.otherMemberId, status: "todo" });
+    // assertAssignableUser re-checks active membership on every use.
+    expect(res.status, JSON.stringify(res.body)).toBe(404);
+    expect(res.body.error).toBe("Assignee user not found");
+    expect(await issuesTitled(s.companyId, "Bridge to suspended")).toHaveLength(0);
   });
 });

@@ -20,6 +20,13 @@ import { createAgentLifecycle } from "./agent-lifecycle.js";
 
 export { hasAgentShortnameCollision, deduplicateAgentName } from "../lib/agent-records.js";
 
+export const TASK_BRIDGE_REPORT_TO_MINTING_ENV = "PAPERCLIP_TASK_BRIDGE_REPORT_TO_MINTING_ENABLED";
+
+/** Off unless explicitly "true"; read at call time so an operator can flip it without a rebuild. */
+export function taskBridgeReportToMintingEnabled(env: NodeJS.ProcessEnv = process.env) {
+  return env[TASK_BRIDGE_REPORT_TO_MINTING_ENV]?.trim().toLowerCase() === "true";
+}
+
 export function agentService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
   const {
     normalizeAgentRows,
@@ -125,6 +132,14 @@ export function agentService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       }
       if (existing.status === "terminated") {
         throw conflict("Cannot create keys for terminated agents");
+      }
+      if (scope.kind === "task_bridge" && scope.reportToUserId && !taskBridgeReportToMintingEnabled()) {
+        // Rollback safety: a build that predates reportToUserId parses such a
+        // key as unscoped (full agent authority). Minting stays off until every
+        // build an operator could roll back to refuses unparseable scopes.
+        throw unprocessable(
+          `task_bridge reportToUserId minting is disabled; set ${TASK_BRIDGE_REPORT_TO_MINTING_ENV}=true once the rollback floor refuses unparseable key scopes`,
+        );
       }
       if (scope.kind === "task_bridge" && scope.reportToUserId) {
         // The report-to user receives work from this key, so it must be a real,
