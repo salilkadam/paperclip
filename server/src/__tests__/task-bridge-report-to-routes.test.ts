@@ -10,7 +10,7 @@ import {
   issues,
   projects,
 } from "@paperclipai/db";
-import { taskBridgeAgentKeyScopeSchema, type TaskBridgeAgentKeyScope } from "@paperclipai/shared";
+import { INBOX_MINE_ISSUE_STATUS_FILTER, taskBridgeAgentKeyScopeSchema, type TaskBridgeAgentKeyScope } from "@paperclipai/shared";
 import { issueRoutes } from "../routes/issues.js";
 import { agentService } from "../services/agents.js";
 import { authorizationService } from "../services/authorization.js";
@@ -25,7 +25,7 @@ import {
 
 // Mirrors the Inbox "Mine" tab query (ui/src/pages/Inbox.tsx listCompact call).
 const INBOX_MINE_QUERY =
-  "touchedByUserId=me&inboxArchivedByUserId=me&status=backlog,todo,in_progress,in_review,blocked,done&includeRoutineExecutions=true&includeLiveDescendantSummary=true&view=compact";
+  `touchedByUserId=me&inboxArchivedByUserId=me&status=${INBOX_MINE_ISSUE_STATUS_FILTER}&includeRoutineExecutions=true&includeLiveDescendantSummary=true&view=compact`;
 
 describeEmbeddedPostgres("task_bridge reportToUserId", () => {
   const ctx = useEmbeddedPostgres("paperclip-task-bridge-report-to-", {
@@ -159,6 +159,49 @@ describeEmbeddedPostgres("task_bridge reportToUserId", () => {
     const mine = await request(ownerApp).get(`/api/companies/${s.companyId}/issues?${INBOX_MINE_QUERY}`);
     expect(mine.status, JSON.stringify(mine.body)).toBe(200);
     expect(mine.body.map((issue: { id: string }) => issue.id)).toContain(res.body.id);
+  });
+
+  it("creates a child of its own issue assigned to the report-to user and audits the key", async () => {
+    const s = await seed();
+    const { key, app } = await mintBridge(s, { projectId: s.projectA.id, reportToUserId: s.owner.userId });
+    const parent = await request(app)
+      .post(`/api/companies/${s.companyId}/issues`)
+      .send({ title: "Bridge own parent", projectId: s.projectA.id, status: "todo" });
+    expect(parent.status, JSON.stringify(parent.body)).toBe(201);
+    const child = await request(app)
+      .post(`/api/issues/${parent.body.id}/children`)
+      .send({ title: "Bridge child to owner", assigneeUserId: s.owner.userId, status: "todo" });
+    expect(child.status, JSON.stringify(child.body)).toBe(201);
+    expect(child.body).toMatchObject({
+      parentId: parent.body.id,
+      projectId: s.projectA.id,
+      assigneeUserId: s.owner.userId,
+      originKind: "task_bridge",
+      originId: key.id,
+    });
+    const [audit] = await ctx.db
+      .select()
+      .from(activityLog)
+      .where(and(eq(activityLog.entityId, child.body.id), eq(activityLog.action, "issue.child_created")));
+    expect(audit!.details).toMatchObject({ taskBridgeKeyId: key.id, assigneeUserId: s.owner.userId });
+  });
+
+  it("refuses report-to assignment through accepted-plan decomposition", async () => {
+    const s = await seed();
+    const { app } = await mintBridge(s, { projectId: s.projectA.id, reportToUserId: s.owner.userId });
+    const parent = await request(app)
+      .post(`/api/companies/${s.companyId}/issues`)
+      .send({ title: "Bridge decomposition source", projectId: s.projectA.id, status: "todo" });
+    expect(parent.status, JSON.stringify(parent.body)).toBe(201);
+    const res = await request(app)
+      .post(`/api/issues/${parent.body.id}/accepted-plan-decompositions`)
+      .send({
+        acceptedPlanRevisionId: randomUUID(),
+        children: [{ title: "Bridge decomposed to owner", assigneeUserId: s.owner.userId, status: "todo" }],
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toContain("only assign their report-to user when creating");
+    expect(await issuesTitled(s.companyId, "Bridge decomposed to owner")).toHaveLength(0);
   });
 
   it("creates in its own project without an assignee (previously 404 via project:read)", async () => {

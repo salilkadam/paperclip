@@ -12907,6 +12907,12 @@ export function issueRoutes(
           parentId: parent.id,
           identifier: issue.identifier,
           title: issue.title,
+          ...(isTaskBridgeKeyActor(req) && req.actor.keyId
+            ? {
+                taskBridgeKeyId: req.actor.keyId,
+                ...(issue.assigneeUserId ? { assigneeUserId: issue.assigneeUserId } : {}),
+              }
+            : {}),
           ...buildCreateIssueActivityStatusDetails(issue, res),
           inheritedExecutionWorkspaceFromIssueId: parent.id,
           ...(Array.isArray(req.body.blockedByIssueIds)
@@ -13054,6 +13060,11 @@ export function issueRoutes(
           req,
           collectIssueWorkspaceCommandPaths(childBody),
         );
+        if (isTaskBridgeKeyActor(req) && childBody.assigneeUserId) {
+          // Report-to assignment is limited to the bridge's own create paths,
+          // which stamp task_bridge origin and audit the key.
+          throw forbidden("Task bridge keys can only assign their report-to user when creating an issue or child issue.");
+        }
         if (childBody.assigneeAgentId || childBody.assigneeUserId) {
           await assertCanAssignTasks(req, sourceIssue.companyId, {
             projectId: childBody.projectId ?? sourceIssue.projectId ?? null,
