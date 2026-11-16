@@ -311,6 +311,7 @@ import {
   authorizationDeniedDetails,
   issueReadSqlCondition,
   projectReadSqlCondition,
+  taskBridgeScopeAllowsProject,
 } from "../services/authorization.js";
 import { stalledReviewDecisionService } from "../services/stalled-review-decisions.js";
 import { environmentService } from "../services/environments.js";
@@ -12426,12 +12427,17 @@ export function issueRoutes(
         res.status(404).json({ error: "Project not found" });
         return;
       }
-      const projectDecision = await access.decide({
-        actor: req.actor,
-        action: "project:read",
-        resource: { type: "project", companyId, projectId: selectedProject.id },
-      });
-      if (!projectDecision.allowed) {
+      // A task_bridge key never gets general project:read. It may only create
+      // inside a project that is one of its own project boundaries; anything
+      // else stays indistinguishable from a missing project.
+      const projectAllowed = isTaskBridgeKeyActor(req) && req.actor.keyScope?.kind === "task_bridge"
+        ? taskBridgeScopeAllowsProject(req.actor.keyScope, selectedProject.id)
+        : (await access.decide({
+          actor: req.actor,
+          action: "project:read",
+          resource: { type: "project", companyId, projectId: selectedProject.id },
+        })).allowed;
+      if (!projectAllowed) {
         res.status(404).json({ error: "Project not found" });
         return;
       }
@@ -12572,6 +12578,12 @@ export function issueRoutes(
         details: {
           title: issue.title,
           identifier: issue.identifier,
+          ...(isTaskBridgeKeyActor(req) && req.actor.keyId
+            ? {
+                taskBridgeKeyId: req.actor.keyId,
+                ...(issue.assigneeUserId ? { assigneeUserId: issue.assigneeUserId } : {}),
+              }
+            : {}),
           ...(runDelegationParentId && issue.parentId === runDelegationParentId
             ? { parentId: issue.parentId, parentDefaultedFromRunIssue: true }
             : {}),

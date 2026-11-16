@@ -2,7 +2,7 @@ import { type BudgetServiceHooks } from "./budgets.js";
 
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, agentConfigRevisions, agentApiKeys, heartbeatRuns } from "@paperclipai/db";
+import { agents, agentConfigRevisions, agentApiKeys, companyMemberships, heartbeatRuns } from "@paperclipai/db";
 import { displayAgentApiKeyScope, isUuidLike, normalizeAgentApiKeyScope, normalizeAgentUrlKey, type AgentApiKeyScope } from "@paperclipai/shared";
 
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -125,6 +125,26 @@ export function agentService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       }
       if (existing.status === "terminated") {
         throw conflict("Cannot create keys for terminated agents");
+      }
+      if (scope.kind === "task_bridge" && scope.reportToUserId) {
+        // The report-to user receives work from this key, so it must be a real,
+        // active board member of the key's own company at mint time. Issue
+        // creation re-checks membership (assertAssignableUser) on every use.
+        const membership = await db
+          .select({ id: companyMemberships.id })
+          .from(companyMemberships)
+          .where(
+            and(
+              eq(companyMemberships.companyId, existing.companyId),
+              eq(companyMemberships.principalType, "user"),
+              eq(companyMemberships.principalId, scope.reportToUserId),
+              eq(companyMemberships.status, "active"),
+            ),
+          )
+          .then((rows) => rows[0] ?? null);
+        if (!membership) {
+          throw unprocessable("task_bridge reportToUserId must be an active member of the agent's company");
+        }
       }
 
       const token = createToken();
