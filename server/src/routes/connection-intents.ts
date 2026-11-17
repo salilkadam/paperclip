@@ -29,9 +29,15 @@ function runtimeClaims(req: Request) {
   const claims = verifyRuntimeToolsToken(token);
   if (!claims) {
     // Same public error as before; the reason goes to the server log so a rejected run can be diagnosed.
-    logger.warn({ runtimeToolsToken: explainRuntimeToolsTokenFailure(token), path: req.path,
-      hasAuthorization: Boolean(req.header("authorization")), runIdHeader: req.header("x-paperclip-run-id") ?? null },
-      "runtime tools token rejected");
+    // Diagnostics must never change the response: any failure here still ends in the same 401.
+    try {
+      logger.warn({ runtimeToolsToken: explainRuntimeToolsTokenFailure(token), path: req.path,
+        hasAuthorization: Boolean(req.header("authorization")),
+        runIdHeader: req.header("x-paperclip-run-id")?.slice(0, 64) ?? null },
+        "runtime tools token rejected");
+    } catch {
+      logger.warn({ runtimeToolsToken: { reason: "explain_failed" }, path: req.path }, "runtime tools token rejected");
+    }
     throw unauthorized("Runtime tools token is missing, invalid, or expired");
   }
   return claims;

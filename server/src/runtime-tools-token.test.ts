@@ -55,6 +55,14 @@ describe("runtime connection tools token", () => {
     vi.stubEnv("PAPERCLIP_AGENT_JWT_SECRET", "a-different-secret");
     vi.setSystemTime(new Date("2026-08-26T12:00:00.000Z"));
     expect(explainRuntimeToolsTokenFailure(minted.token).reason).toBe("bad_signature");
+    // Structures verify rejects without throwing must not throw here either (a 401 must stay a 401).
+    const b64 = (v: unknown) => Buffer.from(JSON.stringify(v), "utf8").toString("base64url");
+    for (const t of [`${b64({ alg: "none" })}.${b64(null)}.x`, `${b64(null)}.${b64({ run_id: "r" })}.x`, `${b64([])}.${b64("s")}.x`]) {
+      expect(verifyRuntimeToolsToken(t)).toBeNull();
+      expect(explainRuntimeToolsTokenFailure(t).reason).toBe("unparseable");
+    }
+    const longRun = `${b64({ alg: "HS256" })}.${b64({ run_id: "x".repeat(5000) })}.x`;
+    expect(explainRuntimeToolsTokenFailure(longRun).runId).toHaveLength(64);
     const result = explainRuntimeToolsTokenFailure(minted.token);
     expect(JSON.stringify(result)).not.toContain(minted.token.split(".")[2]);
   });
