@@ -13,13 +13,18 @@
 #     human-only; publishing to social channels, sending email, connecting a new app and anything destructive need
 #     the board; no agent posts to Slack as a person.
 #
-# A router-mode Connect Hub server runs each app action through one of three tools, each limited by the hub to one
-# risk class: hub_read (read-only actions), hub_execute (writes; refuses destructive ones) and
-# hub_execute_destructive (deletes, archives, raw API calls and everything else the hub marks destructive). The app
-# is the prefix of the "tool" argument ("<app>.<action>"). No policy here touches hub_read, so every agent reads.
+# A router-mode Connect Hub server runs each app action through tools each limited by the hub to one risk class:
+# hub_read (read-only actions), hub_execute (writes), hub_publish (anything that makes content public: posts,
+# comments, replies, scheduling; hubs with four risk classes, connect-hub-composio #9) and hub_execute_destructive
+# (deletes, archives, raw API calls and everything else the hub marks destructive). An older hub has no hub_publish
+# and runs publishing through hub_execute; the per-app social rules at 21 keep covering that. NOTE: the hub classes
+# as publish only the social toolkits (linkedin, facebook-pages, instagram-business, youtube, google-my-business,
+# reddit) and explicit overrides; public actions of other apps stay hub_execute (write) and are governed by the
+# per-app rules below, not by the publish rule. The app is the prefix
+# of the "tool" argument ("<app>.<action>"). No policy here touches hub_read, so every agent reads.
 #
 # Per Connect Hub connection (lower priority = evaluated first; the first matching policy decides). "exec" means
-# hub_execute and hub_execute_destructive:
+# hub_execute, hub_publish and hub_execute_destructive:
 #    6 block      exec on Reddit, on Stack Exchange                 everyone (community posts are human-only)
 #    7 allow      hub_execute on GitHub (engineering); their destructive GitHub actions ask the board
 #    7 block      exec outside Google Drive/Docs/Sheets/Slides      C-level agents
@@ -30,6 +35,9 @@
 #    8 block      exec on GitHub                                    everyone else, including agents hired later
 #    9 ask first  hub_connect                                       everyone (a person connects each app)
 #    9 ask first  hub_execute_destructive                           everyone, C-level included
+#    9 ask first  hub_publish                                       everyone (publishing needs the board; it is
+#                                                                   policy-created BEFORE the hub exposes the tool,
+#                                                                   so a hub upgrade never opens an ungoverned path)
 #   10 allow      hub_execute                                       C-level agents (only Drive gets here)
 #   21 ask first  exec on LinkedIn, Facebook Pages, Instagram, YouTube, Google Business Profile   publishing
 #   21 ask first  hub_execute sending, replying, forwarding or requesting approval in Gmail       external email
@@ -113,7 +121,7 @@ desired_policies() { # (WORKER_IDS is unused: Slack and GitHub are closed to eve
     --arg reddit "$(app_re reddit)" --arg stackex "$(app_re stackexchange)" --arg slack "$(app_re slack)" \
     --arg github "$(app_re github)" \
     --arg notc "$NOT_C_LEVEL_APP" '
-    def exec: ["hub_execute", "hub_execute_destructive"];
+    def exec: ["hub_execute", "hub_publish", "hub_execute_destructive"];
     def p($name; $desc; $type; $prio; $tools; $agents; $args):
       { name: ("connect-hub: " + $name), description: $desc, policyType: $type, priority: $prio, enabled: true,
         selectors: ({ toolNames: $tools, connectionId: $conn } + (if $agents then { agentIds: $agents } else {} end)),
@@ -137,6 +145,8 @@ desired_policies() { # (WORKER_IDS is unused: Slack and GitHub are closed to eve
         "require_approval"; 9; ["hub_connect"]; null; null),
       p("destructive actions need the board"; "Deletes, archives, raw API calls and every other action the hub marks destructive need board approval, for every agent.";
         "require_approval"; 9; ["hub_execute_destructive"]; null; null),
+      p("publishing needs the board"; "Posts, comments, replies, scheduling and every other action the hub marks publish make content public; they need board approval, for every agent.";
+        "require_approval"; 9; ["hub_publish"]; null; null),
       p("C-level agents write to Google Drive"; "Owner: C-level agents write to Google Drive (everything else is blocked at priority 7).";
         "allow"; 10; ["hub_execute"]; $c; null) ]
     + [ $social[] as [$app, $re] | p("publishing to \($app) needs the board"; "Agents draft; the board approves each post."; "require_approval"; 21; exec; null; tool($re)) ]
@@ -207,8 +217,10 @@ check_catalog() {
   local cat
   cat="$(api GET "/tool-connections/$2/catalog" | jq -c '(.catalog | if type == "array" then . else (.tools // .entries // []) end)
     | map({name: (.toolName // .name), status: (.status // "active")})')"
-  if ! jq -e 'any(.name == "hub_execute_destructive")' >/dev/null <<<"$cat" && (( ! DRY )); then
-    api POST "/tool-connections/$2/catalog/refresh" >/dev/null || exit 1 # the hub may have been upgraded since the last listing
+  # Refresh when a router tool this script governs is missing: the hub may have been upgraded since Paperclip last
+  # listed it (a stale catalog would skip the hub_publish probes and report "governed" without proving that rule).
+  if ! jq -e 'any(.name == "hub_execute_destructive") and any(.name == "hub_publish")' >/dev/null <<<"$cat" && (( ! DRY )); then
+    api POST "/tool-connections/$2/catalog/refresh" >/dev/null || exit 1
     cat="$(api GET "/tool-connections/$2/catalog" | jq -c '(.catalog | if type == "array" then . else (.tools // .entries // []) end)
       | map({name: (.toolName // .name), status: (.status // "active")})')"
   fi
@@ -218,12 +230,16 @@ check_catalog() {
   jq -e 'any(.name == "hub_execute")' >/dev/null <<<"$cat" || die "$1: connection $2 has no hub_execute; is it a router-mode Connect Hub server?"
   if ! jq -e 'any(.name == "hub_execute_destructive")' >/dev/null <<<"$cat"; then
     local why="connection $2 has no hub_execute_destructive: its hub is too old and runs deletes through hub_execute"
-    (( DRY )) && { log "  WARNING: $why (or the catalog is stale; a live run refreshes it first)" >&2; echo held; return; }
+    (( DRY )) && { log "  WARNING: $why (or the catalog is stale; a live run refreshes it first)" >&2; echo "held nopublish"; return; }
     die "$1: $why. Deploy the current hub, then re-run"
   fi
   jq -e 'any(.name == "hub_read")' >/dev/null <<<"$cat" || log "  WARNING: no hub_read on connection $2: C-level agents cannot read other apps" >&2
-  if jq -e '[.[] | select(.name == "hub_execute" or .name == "hub_execute_destructive") | .status] | all(. == "active")' >/dev/null <<<"$cat"
-  then echo ready; else echo held; fi
+  local pub=nopublish
+  if jq -e 'any(.name == "hub_publish")' >/dev/null <<<"$cat"; then pub=publish
+  elif (( DRY )); then log "  NOTE: connection $2 lists no hub_publish (a hub before four risk classes, or a stale catalog; a live run refreshes it)" >&2
+  else log "  NOTE: connection $2 has no hub_publish after a catalog refresh: its hub predates four risk classes; the hub_publish rule waits for it" >&2; fi
+  if jq -e '[.[] | select(.name == "hub_execute" or .name == "hub_publish" or .name == "hub_execute_destructive") | .status] | all(. == "active")' >/dev/null <<<"$cat"
+  then echo "ready $pub"; else echo "held $pub"; fi
 }
 
 # An instance admin lists every company but can change only those it is a member of. Report the others.
@@ -257,6 +273,7 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
   for conn in $(jq -r '.[].id' <<<"$conns"); do
     log "  Connect Hub connection $conn"
     state="$(check_catalog "$cname" "$conn")" || exit 1
+    pub="${state#* }"; state="${state%% *}"
     desired="$(desired_policies "$conn" "$clevel" "$engineers" "$workers")"
     while read -r want; do ensure_policy "$cid" "$existing" "$want"; done < <(jq -c '.[]' <<<"$desired")
     # Older versions of this script used other names; disable what this version does not want.
@@ -267,11 +284,11 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
       .selectors.connectionId == $conn and (.name | startswith("connect-hub: ")) and (.name | IN($want[]) | not))' <<<"$existing")
     if (( DRY )); then total=$((total + 1)); continue; fi
     if [[ "$state" != ready ]]; then
-      pending+=("$cname: review hub_execute and hub_execute_destructive on connection $conn (Paperclip > Apps > Connect Hub > Tools), then re-run to prove the rules")
+      pending+=("$cname: review hub_execute, hub_execute_destructive$([[ $pub == publish ]] && echo ' and hub_publish' || echo ' (and hub_publish once the hub exposes it)') on connection $conn (Paperclip > Apps > Connect Hub > Tools), then re-run to prove the rules")
       total=$((total + 1)); continue
     fi
     cl="$(jq -r '.[0] // empty' <<<"$clevel")"; en="$(jq -r '.[0] // empty' <<<"$engineers")"; wk="$(jq -r '.[0] // empty' <<<"$workers")"
-    X=hub_execute; XD=hub_execute_destructive
+    X=hub_execute; XD=hub_execute_destructive; XP=hub_publish
     if [[ -n "$cl" ]]; then
       probe "$cid" "$conn" "$cl" "C-level writes to Drive"         $X  "$(exec_args google-drive.zz_governance_probe)" allowed
       probe "$cid" "$conn" "$cl" "C-level writes to Docs"          $X  "$(exec_args google-docs.zz_governance_probe)" allowed
@@ -279,6 +296,7 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
       probe "$cid" "$conn" "$cl" "C-level writes to GitHub"        $X  "$(exec_args github.zz_governance_probe)" off "C-level agents write only to Google Drive"
       probe "$cid" "$conn" "$cl" "C-level writes to another app"   $X  "$(exec_args todoist.zz_governance_probe)" off "C-level agents write only to Google Drive"
       probe "$cid" "$conn" "$cl" "C-level deletes in Drive"        $XD "$(exec_args google-drive.zz_governance_probe)" ask_first
+      if [[ $pub == publish ]]; then probe "$cid" "$conn" "$cl" "C-level publishes to LinkedIn" $XP "$(exec_args linkedin.zz_governance_probe)" off "C-level agents write only to Google Drive"; fi
     fi
     if [[ -n "$wk" ]]; then
       probe "$cid" "$conn" "$wk" "worker posts to Slack"           $X  "$(exec_args slack.zz_governance_probe)" off "no Slack through the hub"
@@ -293,11 +311,18 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
       probe "$cid" "$conn" "$wk" "worker deletes in another app"   $XD "$(exec_args todoist.zz_governance_probe)" ask_first
       probe "$cid" "$conn" "$wk" "worker uses another app"         $X  "$(exec_args todoist.zz_governance_probe)" allowed
       probe "$cid" "$conn" "$wk" "worker connects an app"          hub_connect '{"toolkit":"zz_governance_probe"}' ask_first
+      if [[ $pub == publish ]]; then
+        probe "$cid" "$conn" "$wk" "worker publishes via hub_publish"  $XP "$(exec_args linkedin.zz_governance_probe)" ask_first
+        probe "$cid" "$conn" "$wk" "worker publishes to Reddit (publish)" $XP "$(exec_args reddit.zz_governance_probe)" off "no Reddit posting"
+        probe "$cid" "$conn" "$wk" "worker publishes to Slack (publish)" $XP "$(exec_args slack.zz_governance_probe)" off "no Slack through the hub"
+        probe "$cid" "$conn" "$wk" "worker publishes on GitHub (publish)" $XP "$(exec_args github.zz_governance_probe)" off "GitHub writes belong to engineering"
+      fi
     fi
     if [[ -n "$en" ]]; then
       probe "$cid" "$conn" "$en" "engineer writes to GitHub"       $X  "$(exec_args github.zz_governance_probe)" allowed
       probe "$cid" "$conn" "$en" "engineer deletes on GitHub"      $XD "$(exec_args github.zz_governance_probe)" ask_first
       probe "$cid" "$conn" "$en" "engineer posts to Slack"         $X  "$(exec_args slack.zz_governance_probe)" off "no Slack through the hub"
+      if [[ $pub == publish ]]; then probe "$cid" "$conn" "$en" "engineer publishes" $XP "$(exec_args linkedin.zz_governance_probe)" ask_first; fi
     fi
     total=$((total + 1))
   done
