@@ -2,6 +2,7 @@ import express, { Router, type ErrorRequestHandler, type RequestHandler } from "
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { mcpToolCallArgumentsError } from "./tool-gateway.js";
 import { z } from "zod";
 import { type PublicMcpEvents } from "../services/public-mcp/events.js";
 import type { PublicMcpToolExtension } from "../services/public-mcp/dot-runner.js";
@@ -158,7 +159,13 @@ export function publicMcpIngressRoutes(oauth: PublicMcpOAuth, execute: ReturnTyp
         switch (method) {
           case "server/discover": result = { supportedVersions: ["2026-07-28"], capabilities: { tools: {}, ...(events ? { events: {} } : {}) } }; break;
           case "tools/list": result = await listTools(); break;
-          case "tools/call": result = await callTool(CallToolRequestSchema.parse(envelope.data)); break;
+          case "tools/call": {
+            // Checked on the raw params: the SDK schema strips unknown keys, so a misnamed `args` would vanish and the
+            // tool would run with {}.
+            const argumentsError = mcpToolCallArgumentsError(params);
+            if (argumentsError) { fail(-32602, argumentsError); return; }
+            result = await callTool(CallToolRequestSchema.parse(envelope.data)); break;
+          }
           case "events/list":
             if (!events) { fail(-32601, "Events are unavailable."); return; }
             if (params.cursor != null) { fail(-32602, "Invalid event catalog cursor."); return; }
@@ -182,6 +189,15 @@ export function publicMcpIngressRoutes(oauth: PublicMcpOAuth, execute: ReturnTyp
         else fail(-32603, "Paperclip could not complete the request.");
       }
       return;
+    }
+    // The SDK transport strips unknown params keys before callTool sees them, so check the raw tools/call params here.
+    for (const message of Array.isArray(req.body) ? req.body : [req.body]) {
+      if (message?.method !== "tools/call") continue;
+      const argumentsError = mcpToolCallArgumentsError(message.params ?? {});
+      if (argumentsError) {
+        res.status(400).json({ jsonrpc: "2.0", id: message.id ?? null, error: { code: -32602, message: argumentsError } });
+        return;
+      }
     }
     const server = new Server({ name: "paperclip", version: "0.1.0" }, { capabilities: { tools: {} } });
     server.setRequestHandler(ListToolsRequestSchema, listTools);

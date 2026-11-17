@@ -36,6 +36,52 @@ const TOOL_GATEWAY_WINDOWS: Record<string, number | null> = {
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const TOOL_CALL_BODY_KEYS = new Set(["tool", "parameters", "timeoutMs", "approvedActionRequestId", "idempotencyKey"]);
+const MISNAMED_PARAMETER_KEYS = new Set(["arguments", "args", "input", "params"]);
+
+/**
+ * Validate a REST tools/call body before anything executes. An unknown key used to be ignored, so a caller that sent
+ * its arguments as `arguments` (the MCP name) had them replaced by `{}`: a destructive tool then ran with no
+ * arguments, matched no argument-conditioned approval policy, and every retry replayed that empty call. Reject it.
+ * Returns an error message, or null when the body is acceptable.
+ */
+export function toolCallBodyError(body: unknown): string | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return "Request body must be a JSON object";
+  const keys = Object.keys(body);
+  const misnamed = keys.filter((key) => MISNAMED_PARAMETER_KEYS.has(key));
+  if (misnamed.length > 0) {
+    return `Unknown field "${misnamed[0]}": send the tool's arguments as "parameters" (body: {"tool": "...", "parameters": {...}}). Nothing was executed.`;
+  }
+  const unknown = keys.filter((key) => !TOOL_CALL_BODY_KEYS.has(key));
+  if (unknown.length > 0) {
+    return `Unknown field${unknown.length > 1 ? "s" : ""} ${unknown.slice(0, 5).map((key) => JSON.stringify(key.slice(0, 64))).join(", ")}: allowed fields are tool, parameters, timeoutMs, approvedActionRequestId, idempotencyKey. Nothing was executed.`;
+  }
+  const parameters = (body as { parameters?: unknown }).parameters;
+  if (parameters !== undefined && (typeof parameters !== "object" || parameters === null || Array.isArray(parameters))) {
+    return '"parameters" must be a JSON object. Nothing was executed.';
+  }
+  return null;
+}
+
+/**
+ * The MCP tools/call counterpart of toolCallBodyError: `params.arguments` must be a plain object when present, and a
+ * caller that put its arguments under another name (args, parameters, input) is told so instead of the tool running
+ * with {}. Other params keys (_meta, task, …) stay allowed: the MCP spec lets clients add them.
+ */
+export function mcpToolCallArgumentsError(params: unknown): string | null {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return "params must be an object";
+  const record = params as Record<string, unknown>;
+  const args = record.arguments;
+  if (args !== undefined && (typeof args !== "object" || args === null || Array.isArray(args))) {
+    return "params.arguments must be a JSON object. Nothing was executed.";
+  }
+  if (args === undefined) {
+    const misnamed = ["args", "parameters", "input"].find((key) => key in record);
+    if (misnamed) return `Unknown field params.${misnamed}: send the tool's arguments as params.arguments. Nothing was executed.`;
+  }
+  return null;
+}
+
 function gatewayToken(req: { header(name: string): string | undefined }) {
   return req.header("x-paperclip-tool-gateway-token")?.trim() || null;
 }
@@ -158,6 +204,11 @@ async function handleMcpGatewayProtocol(
       const name = typeof params.name === "string" ? params.name : "";
       if (!name) {
         res.status(400).json({ jsonrpc: "2.0", id, error: { code: -32602, message: "params.name is required" } });
+        return;
+      }
+      const argumentsError = mcpToolCallArgumentsError(params);
+      if (argumentsError) {
+        res.status(400).json({ jsonrpc: "2.0", id, error: { code: -32602, message: argumentsError } });
         return;
       }
       const contextMethods = {
@@ -583,6 +634,11 @@ export function toolGatewayRoutes(db: Db, toolGateway: ToolGatewayService) {
         approvedActionRequestId?: unknown;
         idempotencyKey?: unknown;
       };
+      const bodyError = toolCallBodyError(req.body ?? {});
+      if (bodyError) {
+        res.status(400).json({ error: bodyError, reasonCode: "invalid_tool_call_body" });
+        return;
+      }
       if (typeof body.tool !== "string" || body.tool.trim().length === 0) {
         res.status(400).json({ error: '"tool" is required and must be a string' });
         return;
