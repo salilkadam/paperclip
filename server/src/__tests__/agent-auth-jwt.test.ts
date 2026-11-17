@@ -88,7 +88,7 @@ describe("agent local JWT", () => {
   it("rejects a token whose signed key_scope this build cannot parse (never degrades to standard)", () => {
     const projectId = "11111111-1111-4111-8111-111111111111";
     const future = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1", "user-1",
-      { kind: "task_bridge", projectId, reportToUserId: "user-owner" } as any);
+      { kind: "task_bridge", projectId, futureField: "x" } as any);
     expect(verifyLocalAgentJwt(future!)).toBeNull();
     const unknownKind = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1", "user-1",
       { kind: "nope" } as any);

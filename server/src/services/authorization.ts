@@ -731,6 +731,27 @@ function scopeBoolean(scope: Record<string, unknown> | null | undefined, key: st
   return scope?.[key] === true;
 }
 
+/** The project ids a task_bridge key is bounded to (excludes parent-issue boundaries). */
+export function taskBridgeScopeProjectIds(scope: TaskBridgeAgentKeyScope): string[] {
+  return [
+    ...(typeof scope.projectId === "string" ? [scope.projectId] : []),
+    ...(Array.isArray(scope.projectIds) ? scope.projectIds : []),
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+/**
+ * True only when `projectId` is one of the key's own project boundaries. A
+ * parent-issue boundary match is deliberately NOT enough: it says nothing
+ * about which project the new issue lands in.
+ */
+export function taskBridgeScopeAllowsProject(
+  scope: TaskBridgeAgentKeyScope,
+  projectId: string | null | undefined,
+): boolean {
+  if (!projectId) return false;
+  return taskBridgeScopeProjectIds(scope).includes(projectId);
+}
+
 export function authorizationDeniedDetails(decision: AuthorizationDecision) {
   return {
     ...(decision.code ? { code: decision.code } : {}),
@@ -1509,7 +1530,24 @@ function createAuthorizationService(db: Db | DbTransaction, readSnapshot?: ReadA
         return denyBridge("Task bridge key is outside its approved parent or project boundary.");
       }
       if (input.resource.assigneeUserId) {
-        return denyBridge("Task bridge keys cannot assign work to board users.");
+        const reportToUserId = input.scope.reportToUserId ?? null;
+        if (!reportToUserId || input.resource.assigneeUserId !== reportToUserId) {
+          return denyBridge("Task bridge keys cannot assign work to board users.");
+        }
+        if (!taskBridgeScopeAllowsProject(input.scope, input.resource.projectId)) {
+          return denyBridge("Task bridge keys can only assign their report-to user inside their project boundary.");
+        }
+        if (input.resource.issueId) {
+          const existingIssue = await loadIssue(input.resource.issueId);
+          if (
+            !existingIssue ||
+            existingIssue.companyId !== input.resource.companyId ||
+            existingIssue.originKind !== "task_bridge" ||
+            existingIssue.originId !== input.keyId
+          ) {
+            return denyBridge("Task bridge keys can only assign their report-to user on issues they created.");
+          }
+        }
       }
       const allowedAssigneeAgentIds = input.scope.allowedAssigneeAgentIds ?? [];
       if (

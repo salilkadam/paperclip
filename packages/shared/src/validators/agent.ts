@@ -194,6 +194,12 @@ export const taskBridgeAgentKeyScopeSchema = z.object({
   parentIssueId: z.string().guid().optional().nullable(),
   parentIssueIds: z.array(z.string().guid()).max(50).optional(),
   allowedAssigneeAgentIds: z.array(z.string().guid()).max(50).optional(),
+  /**
+   * The one board user this key may assign the issues it creates to. Only
+   * honoured for issues created inside the key's project boundary; the user
+   * must be an active member of the key's company when the key is minted.
+   */
+  reportToUserId: z.string().trim().min(1).max(255).optional().nullable(),
 }).strict().superRefine((value, ctx) => {
   const hasProjectBoundary = Boolean(value.projectId) || Boolean(value.projectIds?.length);
   const hasParentBoundary = Boolean(value.parentIssueId) || Boolean(value.parentIssueIds?.length);
@@ -202,6 +208,13 @@ export const taskBridgeAgentKeyScopeSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: "task_bridge keys require at least one project or parent issue boundary",
       path: ["projectId"],
+    });
+  }
+  if (value.reportToUserId && !hasProjectBoundary) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "task_bridge reportToUserId requires a project boundary",
+      path: ["reportToUserId"],
     });
   }
 });

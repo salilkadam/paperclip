@@ -238,6 +238,32 @@ const publicRoutineWebhookPath = /^\/api\/routine-triggers\/public\/[a-f0-9]{24}
 
 const publicMcpGatewayProtocolPath = /^\/mcp\/gateways\/gw_[a-f0-9]{32}\/?$/i;
 
+async function auditAgentKeyInvalidScope(
+  db: Db,
+  input: { companyId: string; agentId: string; keyId: string; method: string; url: string },
+) {
+  // Always log: the audit row can fail, and a refused credential must stay visible.
+  logger.warn(
+    { companyId: input.companyId, agentId: input.agentId, keyId: input.keyId },
+    "agent key rejected: stored scope is not recognised by this build (fail closed, not downgraded to standard)",
+  );
+  try {
+    await db.insert(activityLog).values({
+      companyId: input.companyId,
+      actorType: "agent",
+      actorId: input.agentId,
+      action: "auth.agent_key_invalid_scope",
+      entityType: "agent_api_key",
+      entityId: input.keyId,
+      ...(isUuidLike(input.agentId) ? { agentId: input.agentId } : {}),
+      details: { method: input.method, url: input.url },
+    });
+  } catch (err) {
+    logger.warn({ err, companyId: input.companyId, agentId: input.agentId, keyId: input.keyId },
+      "Failed to audit rejected agent key with an unrecognised scope");
+  }
+}
+
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
   const boardAuth = boardAuthService(db);
   const authenticate: RequestHandler = async (req, _res, next) => {
@@ -536,8 +562,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     } catch (err) {
       if (!(err instanceof UnrecognisedAgentKeyScopeError)) throw err;
       // Fail closed: never let an unparseable scope degrade to a standard (full-authority) key.
-      logger.warn({ keyId: key.id, agentId: key.agentId, companyId: key.companyId },
-        "agent key rejected: stored scope is not recognised by this build");
+      await auditAgentKeyInvalidScope(db, { companyId: key.companyId, agentId: key.agentId, keyId: key.id,
+        method: req.method, url: req.originalUrl });
       next(forbidden(err.message, { code: err.code }));
       return;
     }

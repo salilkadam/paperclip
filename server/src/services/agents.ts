@@ -2,7 +2,7 @@ import { type BudgetServiceHooks } from "./budgets.js";
 
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, agentConfigRevisions, agentApiKeys, heartbeatRuns } from "@paperclipai/db";
+import { agents, agentConfigRevisions, agentApiKeys, companyMemberships, heartbeatRuns } from "@paperclipai/db";
 import { displayAgentApiKeyScope, isUuidLike, normalizeAgentApiKeyScope, normalizeAgentUrlKey, type AgentApiKeyScope } from "@paperclipai/shared";
 
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -19,6 +19,13 @@ import {
 import { createAgentLifecycle } from "./agent-lifecycle.js";
 
 export { hasAgentShortnameCollision, deduplicateAgentName } from "../lib/agent-records.js";
+
+export const TASK_BRIDGE_REPORT_TO_MINTING_ENV = "PAPERCLIP_TASK_BRIDGE_REPORT_TO_MINTING_ENABLED";
+
+/** Off unless explicitly "true"; read at call time so an operator can flip it without a rebuild. */
+export function taskBridgeReportToMintingEnabled(env: NodeJS.ProcessEnv = process.env) {
+  return env[TASK_BRIDGE_REPORT_TO_MINTING_ENV]?.trim().toLowerCase() === "true";
+}
 
 export function agentService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
   const {
@@ -125,6 +132,34 @@ export function agentService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       }
       if (existing.status === "terminated") {
         throw conflict("Cannot create keys for terminated agents");
+      }
+      if (scope.kind === "task_bridge" && scope.reportToUserId && !taskBridgeReportToMintingEnabled()) {
+        // Rollback safety: a build that predates reportToUserId parses such a
+        // key as unscoped (full agent authority). Minting stays off until every
+        // build an operator could roll back to refuses unparseable scopes.
+        throw unprocessable(
+          `task_bridge reportToUserId minting is disabled; set ${TASK_BRIDGE_REPORT_TO_MINTING_ENV}=true once the rollback floor refuses unparseable key scopes`,
+        );
+      }
+      if (scope.kind === "task_bridge" && scope.reportToUserId) {
+        // The report-to user receives work from this key, so it must be a real,
+        // active board member of the key's own company at mint time. Issue
+        // creation re-checks membership (assertAssignableUser) on every use.
+        const membership = await db
+          .select({ id: companyMemberships.id })
+          .from(companyMemberships)
+          .where(
+            and(
+              eq(companyMemberships.companyId, existing.companyId),
+              eq(companyMemberships.principalType, "user"),
+              eq(companyMemberships.principalId, scope.reportToUserId),
+              eq(companyMemberships.status, "active"),
+            ),
+          )
+          .then((rows) => rows[0] ?? null);
+        if (!membership) {
+          throw unprocessable("task_bridge reportToUserId must be an active member of the agent's company");
+        }
       }
 
       const token = createToken();
