@@ -301,6 +301,11 @@ env:
   # Board approval cards for gated tool calls (publishing, sends) stay open this
   # long. The board decides daily, so 24 h; the server default is 60 minutes.
   PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES: "1440"
+  # task_bridge keys may carry a reportToUserId (#115): such a key may assign issues to that one company
+  # member, so automated reports land in their Inbox. Safe to enable only on builds whose rollback floor
+  # refuses unparseable key scopes (#116, deployed 2026-11-17 as 0625299); an older build would read the
+  # scope as plain task_bridge. Set to "false" to stop minting (existing keys keep working).
+  PAPERCLIP_TASK_BRIDGE_REPORT_TO_MINTING_ENABLED: "true"
   # Server V8 heap ceiling. The container limit is 16Gi but the Dockerfile CMD
   # passes no --max-old-space-size, so V8 defaults to ~2.2GB and the server
   # (which legitimately runs ~1.3-2GB heap under live load) OOM-aborts on

@@ -27,6 +27,9 @@ data:
   {{- with .Values.env.PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES }}
   PAPERCLIP_TOOL_ACTION_APPROVAL_TTL_MINUTES: {{ . | quote }}
   {{- end }}
+  {{- with .Values.env.PAPERCLIP_TASK_BRIDGE_REPORT_TO_MINTING_ENABLED }}
+  PAPERCLIP_TASK_BRIDGE_REPORT_TO_MINTING_ENABLED: {{ . | quote }}
+  {{- end }}
   {{- with .Values.env.PAPERCLIP_PLUGIN_HTTP_ALLOWED_PRIVATE_HOSTS }}
   # Per-plugin exact-hostname exceptions to the plugin HTTP private-network
   # block (server/src/services/plugin-host-services.ts). Loopback, link-local
