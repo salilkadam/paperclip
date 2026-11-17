@@ -17,7 +17,10 @@
 # hub_read (read-only actions), hub_execute (writes), hub_publish (anything that makes content public: posts,
 # comments, replies, scheduling; hubs with four risk classes, connect-hub-composio #9) and hub_execute_destructive
 # (deletes, archives, raw API calls and everything else the hub marks destructive). An older hub has no hub_publish
-# and runs publishing through hub_execute; the per-app social rules at 21 keep covering that. The app is the prefix
+# and runs publishing through hub_execute; the per-app social rules at 21 keep covering that. NOTE: the hub classes
+# as publish only the social toolkits (linkedin, facebook-pages, instagram-business, youtube, google-my-business,
+# reddit) and explicit overrides; public actions of other apps stay hub_execute (write) and are governed by the
+# per-app rules below, not by the publish rule. The app is the prefix
 # of the "tool" argument ("<app>.<action>"). No policy here touches hub_read, so every agent reads.
 #
 # Per Connect Hub connection (lower priority = evaluated first; the first matching policy decides). "exec" means
@@ -214,8 +217,10 @@ check_catalog() {
   local cat
   cat="$(api GET "/tool-connections/$2/catalog" | jq -c '(.catalog | if type == "array" then . else (.tools // .entries // []) end)
     | map({name: (.toolName // .name), status: (.status // "active")})')"
-  if ! jq -e 'any(.name == "hub_execute_destructive")' >/dev/null <<<"$cat" && (( ! DRY )); then
-    api POST "/tool-connections/$2/catalog/refresh" >/dev/null || exit 1 # the hub may have been upgraded since the last listing
+  # Refresh when a router tool this script governs is missing: the hub may have been upgraded since Paperclip last
+  # listed it (a stale catalog would skip the hub_publish probes and report "governed" without proving that rule).
+  if ! jq -e 'any(.name == "hub_execute_destructive") and any(.name == "hub_publish")' >/dev/null <<<"$cat" && (( ! DRY )); then
+    api POST "/tool-connections/$2/catalog/refresh" >/dev/null || exit 1
     cat="$(api GET "/tool-connections/$2/catalog" | jq -c '(.catalog | if type == "array" then . else (.tools // .entries // []) end)
       | map({name: (.toolName // .name), status: (.status // "active")})')"
   fi
@@ -230,7 +235,9 @@ check_catalog() {
   fi
   jq -e 'any(.name == "hub_read")' >/dev/null <<<"$cat" || log "  WARNING: no hub_read on connection $2: C-level agents cannot read other apps" >&2
   local pub=nopublish
-  jq -e 'any(.name == "hub_publish")' >/dev/null <<<"$cat" && pub=publish
+  if jq -e 'any(.name == "hub_publish")' >/dev/null <<<"$cat"; then pub=publish
+  elif (( DRY )); then log "  NOTE: connection $2 lists no hub_publish (a hub before four risk classes, or a stale catalog; a live run refreshes it)" >&2
+  else log "  NOTE: connection $2 has no hub_publish after a catalog refresh: its hub predates four risk classes; the hub_publish rule waits for it" >&2; fi
   if jq -e '[.[] | select(.name == "hub_execute" or .name == "hub_publish" or .name == "hub_execute_destructive") | .status] | all(. == "active")' >/dev/null <<<"$cat"
   then echo "ready $pub"; else echo "held $pub"; fi
 }
@@ -277,7 +284,7 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
       .selectors.connectionId == $conn and (.name | startswith("connect-hub: ")) and (.name | IN($want[]) | not))' <<<"$existing")
     if (( DRY )); then total=$((total + 1)); continue; fi
     if [[ "$state" != ready ]]; then
-      pending+=("$cname: review hub_execute, hub_execute_destructive$([[ $pub == publish ]] && echo ' and hub_publish') on connection $conn (Paperclip > Apps > Connect Hub > Tools), then re-run to prove the rules")
+      pending+=("$cname: review hub_execute, hub_execute_destructive$([[ $pub == publish ]] && echo ' and hub_publish' || echo ' (and hub_publish once the hub exposes it)') on connection $conn (Paperclip > Apps > Connect Hub > Tools), then re-run to prove the rules")
       total=$((total + 1)); continue
     fi
     cl="$(jq -r '.[0] // empty' <<<"$clevel")"; en="$(jq -r '.[0] // empty' <<<"$engineers")"; wk="$(jq -r '.[0] // empty' <<<"$workers")"
@@ -308,6 +315,7 @@ for cid in $(jq -r '.[].id' <<<"$companies"); do
         probe "$cid" "$conn" "$wk" "worker publishes via hub_publish"  $XP "$(exec_args linkedin.zz_governance_probe)" ask_first
         probe "$cid" "$conn" "$wk" "worker publishes to Reddit (publish)" $XP "$(exec_args reddit.zz_governance_probe)" off "no Reddit posting"
         probe "$cid" "$conn" "$wk" "worker publishes to Slack (publish)" $XP "$(exec_args slack.zz_governance_probe)" off "no Slack through the hub"
+        probe "$cid" "$conn" "$wk" "worker publishes on GitHub (publish)" $XP "$(exec_args github.zz_governance_probe)" off "GitHub writes belong to engineering"
       fi
     fi
     if [[ -n "$en" ]]; then
