@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { verifyLocalAgentJwt } from "./agent-auth-jwt.js";
 import { resolvePaperclipInstanceId } from "./home-paths.js";
 
 export interface RuntimeToolsTokenClaims {
@@ -69,7 +70,8 @@ export function createRuntimeToolsToken(input: {
 
 export type RuntimeToolsTokenFailure =
   | "empty" | "not_jwt" | "unparseable" | "bad_alg" | "instance_mismatch" | "no_secret" | "bad_signature"
-  | "claims" | "scope_mismatch" | "expired";
+  | "claims" | "scope_mismatch" | "expired" | "agent_api_key";
+
 
 /**
  * Why verifyRuntimeToolsToken rejected a token, for server logs only (never returned to the caller): the public
@@ -104,7 +106,12 @@ export function explainRuntimeToolsTokenFailure(token: string, scope: RuntimeToo
   if (!companyId || !instanceId || instanceId !== resolvePaperclipInstanceId()) return { reason: "instance_mismatch", length, runId };
   const expected = sign(`${parts[0]}.${parts[1]}`, companyId, instanceId);
   if (!expected) return { reason: "no_secret", length, runId };
-  if (!safeEqual(parts[2]!, expected)) return { reason: "bad_signature", length, runId };
+  if (!safeEqual(parts[2]!, expected)) {
+    // A genuine agent API key of this instance ($PAPERCLIP_API_KEY) is named as such so the caller can correct
+    // itself. It is still rejected: agent API keys can carry a key_scope these endpoints do not enforce. Only a key
+    // that verifies is named — a forged or foreign-instance token stays bad_signature.
+    return { reason: verifyLocalAgentJwt(token) ? "agent_api_key" : "bad_signature", length, runId };
+  }
   if (claims.scope !== scope) return { reason: "scope_mismatch", length, runId, scope: claims.scope };
   if (typeof claims.exp === "number" && claims.exp <= Math.floor(Date.now() / 1000)) {
     return { reason: "expired", length, runId, expiredSecondsAgo: Math.floor(Date.now() / 1000) - claims.exp };
