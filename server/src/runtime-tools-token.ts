@@ -67,6 +67,52 @@ export function createRuntimeToolsToken(input: {
     : null;
 }
 
+export type RuntimeToolsTokenFailure =
+  | "empty" | "not_jwt" | "unparseable" | "bad_alg" | "instance_mismatch" | "no_secret" | "bad_signature"
+  | "claims" | "scope_mismatch" | "expired";
+
+/**
+ * Why verifyRuntimeToolsToken rejected a token, for server logs only (never returned to the caller): the public
+ * error stays "missing, invalid, or expired", but an operator must be able to tell an absent token from an expired
+ * or foreign-signed one. Unverified claim values are reported only as shapes (run id, exp delta), never the token.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function explainRuntimeToolsTokenFailure(token: string, scope: RuntimeToolsTokenClaims["scope"] = "connection_intents"): {
+  reason: RuntimeToolsTokenFailure | null; length: number; runId?: string; expiredSecondsAgo?: number; scope?: unknown;
+} {
+  const length = token.length;
+  if (!token) return { reason: "empty", length };
+  const parts = token.split(".");
+  if (parts.length !== 3) return { reason: "not_jwt", length };
+  let header: unknown;
+  let claims: unknown;
+  try {
+    header = JSON.parse(Buffer.from(parts[0]!, "base64url").toString("utf8"));
+    claims = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8"));
+  } catch {
+    return { reason: "unparseable", length };
+  }
+  if (!isRecord(header) || !isRecord(claims)) return { reason: "unparseable", length };
+  // Unverified until the signature check below: bounded so a forged token cannot plant long strings in logs.
+  const runId = typeof claims.run_id === "string" ? claims.run_id.slice(0, 64) : undefined;
+  if (header.alg !== "HS256") return { reason: "bad_alg", length, runId };
+  const companyId = typeof claims.company_id === "string" ? claims.company_id : null;
+  const instanceId = typeof claims.instance_id === "string" ? claims.instance_id : null;
+  if (!companyId || !instanceId || instanceId !== resolvePaperclipInstanceId()) return { reason: "instance_mismatch", length, runId };
+  const expected = sign(`${parts[0]}.${parts[1]}`, companyId, instanceId);
+  if (!expected) return { reason: "no_secret", length, runId };
+  if (!safeEqual(parts[2]!, expected)) return { reason: "bad_signature", length, runId };
+  if (claims.scope !== scope) return { reason: "scope_mismatch", length, runId, scope: claims.scope };
+  if (typeof claims.exp === "number" && claims.exp <= Math.floor(Date.now() / 1000)) {
+    return { reason: "expired", length, runId, expiredSecondsAgo: Math.floor(Date.now() / 1000) - claims.exp };
+  }
+  if (verifyRuntimeToolsToken(token, scope)) return { reason: null, length, runId };
+  return { reason: "claims", length, runId };
+}
+
 export function verifyRuntimeToolsToken(token: string, scope: RuntimeToolsTokenClaims["scope"] = "connection_intents"): RuntimeToolsTokenClaims | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -78,6 +124,8 @@ export function verifyRuntimeToolsToken(token: string, scope: RuntimeToolsTokenC
   } catch {
     return null;
   }
+  // A JSON null/array/scalar header or claims set is malformed: reject it (401), never throw (500).
+  if (!isRecord(header) || !isRecord(claims)) return null;
   if (header.alg !== "HS256") return null;
   const companyId = typeof claims.company_id === "string" ? claims.company_id : null;
   const instanceId = typeof claims.instance_id === "string" ? claims.instance_id : null;
