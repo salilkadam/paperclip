@@ -1,3 +1,4 @@
+import { createLocalAgentJwt } from "./agent-auth-jwt.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeToolsToken, explainRuntimeToolsTokenFailure, verifyRuntimeToolsToken } from "./runtime-tools-token.js";
 
@@ -63,12 +64,15 @@ describe("runtime connection tools token", () => {
     }
     const longRun = `${b64({ alg: "HS256" })}.${b64({ run_id: "x".repeat(5000) })}.x`;
     expect(explainRuntimeToolsTokenFailure(longRun).runId).toHaveLength(64);
-    // An agent API JWT ($PAPERCLIP_API_KEY) is named as such, whatever its signature, and never verifies here.
-    const apiKeyShape = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: "a", company_id: "company-1", adapter_type: "opencode_local", run_id: "run-1", iss: "paperclip", aud: "paperclip-api", instance_id: "default" })}.x`;
-    expect(explainRuntimeToolsTokenFailure(apiKeyShape)).toMatchObject({ reason: "agent_api_key", runId: "run-1" });
-    expect(verifyRuntimeToolsToken(apiKeyShape)).toBeNull();
-    // A genuine runtime token is never mistaken for one.
-    expect(explainRuntimeToolsTokenFailure(`${minted.token.slice(0, -1)}x`).reason).toBe("bad_signature");
+    // A real agent API key of this instance is named as such and never verifies here; a forged one stays bad_signature.
+    const apiKey = createLocalAgentJwt("agent-1", "company-1", "opencode_local", "run-1", "user-1")!;
+    expect(explainRuntimeToolsTokenFailure(apiKey)).toMatchObject({ reason: "agent_api_key", runId: "run-1" });
+    expect(verifyRuntimeToolsToken(apiKey)).toBeNull();
+    expect(verifyRuntimeToolsToken(apiKey, "github_credentials")).toBeNull();
+    const forged = `${apiKey.split(".").slice(0, 2).join(".")}.x`;
+    expect(explainRuntimeToolsTokenFailure(forged).reason).toBe("bad_signature");
+    const oidcLike = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ company_id: "company-1", instance_id: JSON.parse(Buffer.from(minted.token.split(".")[1]!, "base64url").toString()).instance_id, iss: "idp", aud: "x" })}.x`;
+    expect(explainRuntimeToolsTokenFailure(oidcLike).reason).toBe("bad_signature");
     const result = explainRuntimeToolsTokenFailure(minted.token);
     expect(JSON.stringify(result)).not.toContain(minted.token.split(".")[2]);
   });
