@@ -1,0 +1,82 @@
+# Values for the velero release (namespace: velero).
+# Chart: vmware-tanzu/velero 12.1.0 (app velero v1.18.1).
+# This file is the canonical source of truth for the release; see UPGRADE.md.
+#
+# 2026-11-17 fixes (branch fix/velero-backup-timeout-and-nodeagent-mem):
+#   - fsBackupTimeout 8h -> 12h: nightly-20261116030034 hit the 8h timeout
+#     ("timed out waiting for all PodVolumeBackups to complete", backupper.go:418)
+#     because the large-volume tail (langfuse-v2-clickhouse, minio-tenant-pool-1)
+#     finished after kopia maintain contention.
+#   - nodeAgent memory limit 1Gi -> 3Gi: node-agent on node1 was OOMKilled
+#     (22 restarts) during fs backups of large volumes.
+configMaps:
+  node-agent-config:
+    data:
+      node-agent-config.json: |
+        {
+          "backupPVC": {
+            "cephfs-with-secrets": { "storageClass": "velero-backup-cephfs", "readOnly": true },
+            "cephfs":              { "storageClass": "velero-backup-cephfs", "readOnly": true },
+            "ceph-rbd-fast":       { "storageClass": "velero-backup-rbd-replicapool" },
+            "ceph-rbd-standard":   { "storageClass": "velero-backup-rbd-replicapool" },
+            "ceph-rbd-fastpool":   { "storageClass": "velero-backup-rbd-fastpool" },
+            "ceph-rbd-bulk":       { "storageClass": "velero-backup-rbd-bulkpool" }
+          }
+        }
+configuration:
+  backupStorageLocation:
+  - bucket: velero
+    config:
+      checksumAlgorithm: ""
+      region: minio
+      s3ForcePathStyle: "true"
+      s3Url: http://minio.velero-backup.svc.cluster.local
+    default: true
+    name: default
+    provider: aws
+  clientBurst: 200
+  clientQPS: 100
+  defaultVolumesToFsBackup: true
+  features: EnableCSI
+  fsBackupTimeout: 12h
+  uploaderType: kopia
+  volumeSnapshotLocation:
+  - config:
+      region: minio
+    name: default
+    provider: aws
+credentials:
+  existingSecret: velero-s3-credentials
+  useSecret: true
+deployNodeAgent: true
+image:
+  repository: velero/velero
+  tag: v1.18.1
+initContainers:
+- image: velero/velero-plugin-for-aws:v1.13.0
+  name: velero-plugin-for-aws
+  volumeMounts:
+  - mountPath: /target
+    name: plugins
+metrics:
+  enabled: true
+nodeAgent:
+  extraArgs:
+  - --node-agent-configmap=velero-node-agent-config
+  resources:
+    limits:
+      cpu: "1"
+      memory: 3Gi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  tolerations:
+  - operator: Exists
+resources:
+  limits:
+    cpu: "1"
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+schedules: {}

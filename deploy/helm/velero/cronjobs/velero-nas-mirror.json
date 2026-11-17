@@ -1,0 +1,118 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "CronJob",
+  "metadata": {
+    "annotations": {},
+    "generation": 9,
+    "name": "velero-nas-mirror",
+    "namespace": "velero-backup"
+  },
+  "spec": {
+    "concurrencyPolicy": "Forbid",
+    "failedJobsHistoryLimit": 3,
+    "jobTemplate": {
+      "metadata": {
+        "creationTimestamp": null
+      },
+      "spec": {
+        "backoffLimit": 2,
+        "template": {
+          "metadata": {
+            "creationTimestamp": null
+          },
+          "spec": {
+            "affinity": {
+              "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                  "nodeSelectorTerms": [
+                    {
+                      "matchExpressions": [
+                        {
+                          "key": "kubernetes.io/hostname",
+                          "operator": "NotIn",
+                          "values": [
+                            "node2"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "containers": [
+              {
+                "args": [
+                  "set -e\nMC=\"mc --config-dir /tmp/.mc\"\n$MC alias set v \"http://minio.velero-backup.svc.cluster.local\" \\\n    \"$root_user\" \"$root_password\"\n# mc mirror does not create the destination when there is\n# nothing to copy, so the first run needs this.\nmkdir -p /nas/velero\n# GUARD. --remove deletes anything on the NAS that is not in\n# the bucket, so an empty or unreachable source would wipe the\n# only off-Ceph copy we have. Refuse to run in that case.\nsrc=$($MC ls v/velero/backups 2>/dev/null | grep -c . || true)\nif [ \"$src\" -eq 0 ]; then\n    echo \"REFUSING: source bucket lists no backups; not mirroring with --remove\"\n    exit 1\nfi\necho \"source has $src backup prefixes\"\necho \"=== mirroring velero bucket -> NAS ===\"\n# --overwrite --remove keeps the NAS an exact reflection, so\n# Velero's own retention (ttl) drives what is kept here too.\n$MC mirror --overwrite --remove v/velero /nas/velero\necho \"=== result ===\"\ndu -sh /nas/velero 2>/dev/null || echo \"  (destination empty)\"\ndf -h /nas | tail -1\ndate -u +\"mirror completed %Y-%m-%dT%H:%M:%SZ\" | tee /nas/LAST_MIRROR\n"
+                ],
+                "command": [
+                  "sh",
+                  "-c"
+                ],
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "minio-velero-admin"
+                    }
+                  }
+                ],
+                "image": "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "mirror",
+                "resources": {},
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File",
+                "volumeMounts": [
+                  {
+                    "mountPath": "/nas",
+                    "name": "nas"
+                  }
+                ]
+              }
+            ],
+            "dnsPolicy": "ClusterFirst",
+            "imagePullSecrets": [
+              {
+                "name": "dockerhub-pull-secret"
+              }
+            ],
+            "initContainers": [
+              {
+                "args": [
+                  "set -euo pipefail\ndeadline=$(( $(date -u +%s) + 46800 ))   # 13h\nwhile :; do\n    busy=$(kubectl get backups.velero.io -A \\\n             -o jsonpath='{range .items[*]}{.status.phase}{\"\\n\"}{end}' 2>/dev/null \\\n           | grep -vE '^(Completed|PartiallyFailed|Failed|FailedValidation|Deleting)$' \\\n           | grep -c . || true)\n    [ \"$busy\" -eq 0 ] && { echo \"no backup in flight; proceeding\"; break; }\n    [ \"$(date -u +%s)\" -ge \"$deadline\" ] && {\n        echo \"TIMEOUT: $busy backup(s) still in flight after 13h; refusing to mirror a partial backup\"\n        exit 1\n    }\n    echo \"waiting: $busy backup(s) still in flight\"\n    sleep 60\ndone\n"
+                ],
+                "command": [
+                  "bash",
+                  "-c"
+                ],
+                "image": "bitnami/kubectl@sha256:1a86ba502f618724fd493f6a2b129f060454db04f06faa58d8ed94510280b17f",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "wait-for-backups",
+                "resources": {},
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File"
+              }
+            ],
+            "restartPolicy": "OnFailure",
+            "schedulerName": "default-scheduler",
+            "securityContext": {},
+            "serviceAccount": "velero-nas-mirror",
+            "serviceAccountName": "velero-nas-mirror",
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "name": "nas",
+                "persistentVolumeClaim": {
+                  "claimName": "velero-nas-mirror"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "schedule": "30 4 * * *",
+    "successfulJobsHistoryLimit": 3,
+    "suspend": false
+  }
+}

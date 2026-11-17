@@ -1,0 +1,97 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "CronJob",
+  "metadata": {
+    "annotations": {},
+    "generation": 4,
+    "name": "velero-staleness-check",
+    "namespace": "velero-backup"
+  },
+  "spec": {
+    "concurrencyPolicy": "Forbid",
+    "failedJobsHistoryLimit": 10,
+    "jobTemplate": {
+      "metadata": {
+        "creationTimestamp": null
+      },
+      "spec": {
+        "backoffLimit": 0,
+        "template": {
+          "metadata": {
+            "creationTimestamp": null
+          },
+          "spec": {
+            "containers": [
+              {
+                "command": [
+                  "/bin/sh",
+                  "/scripts/check.sh"
+                ],
+                "env": [
+                  {
+                    "name": "MAX_AGE_HOURS",
+                    "value": "48"
+                  },
+                  {
+                    "name": "MAX_MIRROR_AGE_HOURS",
+                    "value": "72"
+                  },
+                  {
+                    "name": "MAX_ERRORS",
+                    "value": "10"
+                  },
+                  {
+                    "name": "MAX_DU_FAILURES",
+                    "value": "3"
+                  }
+                ],
+                "image": "bitnami/kubectl@sha256:1a86ba502f618724fd493f6a2b129f060454db04f06faa58d8ed94510280b17f",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "check",
+                "resources": {},
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File",
+                "volumeMounts": [
+                  {
+                    "mountPath": "/scripts",
+                    "name": "scripts"
+                  },
+                  {
+                    "mountPath": "/nas",
+                    "name": "nas",
+                    "readOnly": true
+                  }
+                ]
+              }
+            ],
+            "dnsPolicy": "ClusterFirst",
+            "restartPolicy": "Never",
+            "schedulerName": "default-scheduler",
+            "securityContext": {},
+            "serviceAccount": "velero-staleness-check",
+            "serviceAccountName": "velero-staleness-check",
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "configMap": {
+                  "defaultMode": 493,
+                  "name": "velero-staleness-check"
+                },
+                "name": "scripts"
+              },
+              {
+                "name": "nas",
+                "persistentVolumeClaim": {
+                  "claimName": "velero-nas-mirror"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "schedule": "47 */6 * * *",
+    "successfulJobsHistoryLimit": 3,
+    "suspend": false
+  }
+}
