@@ -11,6 +11,8 @@ describe("connection result guidance", () => {
     expect(CONNECTION_INTENT_AGENT_GUIDANCE).toContain("yield without retrying or polling");
     expect(CONNECTION_INTENT_AGENT_GUIDANCE).toContain("never invent access or ask for credentials in comments");
     expect(CONNECTION_INTENT_AGENT_GUIDANCE).toContain("arbitrary MCP URLs");
+    expect(CONNECTION_INTENT_AGENT_GUIDANCE).toContain("Bearer $PAPERCLIP_RUNTIME_TOOLS_TOKEN");
+    expect(CONNECTION_INTENT_AGENT_GUIDANCE).toContain("($PAPERCLIP_API_KEY) is rejected there");
   });
   it("describes exact questions and saved selection proof", () => {
     expect(CONNECTIONS_SEARCH_TOOL_DESCRIPTION).toContain("exact providerQuestion");

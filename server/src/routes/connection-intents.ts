@@ -24,21 +24,29 @@ function bearer(req: Request) {
   return /^Bearer\s+/i.test(value) ? value.replace(/^Bearer\s+/i, "").trim() : "";
 }
 
+export const WRONG_TOKEN_MESSAGE =
+  "Runtime tools token is missing, invalid, or expired: this request sent the agent API key ($PAPERCLIP_API_KEY). "
+  + "Runtime tools endpoints accept only the run's $PAPERCLIP_RUNTIME_TOOLS_TOKEN: "
+  + "send 'Authorization: Bearer $PAPERCLIP_RUNTIME_TOOLS_TOKEN'.";
+
 function runtimeClaims(req: Request) {
   const token = bearer(req);
   const claims = verifyRuntimeToolsToken(token);
   if (!claims) {
-    // Same public error as before; the reason goes to the server log so a rejected run can be diagnosed.
-    // Diagnostics must never change the response: any failure here still ends in the same 401.
+    // The reason goes to the server log so a rejected run can be diagnosed. The response is always 401; its
+    // message differs only when the caller sent its agent API key, so the agent can correct itself.
+    let reason: string | null = null;
     try {
-      logger.warn({ runtimeToolsToken: explainRuntimeToolsTokenFailure(token), path: req.path,
+      const explained = explainRuntimeToolsTokenFailure(token);
+      reason = explained.reason;
+      logger.warn({ runtimeToolsToken: explained, path: req.path,
         hasAuthorization: Boolean(req.header("authorization")),
         runIdHeader: req.header("x-paperclip-run-id")?.slice(0, 64) ?? null },
         "runtime tools token rejected");
     } catch {
       logger.warn({ runtimeToolsToken: { reason: "explain_failed" }, path: req.path }, "runtime tools token rejected");
     }
-    throw unauthorized("Runtime tools token is missing, invalid, or expired");
+    throw unauthorized(reason === "agent_api_key" ? WRONG_TOKEN_MESSAGE : "Runtime tools token is missing, invalid, or expired");
   }
   return claims;
 }

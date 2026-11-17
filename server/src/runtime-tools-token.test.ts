@@ -63,6 +63,12 @@ describe("runtime connection tools token", () => {
     }
     const longRun = `${b64({ alg: "HS256" })}.${b64({ run_id: "x".repeat(5000) })}.x`;
     expect(explainRuntimeToolsTokenFailure(longRun).runId).toHaveLength(64);
+    // An agent API JWT ($PAPERCLIP_API_KEY) is named as such, whatever its signature, and never verifies here.
+    const apiKeyShape = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: "a", company_id: "company-1", adapter_type: "opencode_local", run_id: "run-1", iss: "paperclip", aud: "paperclip-api", instance_id: "default" })}.x`;
+    expect(explainRuntimeToolsTokenFailure(apiKeyShape)).toMatchObject({ reason: "agent_api_key", runId: "run-1" });
+    expect(verifyRuntimeToolsToken(apiKeyShape)).toBeNull();
+    // A genuine runtime token is never mistaken for one.
+    expect(explainRuntimeToolsTokenFailure(`${minted.token.slice(0, -1)}x`).reason).toBe("bad_signature");
     const result = explainRuntimeToolsTokenFailure(minted.token);
     expect(JSON.stringify(result)).not.toContain(minted.token.split(".")[2]);
   });

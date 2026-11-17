@@ -12,6 +12,7 @@ export const CONNECTION_INTENT_AGENT_GUIDANCE = [
   "- If installed tools are Off or the connection is not enabled for this agent, call `connection_request` with the saved connectionId and required toolNames. It creates a scoped human access card; never substitute a generic permission question or change permissions yourself.",
   "- When waiting for user action, finish independent work, then yield without retrying or polling. On continuation, follow the recorded outcome and use the installed connection.",
   "- Do not use connection tools for arbitrary MCP URLs or unrelated work.",
+  "- Over REST or MCP, authenticate with `Authorization: Bearer $PAPERCLIP_RUNTIME_TOOLS_TOKEN`; the agent API key ($PAPERCLIP_API_KEY) is rejected there. Never print either token.",
 ].join("\n");
 
 export const CONNECTIONS_SEARCH_TOOL_DESCRIPTION = "Search connections across tool, channel/email, and AI purposes with a service name or a natural-language description (up to 4000 characters). Results tolerate extra words, split names, and small typos. Choose the relevant match using its description and method purpose. Follow the returned instruction to present an inline setup card with connection_request or share the method's setupPath. Also discovers verified external aggregator apps. Use first when the user asks to connect a service, or when usable access is uncertain; follow the returned instruction and exact providerQuestion, if any. Do not use for arbitrary MCP URLs. Search is read-only.";

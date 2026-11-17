@@ -69,7 +69,17 @@ export function createRuntimeToolsToken(input: {
 
 export type RuntimeToolsTokenFailure =
   | "empty" | "not_jwt" | "unparseable" | "bad_alg" | "instance_mismatch" | "no_secret" | "bad_signature"
-  | "claims" | "scope_mismatch" | "expired";
+  | "claims" | "scope_mismatch" | "expired" | "agent_api_key";
+
+/**
+ * True when unverified claims have the shape of a Paperclip agent API JWT ($PAPERCLIP_API_KEY): it carries
+ * adapter_type and iss/aud, which a runtime-tools token never does. Used only to explain a rejection — such a
+ * token is never accepted here (agent API keys can carry a key_scope this endpoint does not enforce).
+ */
+function looksLikeAgentApiKey(claims: Record<string, unknown>) {
+  return typeof claims.adapter_type === "string"
+    || (typeof claims.iss === "string" && typeof claims.aud === "string" && claims.scope === undefined);
+}
 
 /**
  * Why verifyRuntimeToolsToken rejected a token, for server logs only (never returned to the caller): the public
@@ -99,6 +109,7 @@ export function explainRuntimeToolsTokenFailure(token: string, scope: RuntimeToo
   // Unverified until the signature check below: bounded so a forged token cannot plant long strings in logs.
   const runId = typeof claims.run_id === "string" ? claims.run_id.slice(0, 64) : undefined;
   if (header.alg !== "HS256") return { reason: "bad_alg", length, runId };
+  if (looksLikeAgentApiKey(claims)) return { reason: "agent_api_key", length, runId };
   const companyId = typeof claims.company_id === "string" ? claims.company_id : null;
   const instanceId = typeof claims.instance_id === "string" ? claims.instance_id : null;
   if (!companyId || !instanceId || instanceId !== resolvePaperclipInstanceId()) return { reason: "instance_mismatch", length, runId };
