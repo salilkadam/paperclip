@@ -326,6 +326,10 @@ monitor:
 # the operator's approval via the approvals component.
 remediate:
   enabled: true
+  # suspend: true is intentional (this CronJob is a job template; the monitor
+  # dispatches via `kubectl create job --from`). control-watchdog reads this
+  # annotation and stays quiet instead of emailing SUSPENDED alerts.
+  watchdogExpect: "until=2027-02-15 vestigial-schedule, dispatched by sre-harness-monitor via --from"
   # Hard cap: diagnosis + CI on the GPU host can take tens of minutes, and a
   # full `pnpm install/typecheck/test/build` cycle alone has been observed near
   # 30 minutes. 3600 was tight enough to kill a healthy run mid-CI.

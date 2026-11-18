@@ -11,6 +11,8 @@ metadata:
   labels:
     {{- include "sre-harness.labels" . | nindent 4 }}
     app.kubernetes.io/component: remediate
+  annotations:
+    baisoln.com/watchdog-expect: {{ .Values.remediate.watchdogExpect | quote }}
 spec:
   schedule: "0 0 1 1 0"
   suspend: true
