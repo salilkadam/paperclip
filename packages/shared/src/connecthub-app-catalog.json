@@ -1,6 +1,6 @@
 {
   "source": "https://github.com/Bionic-AI-Solutions/connect-hub-composio",
-  "verifiedAt": "2026-11-02",
+  "verifiedAt": "2026-11-18",
   "apps": [
     {
       "slug": "apify",
@@ -231,6 +231,16 @@
       "aliases": [
         "Todoist",
         "todoist"
+      ]
+    },
+    {
+      "slug": "whatsapp",
+      "toolkit": "whatsapp",
+      "name": "WhatsApp",
+      "logoUrl": "https://cdn.activepieces.com/pieces/whatsapp.png",
+      "aliases": [
+        "WhatsApp",
+        "whatsapp"
       ]
     },
     {
