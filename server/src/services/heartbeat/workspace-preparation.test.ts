@@ -17,6 +17,7 @@ import { instanceSettingsService } from "../instance-settings.js";
 import { workspaceOperationService } from "../workspace-operations.js";
 import { nativeWorkspaceSyncInternals, prepareNativeWorkspaceSync } from "../native-runtime/native-workspace-sync.js";
 import { createHeartbeatWorkspaceResolver, prepareProjectRepositoryWorkspaces, resolveExecutionWorkspaceReuseRequestForIssue } from "./workspaces.js";
+import { materializeIsolatedTaskDirectory } from "../isolated-task-directory.js";
 import { prepareHeartbeatWorkspace, type HeartbeatWorkspacePreparationInput } from "./workspace-preparation.js";
 import { buildNativeExecutionInput } from "../native-runtime/native-execution-input.js";
 import { nativeRuntimeContextFixture } from "../native-runtime/runtime-context.test-fixture.js";
@@ -276,6 +277,24 @@ describe.skipIf(!support.supported)("heartbeat workspace preparation boundary", 
     await expect(access(join(prepared.executionWorkspace.cwd, "README.md"))).rejects.toThrow();
     expect(await readFile(join(source, "README.md"), "utf8")).toBe("source content\n");
     expect((await readIssue(issue.id)).executionWorkspaceId).toBe(prepared.persistedExecutionWorkspace!.id);
+  });
+
+  it("continues in a resumed Core task directory instead of rejecting it as a missing Git checkout", async () => {
+    // Production shape: a prior fresh attempt persisted its non-git attempt
+    // directory as the session cwd; a later ordinary wake resumes it while the
+    // isolated_workspace mode still carries a git_worktree strategy. Preparation
+    // must neutralize the strategy for the Core task base instead of throwing
+    // git_worktree_base_not_git_checkout on every retry.
+    const { input, source, issue } = await fixture(true);
+    const attemptDir = await materializeIsolatedTaskDirectory({ companyId: input.agent.companyId, issueId: issue.id, attemptId: "9b4f5580-eff6-44ca-a77f-e2cd0cec2221" });
+    await writeFile(join(attemptDir, "notes.md"), "work in progress\n");
+    input.task.previousSessionParams = { cwd: attemptDir };
+    const prepared = await prepareHeartbeatWorkspace(db, input);
+    expect(prepared.executionWorkspace.cwd).toBe(attemptDir);
+    expect(prepared.executionWorkspace.strategy).toBe("project_primary");
+    expect(prepared.executionWorkspace.branchName).toBeNull();
+    expect(await readFile(join(attemptDir, "notes.md"), "utf8")).toBe("work in progress\n");
+    expect(await readFile(join(source, "README.md"), "utf8")).toBe("source content\n");
   });
 
   async function reuse(input: HeartbeatWorkspacePreparationInput, workspace: NonNullable<Awaited<ReturnType<typeof prepareHeartbeatWorkspace>>["persistedExecutionWorkspace"]>) {

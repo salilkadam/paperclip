@@ -47,6 +47,7 @@ import {
   buildAnchorFallbackWorkspaceNotes,
   type ResolvedWorkspaceForRun,
 } from "../services/heartbeat.ts";
+import { materializeIsolatedTaskDirectory } from "../services/isolated-task-directory.js";
 import { stripHostWorkspaceProvision } from "../services/heartbeat/workspaces.js";
 import type { TrustPresetResolution } from "../services/trust-preset-resolver.ts";
 
@@ -942,6 +943,55 @@ describe("assertGitWorktreeBaseWorkspaceReady", () => {
         repoRef: null,
       },
     })).resolves.toBeUndefined();
+  });
+
+  it("reports a Core isolated task directory with its own reason", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-core-task-base-"));
+    try {
+      vi.stubEnv("PAPERCLIP_HOME", home);
+      const identity = { companyId: "62d63984-df6c-49be-981c-1273f68a451c", issueId: "0b9d4001-3b10-4d72-b9d1-461e1db17d6f" };
+      const taskRoot = await materializeIsolatedTaskDirectory(identity);
+      const attemptRoot = await materializeIsolatedTaskDirectory({ ...identity, attemptId: "9b4f5580-eff6-44ca-a77f-e2cd0cec2221" });
+      for (const baseCwd of [taskRoot, attemptRoot]) {
+        await expect(assertGitWorktreeBaseWorkspaceReady({
+          requestedExecutionWorkspaceMode: "isolated_workspace",
+          config: { workspaceStrategy: { type: "git_worktree" } },
+          issue: { id: identity.issueId, identifier: "REL-1", projectId: null, projectWorkspaceId: null },
+          base: { baseCwd, source: "task_session", projectId: null, workspaceId: null, repoUrl: null, repoRef: null },
+        })).rejects.toMatchObject({
+          code: "workspace_validation_failed",
+          resultJson: {
+            workspaceValidation: expect.objectContaining({
+              reason: "git_worktree_base_isolated_task_directory",
+              issueId: identity.issueId,
+              resolvedWorkspaceSource: "task_session",
+            }),
+          },
+        });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the plain not-a-git-checkout reason for a task_session base outside the Core task roots", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-plain-task-base-"));
+    try {
+      await expect(assertGitWorktreeBaseWorkspaceReady({
+        requestedExecutionWorkspaceMode: "isolated_workspace",
+        config: { workspaceStrategy: { type: "git_worktree" } },
+        issue: { id: "issue-1", identifier: "REL-1", projectId: null, projectWorkspaceId: null },
+        base: { baseCwd: cwd, source: "task_session", projectId: null, workspaceId: null, repoUrl: null, repoRef: null },
+      })).rejects.toMatchObject({
+        code: "workspace_validation_failed",
+        resultJson: {
+          workspaceValidation: expect.objectContaining({ reason: "git_worktree_base_not_git_checkout" }),
+        },
+      });
+    } finally {
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
   });
 });
 

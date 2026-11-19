@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { materializeIsolatedTaskDirectory, shouldUseIsolatedTaskDirectory } from "./isolated-task-directory.js";
+import { materializeIsolatedTaskDirectory, isCoreIsolatedTaskWorkspacePath, shouldUseIsolatedTaskDirectory } from "./isolated-task-directory.js";
 import { prepareSandboxManagedRuntime, type SandboxManagedRuntimeClient, type SandboxSyncOperation } from "@paperclipai/adapter-utils/sandbox-managed-runtime";
 
 const execFile = promisify(execFileCallback);
@@ -125,5 +125,68 @@ describe("isolated task directories", () => {
     const identity = await setup();
     await expect(materializeIsolatedTaskDirectory({ ...identity, issueId: "../outside" }))
       .rejects.toThrow("Invalid isolated task workspace identity");
+  });
+});
+
+describe("Core isolated task path detection", () => {
+  let root: string | undefined;
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  async function setup() {
+    root = await mkdtemp(path.join(os.tmpdir(), "paperclip-isolated-detect-"));
+    vi.stubEnv("PAPERCLIP_HOME", root);
+    return { companyId: "company-1", issueId: "issue-1" };
+  }
+
+  it("recognizes exactly the writers' task, attempt, and seed layouts", async () => {
+    const identity = await setup();
+    const taskRoot = await materializeIsolatedTaskDirectory(identity);
+    expect(await isCoreIsolatedTaskWorkspacePath(taskRoot)).toBe(true);
+    const attemptRoot = await materializeIsolatedTaskDirectory({ ...identity, attemptId: "11111111-1111-4111-8111-111111111111" });
+    expect(await isCoreIsolatedTaskWorkspacePath(attemptRoot)).toBe(true);
+    const seeded = path.join(attemptRoot, "workspace");
+    await mkdir(seeded, { mode: 0o700 });
+    expect(await isCoreIsolatedTaskWorkspacePath(seeded)).toBe(true);
+  });
+
+  it.each([
+    "missing directories below the instance root",
+    "the instance root itself",
+    "an agent home, project workspace, or worktree path inside the instance root",
+    "a path outside the instance root",
+    "an attempt directory one level too deep",
+  ])("rejects %s", async () => {
+    const identity = await setup();
+    const taskRoot = await materializeIsolatedTaskDirectory(identity);
+    const outside = await mkdtemp(path.join(os.tmpdir(), "paperclip-isolated-outside-"));
+    const deep = path.join(taskRoot, "nested");
+    await mkdir(deep, { recursive: true });
+    const candidates = [
+      path.join(root!, "isolated-workspaces", "company-1"),
+      root!,
+      path.join(root!, "workspaces", "agent-1"),
+      path.join(root!, "projects", "company-1", "project-1", "repo"),
+      outside,
+      deep,
+      undefined,
+      null,
+      "  ",
+    ];
+    for (const candidate of candidates) {
+      expect(await isCoreIsolatedTaskWorkspacePath(candidate)).toBe(false);
+    }
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("rejects a task path reached through a symlink", async () => {
+    const identity = await setup();
+    const taskRoot = await materializeIsolatedTaskDirectory(identity);
+    const linkRoot = path.join(root!, "isolated-workspaces", "company-2");
+    await mkdir(linkRoot, { recursive: true });
+    await symlink(taskRoot, path.join(linkRoot, "issue-1"));
+    expect(await isCoreIsolatedTaskWorkspacePath(path.join(linkRoot, "issue-1"))).toBe(false);
   });
 });

@@ -9,7 +9,7 @@ import { readGitConnectionFailure } from "../git-connection-failure.js";
 import { materializeManagedProjectWorkspace, ensureManagedRepositoriesIgnored } from "../managed-repository-checkout.js";
 export { materializeManagedProjectWorkspace } from "../managed-repository-checkout.js";
 import { sql } from "drizzle-orm";
-import { materializeIsolatedTaskDirectory } from "../isolated-task-directory.js";
+import { isCoreIsolatedTaskWorkspacePath, materializeIsolatedTaskDirectory } from "../isolated-task-directory.js";
 import { readConnectionFailure, type GitConnectionFailure } from "@paperclipai/adapter-utils/connection-failure";
 import { managedAiSessionFingerprintConfig } from "../ai-connection-runtime.js";
 import {
@@ -1003,6 +1003,16 @@ export async function assertGitWorktreeBaseWorkspaceReady(input: {
 
   const checkoutProbe = await probeGitWorktreeBase(input.base.baseCwd);
   if (!checkoutProbe.isCheckout) {
+    // A Core private task directory (retained task root or retry attempt) is a
+    // server-managed non-git base. A run may still reach this probe when a
+    // persisted session cwd predates the preparation-side strategy override;
+    // report the accurate reason instead of implying a repairable checkout.
+    if (input.base.source === "task_session" && await isCoreIsolatedTaskWorkspacePath(input.base.baseCwd)) {
+      fail(
+        "git_worktree_base_isolated_task_directory",
+        `Issue ${issueLabel} requested ${input.requestedExecutionWorkspaceMode} with git_worktree, but base workspace "${input.base.baseCwd}" is a Core task directory without a repository. Continue the task in its directory or bind a project workspace before retrying.`,
+      );
+    }
     const knownLocalPathMismatch = checkoutProbe.notRepository &&
       input.anchor?.localPathOnlyWorkspace === true &&
       input.anchor.baseCwdFallback === false && materializationFailures.length === 0 &&

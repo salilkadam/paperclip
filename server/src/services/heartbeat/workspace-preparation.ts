@@ -39,7 +39,7 @@ import { createGitRemoteAuthProvider } from "../git-credentials.js";
 import { readNativeWorkspaceSyncReference, readNativeWorkspaceSyncLocalCwd } from "../native-runtime/index.js";
 import { parseObject } from "../../adapters/utils.js";
 import { materializeNativeChatTaskRoot } from "../native-runtime/native-chat-workspace.js";
-import { materializeIsolatedTaskDirectory } from "../isolated-task-directory.js";
+import { isCoreIsolatedTaskWorkspacePath, materializeIsolatedTaskDirectory } from "../isolated-task-directory.js";
 import { withIsolatedRepositorySourceLock } from "../isolated-remote-workspace-source.js";
 import {
   cleanupExecutionWorkspaceArtifacts,
@@ -431,9 +431,19 @@ async function prepareHeartbeatWorkspaceLocked(db: Db, input: HeartbeatWorkspace
     boundWorkspace: reusableExistingExecutionWorkspace ?? existingExecutionWorkspace,
   }));
   const skipHostProvision = copyOnlyProvisioning || hostProvisionDriver === "sandbox" || hostProvisionDriver === "ssh" || hostProvisionDriver === "plugin";
+  // A base that is a Core private task directory is server-managed and never a
+  // Git checkout. That includes a plain attempt/retained directory and the seed
+  // created under a fresh attempt. Worktree strategies must not validate or
+  // realize against these paths.
+  const isolatedTaskDirectoryBase = resolvedWorkspace.source === "task_session"
+    && !fresh && !freshNeedsSeed && !pluginPrepared && !pluginTaskWorkspace
+    && await isCoreIsolatedTaskWorkspacePath(resolvedWorkspace.cwd);
+  const hostExecutionWorkspaceBaseConfig = fresh || isolatedTaskDirectoryBase
+    ? { ...mergedConfig, workspaceStrategy: { type: "project_primary" as const } }
+    : mergedConfig;
   const hostExecutionWorkspaceConfig = isDotRun ? {} :
     stripHostWorkspaceProvision({
-      config: fresh ? { ...mergedConfig, workspaceStrategy: { type: "project_primary" } } : mergedConfig,
+      config: hostExecutionWorkspaceBaseConfig,
       skipHostProvision,
     });
   const executionWorkspaceBase = {
