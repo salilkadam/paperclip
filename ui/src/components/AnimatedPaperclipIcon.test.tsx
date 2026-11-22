@@ -2,7 +2,18 @@
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PaperclipLoading } from "./AnimatedPaperclipIcon";
+import { AnimatedPaperclipIcon, PaperclipLoading } from "./AnimatedPaperclipIcon";
+
+describe("AnimatedPaperclipIcon", () => {
+  it("renders the Bionic logo with a pulse and is hidden from assistive tech", () => {
+    const html = renderToStaticMarkup(<AnimatedPaperclipIcon />);
+
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain("bionic-logo-pulse");
+    expect(html).toContain("<image");
+    expect(html).toContain("bionic-logo.png");
+  });
+});
 
 describe("PaperclipLoading", () => {
   it("renders an accessible full-page loading state", () => {

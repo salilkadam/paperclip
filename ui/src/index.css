@@ -1704,36 +1704,30 @@ select:where(:not([multiple]):not(.appearance-none)):where(:not([size]), [size="
   transform-origin: 50% 50%;
 }
 
-@keyframes paperclip-thinking-draw {
-  0% {
-    stroke-dasharray: 0 85.717;
-    stroke-dashoffset: -85.717;
-    opacity: 1;
-    animation-timing-function: cubic-bezier(0.455, 0.03, 0.515, 0.955);
-  }
-  39.0625% {
-    stroke-dasharray: 85.717 85.717;
-    stroke-dashoffset: 0;
-    opacity: 1;
-    animation-timing-function: cubic-bezier(0.55, 0.055, 0.675, 0.19);
-  }
-  78.125% {
-    stroke-dasharray: 0 85.717;
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-  78.225% {
-    opacity: 0;
-  }
+/* The Bionic logo is a dark teal monogram. On light surfaces it shows as-is;
+   on dark (theme #18181b) the .dark class brightens it to a light grey so the
+   loader stays visible. */
+.bionic-logo-pulse-img {
+  filter: none;
+}
+.dark .bionic-logo-pulse-img {
+  filter: brightness(0) invert(0.89);
+}
+
+@keyframes bionic-logo-pulse {
+  0%,
   100% {
-    stroke-dasharray: 0 85.717;
-    stroke-dashoffset: 0;
-    opacity: 0;
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.94);
   }
 }
 
-.paperclip-thinking-icon-path {
-  animation: paperclip-thinking-draw 1s linear infinite;
+.bionic-logo-pulse {
+  animation: bionic-logo-pulse 1.6s ease-in-out infinite;
 }
 
 /* Muted variant (task-chat v7 activity rows): the sweep runs over the
@@ -1789,11 +1783,10 @@ select:where(:not([multiple]):not(.appearance-none)):where(:not([size]), [size="
     background: none;
   }
 
-  .paperclip-thinking-icon-path {
+  .bionic-logo-pulse {
     animation: none;
     opacity: 1;
-    stroke-dasharray: 85.717 85.717;
-    stroke-dashoffset: 0;
+    transform: none;
   }
 }
 
