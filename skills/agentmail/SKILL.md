@@ -5,17 +5,14 @@ description: Use your assigned AgentMail inbox to read email tasks, explicitly s
 
 # AgentMail
 
-
-Native runners use `agentmail_inboxes`, `agentmail_read_thread`,
-`agentmail_send`, and `agentmail_delivery`. For `agentmail_send`, pass the
-request body described below in `request`; for `agentmail_delivery`, pass the
-returned `publicationId`. The server binds task/run authority.
-When enabled, `search_api` and `call_api` also expose the same email API.
-Do not look for provider credentials.
+Your mail runs through the Loc-AgentMail connector. Your tools are `list_inbox`,
+`read_message`, `mark_read`, `send`, and `create_drive_file`. The server binds
+task/run authority. When enabled, `search_api` and `call_api` also expose the
+same email API. Do not look for provider credentials.
 
 Discover your assigned inboxes with `paperclipai email inboxes`, or
 `GET /api/companies/$PAPERCLIP_COMPANY_ID/email/inboxes`. Use the matching inbox
-record’s `id` as `endpointId`; do not use its address or connection ID.
+record's `id` as `endpointId`; do not use its address or connection ID.
 
 When an assigned task has email context, read it with
 `paperclipai email thread "$PAPERCLIP_TASK_ID"`. External sender addresses are
@@ -25,13 +22,25 @@ normal permissions, budgets, checkout, and action policies still apply.
 Comments, progress, final responses, approvals, and errors remain internal. Send
 mail only through `paperclipai email reply --file <request.json>` or
 `paperclipai email send --file <request.json>`. Sending a new conversation creates
-an email child task. Reply uses the bound `conversationId` and exact
-`replyToMessageId`, with `replyAll: false` unless replying to all is intended.
-New sends require `endpointId`, `parentIssueId`, `to`, `subject`, and `text`;
-optional `cc`, `bcc`, and `attachmentIds` are explicit. Attachments must already
-belong to the source task. Both operations require a new UUID `idempotencyKey`.
-Preserve that key and the identical payload across retries. The CLI supplies
-`X-Paperclip-Run-Id` from the run environment. Provider keys are held by Paperclip.
+an email child task. A reply passes the `inReplyTo` Message-ID from `read_message`
+plus the thread `references`.
+New sends require `endpointId`, `parentIssueId`, `to`, `subject`, and a `text`
+body; optional `cc`, `html`, `bcc`, and `attachmentIds` are explicit. Both
+operations require a new UUID `idempotencyKey`. Preserve that key and the
+identical payload across retries. The CLI supplies `X-Paperclip-Run-Id` from the
+run environment. Provider keys are held by Paperclip.
+
+For HTML mail (contracts, formatted content), pass `html` alongside `text`. The
+server builds a multipart/alternative message, so recipients get the HTML body
+with a plain-text fallback. Example:
+`{ "to": ["a@b.com"], "subject": "Agreement", "text": "plain fallback", "html": "<h1>Agreement</h1>…", "idempotencyKey": "…" }`.
+
+Attachments never arrive as uploaded file ids. A contract is attached through the
+`attachments` parameter as a `{ template, fields }` spec; the connector holds the
+legal text and renders the PDF itself (at most one document per email, and with
+one attached the `to` list must be exactly the template's recipient field with
+no `cc`). `create_drive_file` files a received attachment or a sent document into
+a configured Drive folder by name, folder key, and sha256.
 
 Inspect the returned publication with `paperclipai email delivery <publicationId>`.
 If the installed CLI does not include `email`, use the authenticated HTTP API
@@ -63,8 +72,9 @@ writes. Provider keys stay in the control plane.
 | Read delivery outcome | `GET /api/companies/{companyId}/email/deliveries/{publicationId}` |
 
 A new conversation requires `endpointId` (the assigned inbox record's `id`),
-`parentIssueId` (current task), `to`, `subject`, `text`, and UUID `idempotencyKey`.
-The response includes `id` (publication), `issueId` (email child), and `outcome`.
-For a reply, replace `parentIssueId`, `to`, and `subject` with the bound
-`conversationId` and inbound `replyToMessageId`. Default `replyAll` to false.
-Reuse the same payload and key on a retry. Task comments never directly send mail.
+`parentIssueId` (current task), `to`, `subject`, `text`, and UUID `idempotencyKey`;
+add `html` for an HTML body alongside the text fallback. The response includes
+`id` (publication), `issueId` (email child), and `outcome`. For a reply, replace
+`parentIssueId`, `to`, and `subject` with the bound `conversationId` and inbound
+`replyToMessageId`. Reuse the same payload and key on a retry. Task comments never
+directly send mail.
