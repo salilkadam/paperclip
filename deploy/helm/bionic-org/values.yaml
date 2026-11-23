@@ -363,6 +363,15 @@ modelAccess:
             name: "Qwen3.8 Flash Next"
           deepseek-v4.1-flash:
             name: "DeepSeek V4.1 Flash"
+      alibaba:
+        npm: "@ai-sdk/openai-compatible"
+        name: "Alibaba MaaS"
+        options:
+          baseURL: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+          apiKey: "{env:ALIBABA_DEEPSEEK}"
+        models:
+          qwen4-max:
+            name: "Qwen4 Max"
     smallModel: "gpuai/qwen3.8-flash-next"
     models:
       - id: "gpuai/qwen3.8-flash-next"
@@ -371,6 +380,8 @@ modelAccess:
         label: "Auto router (GPU-AI)"
       - id: "gpuai/deepseek-v4.1-flash"
         label: "DeepSeek V4.1 Flash (GPU-AI)"
+      - id: "alibaba/qwen4-max"
+        label: "Qwen4 Max (Alibaba MaaS)"
     agentDataRoot: /paperclip/agents
 
 # ---------------------------------------------------------------------------
