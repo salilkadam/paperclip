@@ -361,12 +361,16 @@ modelAccess:
             name: "Auto router"
           qwen3.8-flash-next:
             name: "Qwen3.8 Flash Next"
+          deepseek-v4.1-flash:
+            name: "DeepSeek V4.1 Flash"
     smallModel: "gpuai/qwen3.8-flash-next"
     models:
       - id: "gpuai/qwen3.8-flash-next"
         label: "Qwen3.8 Flash Next (GPU-AI)"
       - id: "gpuai/auto"
         label: "Auto router (GPU-AI)"
+      - id: "gpuai/deepseek-v4.1-flash"
+        label: "DeepSeek V4.1 Flash (GPU-AI)"
     agentDataRoot: /paperclip/agents
 
 # ---------------------------------------------------------------------------
