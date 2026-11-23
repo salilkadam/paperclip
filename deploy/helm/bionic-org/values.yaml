@@ -12,7 +12,7 @@ namespace: bionicorg
 # ---------------------------------------------------------------------------
 image:
   repository: docker4zerocool/bionic
-  tag: "40e3e904e"  # current production image (was 15ad899dd before the 2026-10-06 master-key incident)
+  tag: "389cb72"  # current production image (was 40e3e904e before the logo revert incident 2026-11-23)
   pullPolicy: Always
 
 # Image pull secret (e.g. for Docker Hub rate-limit compliance)
