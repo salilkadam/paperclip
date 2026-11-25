@@ -8,7 +8,7 @@ import { projectedConnectionHeaders } from "../connection-methods.js";
 import { nativeProviderCatalogFor } from "../../native-provider-catalogs.js";
 import { GOOGLE_WORKSPACE_SERVICES, googleWorkspaceServiceGranted, googleWorkspaceToolName, googleWorkspaceGrantedScopes, isGoogleWorkspaceToolGranted, type GoogleWorkspaceService } from "@paperclipai/shared";
 import { isInsufficientConnectionScope, INSUFFICIENT_CONNECTION_SCOPE_MESSAGE } from "../../connection-permission-errors.js";
-import { mcpDiscoveryHttpFailure, withMcpConnectionFailure } from "../../mcp-connection-failure.js";
+import { mcpDiscoveryHttpFailure, readMcpConnectionFailure, withMcpConnectionFailure } from "../../mcp-connection-failure.js";
 import { BROWSER_USE_TOOLS } from "@paperclipai/shared";
 import { browserUseClient, isBrowserUseConnection } from "../../browser-use-client.js";
 import { COGNEE_STDIO_TEMPLATE, cogneeCloudUrl } from "../../cognee-connection.js";
@@ -91,6 +91,19 @@ export function createToolCatalogDiscovery(db: Db, { now, audit, secrets, creden
         if (catalog.status === "fulfilled") continue;
         const service = services[index]!;
         unavailableServices.push(service);
+        // The classified reason never reached any sink (Sentry only consumes a
+        // boolean); log it so per-service discovery failures are diagnosable.
+        const reason = catalog.reason;
+        console.error("[google-workspace] service tools/list failed", {
+          connectionId: connection.id,
+          service,
+          endpoint: GOOGLE_WORKSPACE_CONNECTOR_PROFILES[GOOGLE_WORKSPACE_SERVICES[service]]?.serverUrl,
+          errorName: reason instanceof Error ? reason.name : undefined,
+          errorMessage: reason instanceof Error ? reason.message : String(reason),
+          errorCode: (reason as { code?: unknown } | undefined)?.code,
+          causeCode: (reason as { cause?: { code?: unknown } } | undefined)?.cause?.code,
+          classifiedReason: readMcpConnectionFailure(reason)?.reason,
+        });
         await audit({ companyId: connection.companyId, connectionId: connection.id,
           action: "tool_connection.catalog_refresh", outcome: "failure", actor,
           reasonCode: "google_workspace_service_unavailable", details: { service } });

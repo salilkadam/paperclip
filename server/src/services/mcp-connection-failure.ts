@@ -58,6 +58,11 @@ export function retainMcpConnectionFailure<T extends Error>(source: unknown, tar
   return target;
 }
 
+/** Read the local provenance receipt for diagnostics; never exposes provider-controlled data. */
+export function readMcpConnectionFailure(error: unknown): McpConnectionFailure | undefined {
+  return error instanceof Error ? failures.get(error) : undefined;
+}
+
 export function isExpectedMcpConnectionFailure(error: unknown): boolean {
   return error instanceof HttpError && error.status === 502 && !hasUnclassifiedRemoteConnectionAttempts(error) && failures.has(error);
 }
