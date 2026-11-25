@@ -211,16 +211,23 @@ const support = await getEmbeddedPostgresTestSupport();
       .rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
   });
 
-  it("refuses a guest wake carried in wakeCommentIds two hops beyond the boundary", async () => {
-    const f = await derivedFixture();
-    const [grandTask] = await db.insert(issues).values({ companyId: f.company.id, title: "Grand origin", assigneeAgentId: f.creator.id }).returning();
-    const { comment } = await inboundComment(f, { issueId: grandTask.id, provider: "github", guest: true, agentId: f.creator.id });
-    const [board] = await db.insert(issueComments).values({ companyId: f.company.id, issueId: grandTask.id, authorType: "user", authorUserId: "requester", body: "ok" }).returning();
-    const [grandRun] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.creator.id, status: "succeeded", issueId: grandTask.id, responsibleUserId: "requester", contextSnapshot: { issueId: grandTask.id, wakeCommentId: board.id, wakeCommentIds: [comment.id, board.id] } }).returning();
-    const [grandContext] = await db.insert(runIdentityContexts).values({ companyId: f.company.id, runId: grandRun.id, revision: 1, responsibleUserId: "requester", cause: "issue_commented", correlationId: "dispatch" }).returning();
-    await db.update(runIdentityContexts).set({ parentContextId: grandContext.id }).where(eq(runIdentityContexts.id, f.originContext.id));
-    await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
-  });
+   it("keeps a guest wake at the crossing hop refusing, but a wake deeper in the ancestry no longer does", async () => {
+     const f = await derivedFixture();
+      // The hop is the parent context's own run: its wake comments still refuse.
+      const { comment: hopComment } = await inboundComment(f, { issueId: f.originTask.id, provider: "github", guest: true, agentId: f.creator.id });
+      await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentIds: [hopComment.id] } }).where(eq(heartbeatRuns.id, f.originRun.id));
+     await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
+     // The same guest wake two hops down is the creating run's own origin chain:
+     // it no longer crosses into the derived task, so the boundary is clean.
+     const f2 = await derivedFixture();
+     const [grandTask] = await db.insert(issues).values({ companyId: f2.company.id, title: "Grand origin", assigneeAgentId: f2.creator.id }).returning();
+     const { comment } = await inboundComment(f2, { issueId: grandTask.id, provider: "github", guest: true, agentId: f2.creator.id });
+     const [board] = await db.insert(issueComments).values({ companyId: f2.company.id, issueId: grandTask.id, authorType: "user", authorUserId: "requester", body: "ok" }).returning();
+     const [grandRun] = await db.insert(heartbeatRuns).values({ companyId: f2.company.id, agentId: f2.creator.id, status: "succeeded", issueId: grandTask.id, responsibleUserId: "requester", contextSnapshot: { issueId: grandTask.id, wakeCommentId: board.id, wakeCommentIds: [comment.id, board.id] } }).returning();
+     const [grandContext] = await db.insert(runIdentityContexts).values({ companyId: f2.company.id, runId: grandRun.id, revision: 1, responsibleUserId: "requester", cause: "issue_commented", correlationId: "dispatch" }).returning();
+     await db.update(runIdentityContexts).set({ parentContextId: grandContext.id }).where(eq(runIdentityContexts.id, f2.originContext.id));
+     expect(await chatRunSourceMessageId(db, f2.run, slackOnly)).toBeNull();
+   });
 
   it.each(["deleted", "other-task"])("does not accept a responsible user's board comment that is %s", async variant => {
     const f = await derivedFixture();
@@ -249,6 +256,42 @@ const support = await getEmbeddedPostgresTestSupport();
     // Another user's board comment is not the requester's instruction.
     await db.update(issueComments).set({ authorUserId: "someone-else" }).where(eq(issueComments.id, board.id));
     await expect(chatRunSourceMessageId(db, f.run, slackOnly)).rejects.toMatchObject({ status: 403 });
+  });
+
+  // The production shape of the Reliora mail block: a derived task (Partner Ops)
+  // dispatched from a board comment, whose ancestry crosses a run woken by an
+  // agent-authored comment stored in the creating run's own origin chain.
+  async function cleanOwnOriginPoisonedAncestor() {
+    const f = await derivedFixture();
+    const [board] = await db.insert(issueComments).values({ companyId: f.company.id, issueId: f.originTask.id, authorType: "user", authorUserId: "requester", body: "Send the mail" }).returning();
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.originTask.id, wakeCommentId: board.id } }).where(eq(heartbeatRuns.id, f.originRun.id));
+    const [grandTask] = await db.insert(issues).values({ companyId: f.company.id, title: "Grand origin", assigneeAgentId: f.creator.id }).returning();
+    const [agentAuthor] = await db.insert(agents).values({ companyId: f.company.id, name: "Agent author", role: "general", adapterType: "codex_local" }).returning();
+    const [agentComment] = await db.insert(issueComments).values({ companyId: f.company.id, issueId: grandTask.id, authorType: "agent", authorAgentId: agentAuthor.id, body: "agent-authored wake" }).returning();
+    const [grandRun] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.creator.id, status: "succeeded", issueId: grandTask.id, responsibleUserId: "requester", contextSnapshot: { issueId: grandTask.id, wakeCommentId: agentComment.id } }).returning();
+    const [grandContext] = await db.insert(runIdentityContexts).values({ companyId: f.company.id, runId: grandRun.id, revision: 1, responsibleUserId: "requester", cause: "issue_commented", correlationId: "dispatch" }).returning();
+    await db.update(runIdentityContexts).set({ parentContextId: grandContext.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+    return { f, agentComment };
+  }
+
+  it("allows a run with a clean own origin even when a distant ancestor wake is agent-authored", async () => {
+    const { f } = await cleanOwnOriginPoisonedAncestor();
+    expect(await chatRunSourceMessageId(db, f.run, slackOnly)).toBeNull();
+    await expect(githubGuestBotConnectionForSession(db, { companyId: f.company.id, agentId: f.assignee.id, runId: f.run.id, issueId: f.derivedTask.id })).resolves.toBeNull();
+  });
+
+  it("does not re-poison a clean own origin on a restart that re-reads the same identity rows", async () => {
+    const { f } = await cleanOwnOriginPoisonedAncestor();
+    expect(await chatRunSourceMessageId(db, f.run, slackOnly)).toBeNull();
+    const [reread] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, f.run.id));
+    expect(await chatRunSourceMessageId(db, reread, slackOnly)).toBeNull();
+  });
+
+  it("refuses a derived task whose own origin carries a foreign wake comment", async () => {
+    const f = await derivedFixture();
+    const { comment } = await inboundComment(f, { issueId: f.derivedTask.id, provider: "github", guest: true, agentId: f.assignee.id });
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.derivedTask.id, wakeCommentId: comment.id } }).where(eq(heartbeatRuns.id, f.run.id));
+    await expect(chatRunSourceMessageId(db, f.run)).rejects.toMatchObject({ status: 403 });
   });
 
   it("keeps a GitHub guest session restricted to its bot connection, on its own task and on a derived task it comments on", async () => {
@@ -404,11 +447,22 @@ const support = await getEmbeddedPostgresTestSupport();
       .rejects.toMatchObject({ status: 403, details: { code: "chat_provenance_foreign_wake" } });
   });
 
-  it.each(["message", "cycle", "requester", "pending", "missing", "foreign-run", "unbound"])(
+  it.each(["private-source", "cycle", "requester", "pending", "missing", "foreign-run", "unbound"])(
     "keeps refusing a derived task across a %s break beyond the boundary", async fault => {
       const f = await derivedFixture();
       let run = f.run;
-      if (fault === "message") await db.update(runIdentityContexts).set({ messageId: randomUUID() }).where(eq(runIdentityContexts.id, f.originContext.id));
+      if (fault === "private-source") {
+        const [application] = await db.insert(toolApplications).values({ companyId: f.company.id, name: "Slack", type: "chat" }).returning();
+        const [connection] = await db.insert(toolConnections).values({ companyId: f.company.id, applicationId: application.id, uid: randomUUID(), name: "Slack", transport: "chat_sdk", connectionPurpose: "channel", enabled: true, status: "active" }).returning();
+        const [endpoint] = await db.insert(chatEndpoints).values({ companyId: f.company.id, connectionId: connection.id, provider: "slack", publicId: randomUUID(), assignedAgentId: f.creator.id, status: "active", providerAccountId: `T-${randomUUID()}`, botExternalId: `B-${randomUUID()}` }).returning();
+        const [olderRun] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.creator.id, status: "succeeded", nativeIssueId: f.originTask.id, responsibleUserId: "requester" }).returning();
+        const [older] = await db.insert(runIdentityContexts).values({ companyId: f.company.id, runId: olderRun.id, revision: 1, responsibleUserId: "requester", cause: "issue_assigned", correlationId: "dispatch" }).returning();
+        await db.update(runIdentityContexts).set({ parentContextId: older.id }).where(eq(runIdentityContexts.id, f.originContext.id));
+        await db.insert(chatActions).values({
+          companyId: f.company.id, endpointId: endpoint.id, kind: "slack_private_source", status: "processed",
+          providerActionId: `slack-private:${f.originTask.id}:C9:U1`, payload: { issueId: f.originTask.id, channelId: "C9", requesterId: "U1", allowedDmChannel: null },
+        });
+      }
       if (fault === "cycle") await db.update(runIdentityContexts).set({ parentContextId: f.derivedContext.id }).where(eq(runIdentityContexts.id, f.originContext.id));
       if (fault === "requester" || fault === "pending" || fault === "missing") {
         const [olderRun] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.creator.id, status: "succeeded", nativeIssueId: f.originTask.id, responsibleUserId: "requester" }).returning();

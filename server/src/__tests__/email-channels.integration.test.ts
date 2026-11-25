@@ -130,7 +130,7 @@ describe("AgentMail durable email pipeline", () => {
     expect(resolveLegacyPaperclipDesiredSkillNames(configured, configured.paperclipRuntimeSkills)).toContain("paperclipai/paperclip/agentmail");
     const markdown = readFileSync(path.join(configured.paperclipRuntimeSkills[0].source, "SKILL.md"), "utf8");
     expect(markdown).toContain(f.endpointId);
-    expect(markdown).toContain("agentmail_send");
+    expect(markdown).toContain("list_inbox");
     expect(markdown).not.toContain("test-key");
     for (const adapterType of ["cursor_local", "gemini_local", "opencode_local", "pi_local", "codex_local"]) {
       const delivery = await prepareConnectorSkillDelivery(configured, adapterType);

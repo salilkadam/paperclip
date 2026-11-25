@@ -1695,4 +1695,59 @@ describeEmbeddedPostgres("tool access policy service", () => {
       }],
     })).rejects.toThrow(/same company/);
   });
+
+  it("keeps the C-level write block from matching read-only agentmail triage tools", async () => {
+    const company = await createCompany(db);
+    const ceo = await createAgent(db, company.id);
+    const cmo = await createAgent(db, company.id);
+    const svc = toolAccessPolicyService(db);
+    const profile = await db.insert(toolProfiles).values({
+      companyId: company.id,
+      profileKey: `agentmail-triage-${randomUUID()}`,
+      name: "Agentmail",
+      defaultAction: "allow",
+    }).returning().then((rows) => rows[0]!);
+    for (const agent of [ceo, cmo]) {
+      await db.insert(toolProfileBindings).values(agentProfileBindingRow(company, profile, agent));
+    }
+    const run = await createRun(db, company.id, ceo.id);
+    // The live Reliora policy shape: an enabled block for the C-level agents at
+    // the write risk level (the live policy lists all levels; the carve-out is
+    // that read-only triage tools are classified at read risk, never write).
+    const [cLevelBlock] = await db.insert(toolPolicies).values({
+      companyId: company.id,
+      name: `C-level no writes ${randomUUID()}`,
+      description: "C-level agents do not write elsewhere",
+      policyType: "block",
+      enabled: true,
+      priority: 10,
+      selectors: {
+        agentIds: [ceo.id, cmo.id],
+        toolNames: ["send", "list_inbox", "read_message", "mark_read"],
+        riskLevels: ["write"],
+      },
+    }).returning();
+
+    const triage = (toolName: string, riskLevel: "read" | "write") => svc.decide({
+      companyId: company.id,
+      actor: { actorType: "agent", actorId: ceo.id, agentId: ceo.id },
+      runContext: { heartbeatRunId: run.id },
+      request: {
+        applicationKey: "loc-agentmail",
+        toolName,
+        riskLevel,
+        arguments: {},
+      },
+    });
+
+    for (const toolName of ["list_inbox", "read_message", "mark_read"]) {
+      const allowed = await triage(toolName, "read");
+      expect(allowed).toMatchObject({ decision: "allow", reasonCode: "allow_profile" });
+    }
+    await expect(triage("send", "write")).resolves.toMatchObject({
+      decision: "deny",
+      reasonCode: "deny_policy_block",
+      matchedPolicyIds: [cLevelBlock.id],
+    });
+  });
 });
